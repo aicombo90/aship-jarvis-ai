@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider paths: sirf update APK wala hissa share hota hai. -->
+<paths>
+    <!-- getExternalFilesDir(DIRECTORY_DOWNLOADS): yahin update APK aata hai -->
+    <external-files-path
+        name="update_downloads"
+        path="Download/" />
+    <external-cache-path
+        name="external_cache"
+        path="." />
+    <cache-path
+        name="cache"
+        path="." />
+</paths>
