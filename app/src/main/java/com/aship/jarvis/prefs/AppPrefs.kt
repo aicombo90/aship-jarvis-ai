@@ -27,8 +27,16 @@ class AppPrefs(context: Context) {
             prefs.edit().putString(KEY_MODE, value.name).apply()
         }
 
+    /** Phase 2: how many times the wake word has woken Jarvis up. */
+    var wakeHitCount: Int
+        get() = prefs.getInt(KEY_WAKE_HITS, 0)
+        set(value) {
+            prefs.edit().putInt(KEY_WAKE_HITS, value).apply()
+        }
+
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
+        private const val KEY_WAKE_HITS = "wake_hits"
     }
 }
