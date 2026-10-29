@@ -2,10 +2,15 @@ package com.aship.jarvis
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
@@ -14,6 +19,7 @@ import android.widget.Toast
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.prefs.JarvisMode
+import com.aship.jarvis.service.JarvisWakeService
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
@@ -23,11 +29,15 @@ import com.aship.jarvis.voice.SpeechEngineListener
 import java.util.concurrent.Executors
 
 /**
- * ASHIP JARVIS AI — Phase 1 main screen.
+ * ASHIP JARVIS AI — main screen (Phase 1 + Phase 2).
  *
  * Tap the mic button (or type a command), Jarvis runs it through the
  * offline CommandEngine and speaks the reply. Mode (Offline / Online /
  * Auto) is picked here and remembered between launches.
+ *
+ * Phase 2 adds the section at the bottom: start/stop the background
+ * wake-word service (JarvisWakeService) and the battery-exemption
+ * shortcut vivo phones need for it to survive.
  */
 class MainActivity : Activity() {
 
@@ -37,6 +47,12 @@ class MainActivity : Activity() {
     private lateinit var micButton: Button
     private lateinit var commandInput: EditText
     private lateinit var modeGroup: RadioGroup
+
+    // Phase 2: background wake-word section.
+    private lateinit var wakeStatusText: TextView
+    private lateinit var wakeStartButton: Button
+    private lateinit var wakeStopButton: Button
+    private var pendingWakeStart = false
 
     private lateinit var prefs: AppPrefs
     private lateinit var speaker: TtsSpeaker
@@ -82,6 +98,35 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.downloadModelButton).setOnClickListener {
             downloadHindiModel()
         }
+
+        wakeStatusText = findViewById(R.id.wakeStatusText)
+        wakeStartButton = findViewById(R.id.wakeStartButton)
+        wakeStopButton = findViewById(R.id.wakeStopButton)
+
+        wakeStartButton.setOnClickListener { onWakeStartClicked() }
+        wakeStopButton.setOnClickListener {
+            if (JarvisWakeService.isRunning) {
+                startService(JarvisWakeService.stopIntent(this))
+            }
+            mainHandler.postDelayed({ updateWakeUi() }, 600)
+        }
+        findViewById<Button>(R.id.batteryButton).setOnClickListener {
+            onBatteryButtonClicked()
+        }
+        updateWakeUi()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateWakeUi()
+        // Keep the wake status line live while this screen is visible.
+        mainHandler.removeCallbacks(wakeRefreshRunnable)
+        mainHandler.postDelayed(wakeRefreshRunnable, WAKE_REFRESH_MS)
+    }
+
+    override fun onPause() {
+        mainHandler.removeCallbacks(wakeRefreshRunnable)
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -192,6 +237,36 @@ class MainActivity : Activity() {
                 ).show()
             }
         }
+        if (requestCode == REQUEST_RECORD_AUDIO_WAKE) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted && pendingWakeStart) {
+                pendingWakeStart = false
+                requestNotificationsPermissionIfNeeded()
+                startWakeServiceNow()
+            } else {
+                pendingWakeStart = false
+                Toast.makeText(
+                    this,
+                    "Mic permission ke bina background sunna nahi chalega.",
+                    Toast.LENGTH_LONG
+                ).show()
+                updateWakeUi()
+            }
+        }
+        if (requestCode == REQUEST_POST_NOTIFICATIONS) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                Toast.makeText(
+                    this,
+                    "Notification permission nahi mila — service chalega, " +
+                        "par upar wala notice nahi dikhega.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            updateWakeUi()
+        }
     }
 
     // ------------------------------------------------------------------
@@ -236,6 +311,146 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
+    // Phase 2: background wake-word listening
+    // ------------------------------------------------------------------
+
+    private val wakeRefreshRunnable = object : Runnable {
+        override fun run() {
+            updateWakeUi()
+            mainHandler.postDelayed(this, WAKE_REFRESH_MS)
+        }
+    }
+
+    private fun updateWakeUi() {
+        if (!::wakeStatusText.isInitialized) return
+        val modelReady = modelManager.isModelReady(ModelLanguage.HINDI)
+        val running = JarvisWakeService.isRunning
+        wakeStartButton.isEnabled = modelReady && !running
+        wakeStopButton.isEnabled = running
+        wakeStatusText.text = buildString {
+            when {
+                !modelReady -> append(
+                    "Background sunna band hai: pehle Hindi offline model " +
+                        "download kijiye (upar wala button) — bina model ke " +
+                        "wake word sunna nahi chalega."
+                )
+                running -> append(
+                    "Background sunna CHALU hai — ${JarvisWakeService.statusMessage}"
+                )
+                else -> append("Background sunna band hai.")
+            }
+            append("\nWake hits (kitni baar 'Jarvis' suna): ${prefs.wakeHitCount}")
+            if (running && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                append(
+                    "\nNote: notification permission nahi hai — upar wala " +
+                        "notice nahi dikhega, service phir bhi chal raha hai."
+                )
+            }
+            append(
+                if (isBatteryOptimizationIgnored()) {
+                    "\nBattery bandobosto: ho gaya hai (whitelist me hai)."
+                } else {
+                    "\nBattery bandobosto: nahi hua — vivo service ko band kar " +
+                        "sakta hai, neeche wale button se theek kijiye."
+                }
+            )
+        }
+    }
+
+    private fun onWakeStartClicked() {
+        if (!modelManager.isModelReady(ModelLanguage.HINDI)) {
+            Toast.makeText(
+                this,
+                "Pehle Hindi offline model download kijiye — bina model ke " +
+                    "background sunna nahi chalega.",
+                Toast.LENGTH_LONG
+            ).show()
+            updateWakeUi()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingWakeStart = true
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                REQUEST_RECORD_AUDIO_WAKE
+            )
+            return
+        }
+        requestNotificationsPermissionIfNeeded()
+        startWakeServiceNow()
+    }
+
+    private fun startWakeServiceNow() {
+        // Stopping this screen's own tap-to-speak engine first: two
+        // recognizers must never fight over the microphone.
+        if (listening) {
+            engine?.stopListening()
+        }
+        try {
+            startForegroundService(JarvisWakeService.startIntent(this))
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "Service start nahi ho paya: ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        mainHandler.postDelayed({ updateWakeUi() }, 600)
+    }
+
+    /** Android 13+: ask for the notification permission; denial is fine. */
+    private fun requestNotificationsPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_POST_NOTIFICATIONS
+            )
+        }
+    }
+
+    private fun isBatteryOptimizationIgnored(): Boolean {
+        val powerManager = getSystemService(PowerManager::class.java) ?: return false
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun onBatteryButtonClicked() {
+        if (isBatteryOptimizationIgnored()) {
+            Toast.makeText(
+                this,
+                "Battery bandobosto pehle se ho gaya hai — Jarvis whitelist me hai.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (e2: Exception) {
+                Toast.makeText(
+                    this,
+                    "Settings > Battery > ASHIP JARVIS AI > No restrictions chunein.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Status line
     // ------------------------------------------------------------------
 
@@ -256,5 +471,8 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_RECORD_AUDIO = 1001
+        private const val REQUEST_RECORD_AUDIO_WAKE = 1002
+        private const val REQUEST_POST_NOTIFICATIONS = 1003
+        private const val WAKE_REFRESH_MS = 2_000L
     }
 }
