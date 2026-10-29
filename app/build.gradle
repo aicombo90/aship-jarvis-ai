@@ -1,6 +1,31 @@
+import java.util.Base64
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+}
+
+// ---------------------------------------------------------------------
+// Fixed CI signing key (Phase 2).
+//
+// keystore/keystore.b64 in the repo root is a base64-encoded PKCS12
+// keystore holding a self-signed *CI debug* key (alias "jarvis",
+// 30-year validity). It is public by design — its only job is to give
+// every CI build the SAME signature, so a new APK installs over the
+// old one and the app data (downloaded Vosk model, settings) survives
+// updates. It is NOT a Play Store key.
+//
+// At configuration time the .b64 is decoded into this module's build
+// dir (never committed). If the .b64 file is absent (e.g. a fresh
+// local checkout without it), signing silently falls back to the
+// default debug key, exactly like Phase 1.
+// ---------------------------------------------------------------------
+def ciKeystoreFile = null
+def ciKeystoreB64 = rootProject.file('keystore/keystore.b64')
+if (ciKeystoreB64.exists()) {
+    ciKeystoreFile = new File(buildDir, 'ci-keystore.p12')
+    ciKeystoreFile.parentFile.mkdirs()
+    ciKeystoreFile.bytes = Base64.getMimeDecoder().decode(ciKeystoreB64.getText('UTF-8'))
 }
 
 android {
@@ -15,9 +40,28 @@ android {
         versionName '1.0'
     }
 
+    signingConfigs {
+        if (ciKeystoreFile != null) {
+            ci {
+                storeFile ciKeystoreFile
+                storePassword 'jarvis2026'
+                keyAlias 'jarvis'
+                keyPassword 'jarvis2026'
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciKeystoreFile != null) {
+                signingConfig signingConfigs.ci
+            }
+        }
         release {
             minifyEnabled false
+            if (ciKeystoreFile != null) {
+                signingConfig signingConfigs.ci
+            }
         }
     }
 
