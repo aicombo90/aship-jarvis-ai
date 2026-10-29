@@ -71,17 +71,43 @@ class ModelManager(context: Context) {
         }
     }
 
+    /**
+     * Downloads with resume + retries: if the connection drops mid-file
+     * (common on mobile data), the next attempt continues from the bytes
+     * already on disk via an HTTP Range request instead of starting over.
+     */
     private fun downloadFile(urlString: String, destination: File) {
+        var lastError: Exception? = null
+        repeat(6) {
+            try {
+                downloadAttempt(urlString, destination)
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Thread.sleep(2_000)
+            }
+        }
+        throw lastError ?: IllegalStateException("Download fail ho gaya.")
+    }
+
+    private fun downloadAttempt(urlString: String, destination: File) {
+        val existing = if (destination.exists()) destination.length() else 0L
         val connection = URL(urlString).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 30_000
-            connection.readTimeout = 60_000
+            connection.readTimeout = 120_000
+            if (existing > 0) {
+                connection.setRequestProperty("Range", "bytes=$existing-")
+            }
             connection.connect()
-            if (connection.responseCode !in 200..299) {
-                throw IllegalStateException("Server response ${connection.responseCode}")
+            val code = connection.responseCode
+            // 206 = resuming; 200 = server ignored Range, restart from zero.
+            val append = existing > 0 && code == 206
+            if (code !in 200..299) {
+                throw IllegalStateException("Server response $code")
             }
             connection.inputStream.use { input ->
-                FileOutputStream(destination).use { output ->
+                FileOutputStream(destination, append).use { output ->
                     val buffer = ByteArray(8192)
                     while (true) {
                         val read = input.read(buffer)
