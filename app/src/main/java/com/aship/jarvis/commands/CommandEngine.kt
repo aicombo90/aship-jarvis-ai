@@ -23,7 +23,7 @@ data class CommandResult(
 class CommandEngine(private val context: Context) {
 
     fun handle(rawText: String): CommandResult {
-        val text = rawText.lowercase(Locale.ROOT).trim()
+        val text = normalize(rawText.lowercase(Locale.ROOT).trim())
         if (text.isEmpty()) {
             return CommandResult("Kuch sunai nahi diya, phir se boliye.", false)
         }
@@ -104,6 +104,49 @@ class CommandEngine(private val context: Context) {
                 "Online AI Phase 3 me aayega, phir main aise sawalon ke jawab bhi de paunga.",
             false
         )
+    }
+
+    /**
+     * Speech recognizers often return Devanagari or Bengali script
+     * (e.g. "यूट्यूब खोलो" or "ইউটিউব খোলো") instead of Latin letters.
+     * Map the known words onto the Latin keywords the matcher below uses,
+     * and convert Bengali/Devanagari digits to ASCII for time parsing.
+     */
+    private fun normalize(input: String): String {
+        var t = input
+        val digitMap = mapOf(
+            '०' to '0', '१' to '1', '२' to '2', '३' to '3', '४' to '4',
+            '५' to '5', '६' to '6', '७' to '7', '८' to '8', '९' to '9',
+            '০' to '0', '১' to '1', '২' to '2', '৩' to '3', '৪' to '4',
+            '৫' to '5', '৬' to '6', '৭' to '7', '৮' to '8', '৯' to '9'
+        )
+        t = t.map { ch -> digitMap[ch] ?: ch }.joinToString("")
+        val words = listOf(
+            // App names (incl. common mis-hearings)
+            "यूट्यूब" to "youtube", "युट्यूब" to "youtube", "यूटुब" to "youtube",
+            "ইউটিউব" to "youtube", "যুটব" to "youtube", "য়ুটুব" to "youtube",
+            "फेसबुक" to "facebook", "ফেসবুক" to "facebook",
+            "व्हाट्सएप" to "whatsapp", "वाट्सएप" to "whatsapp", "হোয়াটসঅ্যাপ" to "whatsapp",
+            "कैमरा" to "camera", "ক্যামেরা" to "camera",
+            "क्रोम" to "chrome", "ক্রোম" to "chrome",
+            "सेटिंग्स" to "settings", "सेटिंग" to "settings", "সেটিংস" to "settings",
+            // Actions / objects
+            "टॉर्च" to "torch", "টর্চ" to "torch",
+            "फ्लैशलाइट" to "flashlight", "ফ্ল্যাশলাইট" to "flashlight",
+            "अलार्म" to "alarm", "অ্যালার্ম" to "alarm",
+            "बंद" to "band", "বন্ধ" to "band",
+            // Time / date
+            "समय" to "samay", "সময়" to "samay",
+            "बजे" to "baje", "বাজে" to "baje",
+            "तारीख" to "tarikh", "তারিখ" to "tarikh",
+            // Small talk
+            "नमस्ते" to "namaste", "নমস্কার" to "namaste",
+            "धन्यवाद" to "thank", "ধন্যবাদ" to "thank"
+        )
+        for ((from, to) in words) {
+            t = t.replace(from, to)
+        }
+        return t
     }
 
     private fun openTarget(target: AppTarget): CommandResult {
