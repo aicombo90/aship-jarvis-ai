@@ -99,4 +99,39 @@
         android:layout_marginTop="12dp"
         android:text="Download Hindi offline voice model" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Background sunna (wake word)"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/wakeStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="Background sunna band hai."
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/wakeStartButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="▶ Background sunna START karo" />
+
+    <Button
+        android:id="@+id/wakeStopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⏹ Background sunna BAND karo" />
+
+    <Button
+        android:id="@+id/batteryButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
+
 </LinearLayout>
