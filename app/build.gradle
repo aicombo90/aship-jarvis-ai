@@ -36,8 +36,8 @@ android {
         applicationId 'com.aship.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
     }
 
     signingConfigs {
@@ -49,6 +49,12 @@ android {
                 keyPassword 'jarvis2026'
             }
         }
+    }
+
+    buildFeatures {
+        // UpdateChecker ko BuildConfig.VERSION_CODE chahiye
+        // (AGP 8 me BuildConfig generation pehle se band rehta hai).
+        buildConfig true
     }
 
     buildTypes {
@@ -84,4 +90,7 @@ dependencies {
     // "alphacep" org): implementation 'com.github.alphacephei:vosk-android:0.3.47'
     implementation 'com.alphacephei:vosk-android:0.3.75@aar'
     implementation 'net.java.dev.jna:jna:5.18.1@aar'
+    // FileProvider: download hue update APK ko system installer tak
+    // bhejne ke liye (file:// URI Android 7+ par band hai).
+    implementation 'androidx.core:core:1.15.0'
 }
