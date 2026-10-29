@@ -2,7 +2,12 @@ package com.aship.jarvis
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -18,6 +23,8 @@ import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.prefs.AppPrefs
+import com.aship.jarvis.update.UpdateChecker
+import com.aship.jarvis.update.UpdateDownloader
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.service.JarvisWakeService
 import com.aship.jarvis.speaker.TtsSpeaker
@@ -53,6 +60,11 @@ class MainActivity : Activity() {
     private lateinit var wakeStartButton: Button
     private lateinit var wakeStopButton: Button
     private var pendingWakeStart = false
+
+    // In-app update (GitHub Releases): pending download bookkeeping.
+    private var updateDownloadId: Long = -1L
+    private var updateReceiver: BroadcastReceiver? = null
+    private var updateDialogShowing = false
 
     private lateinit var prefs: AppPrefs
     private lateinit var speaker: TtsSpeaker
@@ -113,7 +125,17 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.batteryButton).setOnClickListener {
             onBatteryButtonClicked()
         }
+        findViewById<Button>(R.id.overlayPermissionButton).setOnClickListener {
+            onOverlayPermissionClicked()
+        }
+        findViewById<Button>(R.id.updateCheckButton).setOnClickListener {
+            checkForUpdate(manual = true)
+        }
         updateWakeUi()
+
+        // In-app update: app khulne par ek baar chup-chaap check.
+        // Fail ho to koi error nahi dikhta (silent by design).
+        checkForUpdate(manual = false)
     }
 
     override fun onResume() {
@@ -130,6 +152,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        unregisterUpdateReceiver()
         engine?.destroy()
         engine = null
         speaker.shutdown()
@@ -357,6 +380,16 @@ class MainActivity : Activity() {
                         "sakta hai, neeche wale button se theek kijiye."
                 }
             )
+            append(
+                if (Settings.canDrawOverlays(this@MainActivity)) {
+                    "\nOverlay permission ('Display over other apps'): mila hai — " +
+                        "background se app khul sakta hai."
+                } else {
+                    "\nOverlay permission ('Display over other apps'): NAHI mila — " +
+                        "background se koi app nahi khulega; neeche wale " +
+                        "OVERLAY button se dijiye."
+                }
+            )
         }
     }
 
@@ -447,6 +480,187 @@ class MainActivity : Activity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    /**
+     * "Display over other apps" — bina iske Android background service
+     * se koi app kholne nahi deta (Phase 2 fix). Settings ka page
+     * kholta hai; wahan Allow karke wapas aana hai.
+     */
+    private fun onOverlayPermissionClicked() {
+        if (Settings.canDrawOverlays(this)) {
+            Toast.makeText(
+                this,
+                "Overlay permission pehle se mila hai — background se app khul sakta hai.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+            } catch (e2: Exception) {
+                Toast.makeText(
+                    this,
+                    "Settings > Apps > ASHIP JARVIS AI > 'Display over other apps' Allow kijiye.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // In-app update (GitHub Releases)
+    // ------------------------------------------------------------------
+
+    /**
+     * GitHub par latest release dekhta hai. Auto-check (app start par)
+     * fail ho to bilkul chup rehta hai; haath se check karne par
+     * "latest hai" / "check nahi ho paya" batata hai.
+     */
+    private fun checkForUpdate(manual: Boolean) {
+        UpdateChecker.checkLatest { result ->
+            when (result) {
+                is UpdateChecker.Result.UpdateAvailable -> showUpdateDialog(result.info)
+                UpdateChecker.Result.UpToDate -> {
+                    if (manual) {
+                        Toast.makeText(
+                            this,
+                            "Aap latest version par hain.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+                UpdateChecker.Result.Failed -> {
+                    if (manual) {
+                        Toast.makeText(
+                            this,
+                            "Update check nahi ho paya — internet check karke phir koshish kijiye.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showUpdateDialog(info: UpdateChecker.UpdateInfo) {
+        if (isFinishing || updateDialogShowing) return
+        updateDialogShowing = true
+        AlertDialog.Builder(this)
+            .setTitle("Naya version aa gaya hai!")
+            .setMessage(
+                "ASHIP JARVIS AI ka naya version (${info.tagName}) taiyaar hai. " +
+                    "Download karke install kijiye."
+            )
+            .setPositiveButton("Download karo") { _, _ ->
+                startUpdateDownload(info.downloadUrl)
+            }
+            .setNegativeButton("Baad me", null)
+            .setOnDismissListener { updateDialogShowing = false }
+            .show()
+    }
+
+    private fun startUpdateDownload(downloadUrl: String) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            // Pehle Android se "unknown apps install" ki ijazat leni
+            // hogi; bina uske installer APK khol hi nahi payega.
+            Toast.makeText(
+                this,
+                "Pehle is list me ASHIP JARVIS AI ko Allow kijiye, " +
+                    "phir wapas aakar Download dabaiye.",
+                Toast.LENGTH_LONG
+            ).show()
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this,
+                    "Settings > Apps > ASHIP JARVIS AI > Install unknown apps > Allow kijiye.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            return
+        }
+        val downloadId = UpdateDownloader.startDownload(this, downloadUrl)
+        if (downloadId < 0L) {
+            Toast.makeText(this, "Download shuru nahi ho paya.", Toast.LENGTH_LONG).show()
+            return
+        }
+        updateDownloadId = downloadId
+        registerUpdateReceiver()
+        Toast.makeText(
+            this,
+            "Naya version download ho raha hai — poora hote hi installer khul jayega.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    private fun registerUpdateReceiver() {
+        if (updateReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+                if (id != updateDownloadId) return
+                unregisterUpdateReceiver()
+                onUpdateDownloadFinished()
+            }
+        }
+        updateReceiver = receiver
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // ACTION_DOWNLOAD_COMPLETE system bhejta hai (dusra process),
+            // isliye Android 13+ par EXPORTED ke saath register karo.
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun unregisterUpdateReceiver() {
+        updateReceiver?.let { receiver ->
+            try {
+                unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                // Already unregistered: nothing to do.
+            }
+        }
+        updateReceiver = null
+    }
+
+    private fun onUpdateDownloadFinished() {
+        val finishedId = updateDownloadId
+        updateDownloadId = -1L
+        if (UpdateDownloader.isDownloadSuccessful(this, finishedId)) {
+            try {
+                startActivity(UpdateDownloader.installIntent(this))
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this,
+                    "Installer khul nahi paya — Files app se jarvis-update.apk install kijiye.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        } else {
+            Toast.makeText(
+                this,
+                "Update download nahi ho paya — internet check karke phir koshish kijiye.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
