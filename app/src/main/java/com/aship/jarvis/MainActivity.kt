@@ -33,6 +33,7 @@ import com.aship.jarvis.voice.ModelManager
 import com.aship.jarvis.voice.SpeechEngine
 import com.aship.jarvis.voice.SpeechEngineFactory
 import com.aship.jarvis.voice.SpeechEngineListener
+import com.aship.jarvis.voice.SystemSpeechEngine
 import java.util.concurrent.Executors
 
 /**
@@ -73,6 +74,14 @@ class MainActivity : Activity() {
 
     private var engine: SpeechEngine? = null
     private var listening = false
+
+    // System recognizer "start" par hi fail ho jaye (unavailable /
+    // mic start error) to AUTO/ONLINE me ek baar Vosk par girne ke
+    // liye: engineStartedOk batata hai ki is koshish me sunna sach
+    // me shuru hua tha ya nahi, aur systemStartFallbackUsed us
+    // ek-baar-wale badlav ko loop banne se rokta hai.
+    private var engineStartedOk = false
+    private var systemStartFallbackUsed = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val background = Executors.newSingleThreadExecutor()
@@ -195,6 +204,7 @@ class MainActivity : Activity() {
 
     private fun createEngine() {
         engine?.destroy()
+        systemStartFallbackUsed = false
         engine = SpeechEngineFactory.create(this, prefs.mode, modelManager).also { created ->
             created.listener = engineListener
         }
@@ -203,6 +213,9 @@ class MainActivity : Activity() {
     private val engineListener = object : SpeechEngineListener {
         override fun onListeningStateChanged(isListening: Boolean) {
             listening = isListening
+            if (isListening) {
+                engineStartedOk = true
+            }
             micButton.text = if (isListening) {
                 "🛑 Sun raha hoon... (band karne ke liye tap kijiye)"
             } else {
@@ -219,6 +232,26 @@ class MainActivity : Activity() {
         }
 
         override fun onError(message: String) {
+            // System recognizer sunna shuru hi nahi kar paya
+            // (unavailable / mic start error) aur mode AUTO/ONLINE
+            // hai, to ek baar Vosk engine par gir jao aur phir se
+            // sunna shuru karo. Sunna ek baar shuru ho chuka ho to
+            // ye aam error hai — waisa hi dikhao jaise pehle tha.
+            if (!engineStartedOk && !systemStartFallbackUsed &&
+                engine is SystemSpeechEngine &&
+                prefs.mode != JarvisMode.OFFLINE &&
+                modelManager.isModelReady(ModelLanguage.HINDI)
+            ) {
+                systemStartFallbackUsed = true
+                engine?.destroy()
+                engine = SpeechEngineFactory.createVoskOrSystem(
+                    this@MainActivity, modelManager
+                )
+                engine?.listener = engineListener
+                updateStatus()
+                startListening()
+                return
+            }
             statusText.text = message
         }
     }
@@ -240,6 +273,7 @@ class MainActivity : Activity() {
     private fun startListening() {
         // Don't let Jarvis hear its own voice.
         speaker.stop()
+        engineStartedOk = false
         engine?.startListening()
     }
 
