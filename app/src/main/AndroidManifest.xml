@@ -17,6 +17,17 @@
     <!-- Phase 2: lets the user exempt Jarvis from battery optimization
          from inside the app (vivo kills background apps otherwise). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Phase 2 fix: Android 10+ background service se startActivity
+         chup-chaap rok deta hai (Jarvis "khol diya" bol deta tha, app
+         khulta nahi tha). Wake service launch ke pal bhar ke liye ek
+         1x1 adrishya overlay window dikhakar app kholta hai. Ye
+         "special access" hai — user app ke andar wale button se
+         Settings me jaakar deta hai; koi runtime dialog nahi aata. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- In-app update: GitHub Release se download hua APK install
+         karne ke liye. User ko ek baar "Install unknown apps" me
+         Allow karna padta hai; bina uske download shuru hi nahi hota. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Torch control uses the camera flash hardware, but the app works on
          phones without a flash too. -->
@@ -60,6 +71,18 @@
             android:name=".service.JarvisWakeService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- In-app update: download hue APK ko system installer tak
+             pahunchane ke liye FileProvider. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 
