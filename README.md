@@ -12,6 +12,10 @@ Jarvis does it on your phone and speaks the reply back to you.
   time/date, spoken replies (TTS), Offline / Online / Auto modes
 - **Phase 2 status (done):** background listening with the "Jarvis"
   wake word — YouTube khula ho tab bhi Jarvis sunta rehta hai
+- **Phase 2 fixes + in-app update (done):** background se app ab sach
+  me khulta hai (overlay bridge), background me samajh na aane par
+  Jarvis chup rehta hai, command session ki samay-seema, aur app ke
+  andar hi update check/download (GitHub Releases se)
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
@@ -63,6 +67,29 @@ Play Store wali key nahi). Isliye:
   **ek baar uninstall** karna hoga, kyunki uski signature alag thi.
   Uske baad ke saare updates seedha upar install honge.
 
+## App ke andar update (naya)
+
+Har feature build GitHub par ek **Release** ke roop me bhi publish
+hota hai (tag `v<versionCode>` — jaise `v2` — aur APK asset ka naam
+hamesha `app-debug.apk`). App khud hi update bata deta hai:
+
+1. App khulne par chup-chaap latest release check hota hai. Naya
+   version ho to pop-up aayega: **"Naya version aa gaya hai!"**
+2. **Download karo** dabao. Pehli baar Android **"Install unknown
+   apps"** ki permission maangega — ASHIP JARVIS AI ko **Allow**
+   karke wapas aao aur phir Download dabao.
+3. Download poora hote hi system installer khul jayega — **Install**
+   dabao. Fixed signing key ki wajah se naya version purane ke upar
+   hi baithega: **download kiya Hindi model aur settings safe
+   rahenge, uninstall nahi karna padega.**
+4. Haath se check karna ho to neeche wala **UPDATE CHECK KARO**
+   button dabao — latest ho to "Aap latest version par hain"
+   dikhega.
+
+Check fail ho (internet band, GitHub busy) to auto-check koi error
+nahi dikhata — chup rehta hai. Haath wale check par "check nahi ho
+paya" ka chhota sa message aayega.
+
 ## Pehli baar install karte samay (unknown apps permission)
 
 Pehli baar phone puchega ki is app ko install karne ki permission dein:
@@ -86,6 +113,8 @@ ko milti hai jahan se aap APK khol rahe ho.
 | **Foreground service + Foreground service microphone** (Phase 2) | Background wake-word sunne ke liye service ko zinda rakhna. Android ka niyam hai: mic wala background kaam foreground service me hi chalega, chaloo notice ke saath. Service sirf app ke **START** button se chalu hoti hai — khud se kabhi nahi. |
 | **Notifications** (Phase 2, runtime par poocha jata hai) | Upar wale notice ("Jarvis sun raha hai") ke liye. **Mana karne par bhi service chalegi**, sirf notice nahi dikhega. |
 | **Battery optimization se chhoot (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)** (Phase 2) | Sirf taaki app ke andar wala **"Battery bandobosto"** button aapko seedha sahi Settings page par le ja sake. Chhoot dena ya na dena poori tarah aapke haath me hai — Android khud poochega. |
+| **Display over other apps (SYSTEM_ALERT_WINDOW)** (Phase 2 fix, Settings se diya jata hai) | Android 10+ background service se app kholna (`startActivity`) chup-chaap rok deta hai — isiliye Jarvis "YouTube khol diya" bol deta tha par YouTube khulta nahi tha. Is permission ke saath wake service launch ke pal bhar (~0.6 second) ke liye ek 1x1 pixel ka **adrishya** overlay window dikhata hai, app kholta hai, aur overlay hata deta hai. Screen par koi popup/ad kabhi nahi dikhta. Permission na ho to Jarvis jhooth nahi bolega — saaf kahega ki permission chahiye. |
+| **Install packages (REQUEST_INSTALL_PACKAGES)** (in-app update) | GitHub Release se download hue naye APK ko install karne ke liye. Pehli baar Android "Install unknown apps" me is app ko Allow maangega — bina Allow ke update download shuru hi nahi hota. Sirf is app ke apne update ke liye istemal hota hai, koi dusri app install nahi hoti. |
 
 Abhi bhi **koi Accessibility Service nahi hai** aur koi API key code me
 nahi hai. Jo permission lagegi, Android khud poochega — bina aapke haan
@@ -108,6 +137,26 @@ kiye kuch nahi hota.
 
 **Sunna poori tarah offline hai** — Vosk model phone par hi chalta hai,
 aapki awaaz kahin upload nahi hoti.
+
+### Phase 2 fixes (is build me)
+
+- **Background se app ab sach me khulta hai.** Pehle Jarvis "YouTube
+  khol diya hai" bol deta tha par Android 10+ ke background-launch
+  niyam ki wajah se app khulta hi nahi tha. Ab wake service overlay
+  bridge se launch karta hai (upar wali "Display over other apps"
+  permission ek baar deni hogi — app ke andar **OVERLAY PERMISSION**
+  wala button hai), aur permission na ho to Jarvis sach bolega ki
+  permission chahiye.
+- **Background me faltu bakbak band.** Aas-paas ki awaaz ya TV se
+  galti se koi "command" ban jata tha to Jarvis "Ye command abhi
+  available nahi hai, Phase 3 me aayega" bol padta tha. Ab
+  background mode me samajh na aaye to Jarvis **chup** rehta hai aur
+  wapas wake word sunne lagta hai. (App saamne khula ho to wahi
+  jawab ab bhi milega — wahan jaankari kaam ki hai.)
+- **Command session ki samay-seema.** "Jarvis" ke baad command
+  sunne ka session zyada se zyada **~7 second** chalega, aur aakhiri
+  badli hui awaaz ke **~2.5 second** ki chuppi par khud band ho
+  jayega — lagatar shor session ko latka nahi sakta.
 
 ### Imandari wali seemayein (honest limits)
 
@@ -159,9 +208,10 @@ alag se download kar sakte ho.
   JDK 17, Android SDK 35, Gradle 8.9, `./gradlew assembleDebug`.
 - Package: `com.aship.jarvis` — modules:
   `voice/` (speech engines + model download), `commands/` (offline
-  command rules), `actions/` (phone actions), `speaker/` (TTS),
-  `prefs/` (settings), `service/` (Phase 2 wake-word foreground
-  service).
+  command rules), `actions/` (phone actions + overlay launch bridge),
+  `speaker/` (TTS), `prefs/` (settings), `service/` (Phase 2
+  wake-word foreground service), `update/` (GitHub Releases update
+  check + DownloadManager download/install).
 - Offline speech: [Vosk](https://alphacephei.com/vosk/) small Hindi model
   (`vosk-model-small-hi-0.22`), Apache-2.0.
 - Signing: `keystore/keystore.b64` (repo root) holds a base64 PKCS12
