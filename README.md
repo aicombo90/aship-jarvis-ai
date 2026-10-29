@@ -158,6 +158,24 @@ aapki awaaz kahin upload nahi hoti.
   badli hui awaaz ke **~2.5 second** ki chuppi par khud band ho
   jayega — lagatar shor session ko latka nahi sakta.
 
+### Chhoti tuning (v1.2)
+
+- **Saamne sunne me system recognizer pehle.** Chhota Vosk Hindi
+  model owner ke Bengali lehje wali Hindi ko aksar galat sunta tha
+  (aur galat sunne par wahi purana fallback jawab aa jata tha),
+  jabki Android ka system recognizer use sahi samajhta hai. Isliye
+  ab AUTO/ONLINE mode me tap-to-speak **system recognizer** se
+  chalega; Vosk sirf OFFLINE mode me chalega, ya tab jab system
+  recognizer phone par uplabdh na ho / start hi na ho paye.
+  (Background wake-word sunna pehle ki tarah Vosk se hi hai.)
+- **Facebook/WhatsApp ke dusre package naam.** "Facebook kholo"
+  par pehle main app (`com.facebook.katana`), na mile to Facebook
+  Lite (`com.facebook.lite`) khulta hai; WhatsApp par pehle
+  `com.whatsapp`, na mile to WhatsApp Business
+  (`com.whatsapp.w4b`). Ye kram saamne aur background — dono
+  raaston par lagta hai, aur koi bhi na mile to wahi sachha
+  "nahi mila" wala jawab milega.
+
 ### Imandari wali seemayein (honest limits)
 
 - **Screen band ho to pakka nahi.** Screen ON ho ya dusri app khuli
