@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import com.aship.jarvis.MainActivity
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.prefs.AppPrefs
@@ -45,6 +46,11 @@ import java.util.concurrent.Executors
  * The service is started and stopped ONLY from the app UI (Android
  * does not allow background starts of microphone services), and it
  * stops itself gracefully when the Hindi model is missing.
+ *
+ * Phase 2 fixes: app launches cross the overlay bridge (see
+ * CommandEngine's background mode), unrecognized background utterances
+ * are answered with silence, and a command session is hard-capped
+ * (~7 s total, ~2.5 s without a word change) so noise cannot hold it.
  */
 class JarvisWakeService : Service() {
 
@@ -70,6 +76,18 @@ class JarvisWakeService : Service() {
 
     private var wakeErrorCount = 0
 
+    // Command-session caps (Bug-2 fix): track when the session started
+    // and when the heard words last CHANGED, so steady noise partials
+    // cannot keep a session alive forever.
+    @Volatile
+    private var commandSessionStartMs = 0L
+
+    @Volatile
+    private var commandLastChangeMs = 0L
+
+    @Volatile
+    private var commandLastPartial = ""
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -80,7 +98,9 @@ class JarvisWakeService : Service() {
         createNotificationChannel()
         speaker = TtsSpeaker(this)
         speaker.onUtteranceFinished = { onTtsFinished() }
-        commandEngine = CommandEngine(applicationContext)
+        // Background flag: app launches cross the overlay bridge and
+        // report a missing overlay permission honestly (Bug-1 fix).
+        commandEngine = CommandEngine(applicationContext, fromBackgroundService = true)
         prefs = AppPrefs(this)
     }
 
@@ -302,7 +322,11 @@ class JarvisWakeService : Service() {
             service.startListening(commandListener)
             setStatus("Command sun raha hoon — boliye")
             updateNotification("Command boliye...")
-            resetCommandSilenceTimer()
+            val now = SystemClock.uptimeMillis()
+            commandSessionStartMs = now
+            commandLastChangeMs = now
+            commandLastPartial = ""
+            armCommandWatchdog()
         } catch (t: Throwable) {
             // Mic busy etc.: fall back to wake listening.
             startWakeSession()
@@ -310,6 +334,7 @@ class JarvisWakeService : Service() {
     }
 
     private fun stopCommandSession() {
+        disarmCommandWatchdog()
         commandSpeechService?.let { service ->
             try {
                 service.stop()
@@ -327,9 +352,14 @@ class JarvisWakeService : Service() {
 
     private val commandListener = object : RecognitionListener {
         override fun onPartialResult(hypothesis: String?) {
-            if (state == State.COMMAND) {
-                // The user is still speaking: push the silence deadline out.
-                resetCommandSilenceTimer()
+            if (state != State.COMMAND) return
+            val partial = parseJsonField(hypothesis, "partial").trim()
+            if (partial.isNotEmpty() && partial != commandLastPartial) {
+                // The words actually changed — the user is mid-command,
+                // so the silence deadline moves. Repeats of the same
+                // partial (steady room noise) do NOT extend anything.
+                commandLastPartial = partial
+                commandLastChangeMs = SystemClock.uptimeMillis()
             }
         }
 
@@ -367,14 +397,23 @@ class JarvisWakeService : Service() {
 
     private fun onCommandHeard(text: String) {
         if (destroyed || state != State.COMMAND) return
-        disarmCommandSilenceTimer()
         // Flip state BEFORE stopping the session, so the final-result
         // callback fired by stop() is ignored.
         state = State.REPLY
         stopCommandSession()
+        val result = commandEngine.handle(text)
+        if (!result.handled) {
+            // Bug-2 fix: in background mode an unrecognized utterance
+            // is almost always room noise, TV, or someone else talking.
+            // Stay silent and resume wake listening instead of
+            // announcing the "Phase 3" fallback to nobody.
+            setStatus("Samajh nahi aaya — chup rehkar wapas 'Jarvis' sun raha hoon")
+            updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
+            startWakeSession()
+            return
+        }
         setStatus("Command mila — jawab de raha hoon")
         updateNotification("Jarvis jawab de raha hai...")
-        val result = commandEngine.handle(text)
         speaker.speak(result.responseText)
         armReplyFallback(result.responseText)
     }
@@ -383,23 +422,38 @@ class JarvisWakeService : Service() {
     // Timers (main looper; each re-checks state on the executor)
     // ------------------------------------------------------------------
 
-    private val commandSilenceRunnable = Runnable {
-        executor.execute {
-            if (!destroyed && state == State.COMMAND) {
-                // ~8 seconds of silence and no command: back to wake.
-                stopCommandSession()
-                startWakeSession()
+    /**
+     * Command-session watchdog (Bug-2 fix). Ends the session when
+     * EITHER the hard cap (~7 s total) is reached — no matter how many
+     * partials keep arriving — OR ~2.5 s pass with no CHANGE in the
+     * heard words. Continuous noise can no longer stretch a session.
+     */
+    private val commandWatchdogRunnable = object : Runnable {
+        override fun run() {
+            executor.execute {
+                if (destroyed || state != State.COMMAND) return@execute
+                val now = SystemClock.uptimeMillis()
+                val totalMs = now - commandSessionStartMs
+                val silenceMs = now - commandLastChangeMs
+                if (totalMs >= COMMAND_HARD_CAP_MS ||
+                    silenceMs >= COMMAND_SILENCE_TIMEOUT_MS
+                ) {
+                    stopCommandSession()
+                    startWakeSession()
+                } else {
+                    mainHandler.postDelayed(this, COMMAND_WATCHDOG_TICK_MS)
+                }
             }
         }
     }
 
-    private fun resetCommandSilenceTimer() {
-        mainHandler.removeCallbacks(commandSilenceRunnable)
-        mainHandler.postDelayed(commandSilenceRunnable, COMMAND_SILENCE_TIMEOUT_MS)
+    private fun armCommandWatchdog() {
+        mainHandler.removeCallbacks(commandWatchdogRunnable)
+        mainHandler.postDelayed(commandWatchdogRunnable, COMMAND_WATCHDOG_TICK_MS)
     }
 
-    private fun disarmCommandSilenceTimer() {
-        mainHandler.removeCallbacks(commandSilenceRunnable)
+    private fun disarmCommandWatchdog() {
+        mainHandler.removeCallbacks(commandWatchdogRunnable)
     }
 
     private val ackFallbackRunnable = Runnable {
@@ -533,7 +587,9 @@ class JarvisWakeService : Service() {
         private const val SAMPLE_RATE = 16000.0f
 
         private const val ACK_TEXT = "Haan, boliye"
-        private const val COMMAND_SILENCE_TIMEOUT_MS = 8_000L
+        private const val COMMAND_SILENCE_TIMEOUT_MS = 2_500L
+        private const val COMMAND_HARD_CAP_MS = 7_000L
+        private const val COMMAND_WATCHDOG_TICK_MS = 400L
         private const val ACK_FALLBACK_MS = 3_500L
         private const val REPLY_FALLBACK_BASE_MS = 4_000L
         private const val REPLY_FALLBACK_PER_CHAR_MS = 110L
