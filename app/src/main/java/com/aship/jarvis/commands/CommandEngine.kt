@@ -1,12 +1,22 @@
 package com.aship.jarvis.commands
 
 import android.content.Context
+import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Result of handling one command: the reply Jarvis shows and speaks. */
+/**
+ * Result of handling one command: the reply Jarvis shows and speaks.
+ *
+ * [handled] is true when a recognizable command keyword was matched —
+ * including when the action itself then failed with a specific reason
+ * (app missing, overlay permission needed, ...). It is false only when
+ * nothing was understood: empty input, or the Phase-3 fallback below.
+ * The background wake service uses this to stay SILENT on stray noise
+ * instead of babbling the fallback; the foreground UI always speaks.
+ */
 data class CommandResult(
     val responseText: String,
     val handled: Boolean
@@ -19,8 +29,17 @@ data class CommandResult(
  * Hindi speech recognizers usually return) plus plain English keywords.
  * Everything runs on-device; unknown commands get a spoken fallback that
  * explains online AI arrives in Phase 3.
+ *
+ * When [fromBackgroundService] is true (the wake service), activity
+ * launches go through the overlay bridge (PhoneActions.*FromBackground)
+ * so Android's background-launch block cannot silently eat them, and a
+ * missing overlay permission is reported honestly instead of claiming
+ * the app opened.
  */
-class CommandEngine(private val context: Context) {
+class CommandEngine(
+    private val context: Context,
+    private val fromBackgroundService: Boolean = false
+) {
 
     fun handle(rawText: String): CommandResult {
         val text = normalize(rawText.lowercase(Locale.ROOT).trim())
@@ -31,18 +50,18 @@ class CommandEngine(private val context: Context) {
         // --- Alarm (checked first: it contains numbers) -------------------
         if (text.contains("alarm")) {
             val (hour, minute) = parseAlarmTime(text)
-            val opened = PhoneActions.setAlarm(context, hour, minute)
-            return if (opened) {
-                if (hour != null) {
-                    CommandResult(
-                        "Alarm screen khol diya hai, $hour bajkar ${minute ?: 0} minute par. Confirm kar dijiye.",
-                        true
-                    )
-                } else {
-                    CommandResult("Alarm screen khol diya hai, time set karke confirm kar dijiye.", true)
+            return if (fromBackgroundService) {
+                when (PhoneActions.setAlarmFromBackground(context, hour, minute)) {
+                    LaunchOutcome.LAUNCHED -> alarmOpenedResult(hour, minute)
+                    LaunchOutcome.PERMISSION_NEEDED ->
+                        CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                    LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                        CommandResult("Alarm app nahi khul paya.", true)
                 }
+            } else if (PhoneActions.setAlarm(context, hour, minute)) {
+                alarmOpenedResult(hour, minute)
             } else {
-                CommandResult("Alarm app nahi khul paya.", false)
+                CommandResult("Alarm app nahi khul paya.", true)
             }
         }
 
@@ -53,7 +72,7 @@ class CommandEngine(private val context: Context) {
             return if (ok) {
                 CommandResult(if (turnOff) "Torch band kar diya." else "Torch jala diya.", true)
             } else {
-                CommandResult("Is phone par torch control nahi ho paya.", false)
+                CommandResult("Is phone par torch control nahi ho paya.", true)
             }
         }
 
@@ -154,7 +173,38 @@ class CommandEngine(private val context: Context) {
         return t
     }
 
+    private fun alarmOpenedResult(hour: Int?, minute: Int?): CommandResult =
+        if (hour != null) {
+            CommandResult(
+                "Alarm screen khol diya hai, $hour bajkar ${minute ?: 0} minute par. Confirm kar dijiye.",
+                true
+            )
+        } else {
+            CommandResult("Alarm screen khol diya hai, time set karke confirm kar dijiye.", true)
+        }
+
     private fun openTarget(target: AppTarget): CommandResult {
+        if (fromBackgroundService) {
+            // Background launches must cross the overlay bridge, and a
+            // missing permission is said out loud — never faked.
+            val outcome = when (target.kind) {
+                TargetKind.PACKAGE ->
+                    PhoneActions.openAppFromBackground(context, target.packageName!!)
+                TargetKind.CAMERA -> PhoneActions.openCameraFromBackground(context)
+                TargetKind.SETTINGS -> PhoneActions.openSettingsFromBackground(context)
+            }
+            return when (outcome) {
+                LaunchOutcome.LAUNCHED ->
+                    CommandResult("${target.displayName} khol diya hai.", true)
+                LaunchOutcome.PERMISSION_NEEDED ->
+                    CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    CommandResult(
+                        "${target.displayName} is phone me nahi mila ya khul nahi paya.",
+                        true
+                    )
+            }
+        }
         val opened = when (target.kind) {
             TargetKind.PACKAGE -> PhoneActions.openApp(context, target.packageName!!)
             TargetKind.CAMERA -> PhoneActions.openCamera(context)
@@ -163,7 +213,7 @@ class CommandEngine(private val context: Context) {
         return if (opened) {
             CommandResult("${target.displayName} khol diya hai.", true)
         } else {
-            CommandResult("${target.displayName} is phone me nahi mila ya khul nahi paya.", false)
+            CommandResult("${target.displayName} is phone me nahi mila ya khul nahi paya.", true)
         }
     }
 
@@ -215,4 +265,11 @@ class CommandEngine(private val context: Context) {
         "settings" to AppTarget("Settings", TargetKind.SETTINGS),
         "setting" to AppTarget("Settings", TargetKind.SETTINGS)
     )
+
+    private companion object {
+        /** Spoken when a background launch needs the overlay permission. */
+        const val OVERLAY_PERMISSION_REPLY =
+            "Iske liye 'Display over other apps' permission chahiye — " +
+                "app kholkar neeche wala button dabaiye."
+    }
 }
