@@ -124,7 +124,9 @@ class CommandEngine(private val context: Context) {
         val words = listOf(
             // App names (incl. common mis-hearings)
             "यूट्यूब" to "youtube", "युट्यूब" to "youtube", "यूटुब" to "youtube",
+            "युटुब" to "youtube", "यूटूब" to "youtube", "यु टुब" to "youtube",
             "ইউটিউব" to "youtube", "যুটব" to "youtube", "য়ুটুব" to "youtube",
+            "ইউটুব" to "youtube", "যুটুব" to "youtube", "ইউ টুব" to "youtube",
             "फेसबुक" to "facebook", "ফেসবুক" to "facebook",
             "व्हाट्सएप" to "whatsapp", "वाट्सएप" to "whatsapp", "হোয়াটসঅ্যাপ" to "whatsapp",
             "कैमरा" to "camera", "ক্যামেরা" to "camera",
@@ -146,6 +148,9 @@ class CommandEngine(private val context: Context) {
         for ((from, to) in words) {
             t = t.replace(from, to)
         }
+        t = t.replace("you tube", "youtube")
+            .replace("face book", "facebook")
+            .replace("whats app", "whatsapp")
         return t
     }
 
