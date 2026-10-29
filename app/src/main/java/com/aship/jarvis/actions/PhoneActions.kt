@@ -30,18 +30,41 @@ enum class LaunchOutcome {
  */
 object PhoneActions {
 
-    /** Opens another app by package name, e.g. YouTube / Facebook / WhatsApp. */
+    /**
+     * Opens another app by package name, e.g. YouTube / Facebook /
+     * WhatsApp. Kuch apps ke ek se zyada package naam hote hain
+     * (Facebook ka main app / Lite, WhatsApp ka aam / Business) —
+     * [candidatePackages] ki kram se pehla jo phone me mile aur
+     * khul jaye, wahi chalega.
+     */
     fun openApp(context: Context, packageName: String): Boolean {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return false
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return try {
-            context.startActivity(launchIntent)
-            true
-        } catch (e: Exception) {
-            false
+        for (candidate in candidatePackages(packageName)) {
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(candidate)
+                ?: continue
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(launchIntent)
+                return true
+            } catch (e: Exception) {
+                // Is package se launch nahi ho paya — agla candidate try karo.
+            }
         }
+        return false
     }
+
+    /**
+     * Ek app ke mumkin package naam, pasand ke kram me: Facebook ke
+     * liye pehle main app (katana), na mile to Lite; WhatsApp ke liye
+     * pehle aam wala, na mile to Business. Baaki apps ke liye sirf
+     * diya gaya package naam.
+     */
+    private fun candidatePackages(packageName: String): List<String> =
+        PACKAGE_FALLBACKS[packageName] ?: listOf(packageName)
+
+    private val PACKAGE_FALLBACKS: Map<String, List<String>> = mapOf(
+        "com.facebook.katana" to listOf("com.facebook.katana", "com.facebook.lite"),
+        "com.whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b")
+    )
 
     /** Opens the camera in still-photo capture mode. */
     fun openCamera(context: Context): Boolean {
@@ -120,10 +143,11 @@ object PhoneActions {
     // The torch does NOT need any of this (CameraManager, no activity).
     // ------------------------------------------------------------------
 
-    /** Background variant of [openApp]. */
+    /** Background variant of [openApp] — wahi package fallback kram. */
     fun openAppFromBackground(context: Context, packageName: String): LaunchOutcome {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return LaunchOutcome.NOT_AVAILABLE
+        val launchIntent = candidatePackages(packageName).firstNotNullOfOrNull { candidate ->
+            context.packageManager.getLaunchIntentForPackage(candidate)
+        } ?: return LaunchOutcome.NOT_AVAILABLE
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return OverlayLauncher.launch(context, launchIntent)
     }
