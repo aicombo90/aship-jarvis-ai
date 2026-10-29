@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Opening / pre-filling the alarm screen -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Phase 2: background wake-word listening runs as a foreground
+         service with microphone type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- So the foreground-service notice can be shown (asked at runtime
+         on Android 13+; the service runs even if it is denied). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Phase 2: lets the user exempt Jarvis from battery optimization
+         from inside the app (vivo kills background apps otherwise). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Torch control uses the camera flash hardware, but the app works on
          phones without a flash too. -->
@@ -43,6 +53,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Phase 2: wake-word foreground service. Not exported; only
+             this app's UI starts and stops it. -->
+        <service
+            android:name=".service.JarvisWakeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
     </application>
 
