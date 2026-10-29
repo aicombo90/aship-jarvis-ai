@@ -23,10 +23,13 @@ object SpeechEngineFactory {
                     try {
                         VoskSpeechEngine(context, modelManager, ModelLanguage.HINDI)
                     } catch (t: Throwable) {
-                        SystemSpeechEngine(context, preferOffline = true)
+                        SystemSpeechEngine(context, preferOffline = false)
                     }
                 } else {
-                    SystemSpeechEngine(context, preferOffline = true)
+                    // NOTE: preferOffline must stay false here. With no
+                    // offline speech pack on the phone, forcing it makes
+                    // the system recognizer stop instantly.
+                    SystemSpeechEngine(context, preferOffline = false)
                 }
             }
         }
