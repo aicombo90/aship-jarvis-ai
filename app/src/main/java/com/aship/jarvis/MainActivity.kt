@@ -210,7 +210,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private val engineListener = object : SpeechEngineListener {
+    private val engineListener: SpeechEngineListener = object : SpeechEngineListener {
         override fun onListeningStateChanged(isListening: Boolean) {
             listening = isListening
             if (isListening) {
