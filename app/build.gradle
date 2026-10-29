@@ -37,6 +37,6 @@ dependencies {
     // NOTE (Phase 1): this coordinate is used as specified. If dependency
     // resolution fails in CI, the first thing to try is swapping the group to
     // 'com.github.alphacep' (the vosk-android GitHub repo lives under the
-    // "alphacep" org): implementation 'com.github.alphacep:vosk-android:0.3.47'
-    implementation 'com.github.alphacep:vosk-android:0.3.47'
+    // "alphacep" org): implementation 'com.github.alphacephei:vosk-android:0.3.47'
+    implementation 'com.github.alphacephei:vosk-android:0.3.47'
 }
