@@ -8,6 +8,21 @@ import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
 
+/** Outcome of one activity launch attempted for the background service. */
+enum class LaunchOutcome {
+    /** The launch intent was actually dispatched. */
+    LAUNCHED,
+
+    /** Target missing (app not installed, no handler): nothing to launch. */
+    NOT_AVAILABLE,
+
+    /** "Display over other apps" permission missing: Android blocks the launch. */
+    PERMISSION_NEEDED,
+
+    /** The launch was attempted but threw / was refused. */
+    FAILED
+}
+
 /**
  * Small, permission-safe actions Jarvis can perform on the owner's phone.
  * Every function returns false instead of crashing when something is
@@ -77,7 +92,16 @@ object PhoneActions {
      * they are pre-filled so the user only has to confirm.
      */
     fun setAlarm(context: Context, hour: Int?, minute: Int?): Boolean {
-        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+        return try {
+            context.startActivity(buildAlarmIntent(hour, minute))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun buildAlarmIntent(hour: Int?, minute: Int?): Intent =
+        Intent(AlarmClock.ACTION_SET_ALARM).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (hour != null) {
                 putExtra(AlarmClock.EXTRA_HOUR, hour)
@@ -85,11 +109,40 @@ object PhoneActions {
             }
             putExtra(AlarmClock.EXTRA_MESSAGE, "Jarvis alarm")
         }
-        return try {
-            context.startActivity(intent)
-            true
-        } catch (e: Exception) {
-            false
-        }
+
+    // ------------------------------------------------------------------
+    // Background (wake service) variants.
+    //
+    // Android 10+ silently swallows startActivity() from a background
+    // service, so these route through OverlayLauncher and report the
+    // truth: PERMISSION_NEEDED when "Display over other apps" has not
+    // been granted, instead of letting Jarvis claim the app opened.
+    // The torch does NOT need any of this (CameraManager, no activity).
+    // ------------------------------------------------------------------
+
+    /** Background variant of [openApp]. */
+    fun openAppFromBackground(context: Context, packageName: String): LaunchOutcome {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: return LaunchOutcome.NOT_AVAILABLE
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return OverlayLauncher.launch(context, launchIntent)
     }
+
+    /** Background variant of [openCamera]. */
+    fun openCameraFromBackground(context: Context): LaunchOutcome {
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return OverlayLauncher.launch(context, intent)
+    }
+
+    /** Background variant of [openSettings]. */
+    fun openSettingsFromBackground(context: Context): LaunchOutcome {
+        val intent = Intent(Settings.ACTION_SETTINGS)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return OverlayLauncher.launch(context, intent)
+    }
+
+    /** Background variant of [setAlarm]. */
+    fun setAlarmFromBackground(context: Context, hour: Int?, minute: Int?): LaunchOutcome =
+        OverlayLauncher.launch(context, buildAlarmIntent(hour, minute))
 }
