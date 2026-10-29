@@ -134,4 +134,16 @@
         android:layout_height="wrap_content"
         android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
 
+    <Button
+        android:id="@+id/overlayPermissionButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
+
+    <Button
+        android:id="@+id/updateCheckButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="UPDATE CHECK KARO" />
+
 </LinearLayout>
