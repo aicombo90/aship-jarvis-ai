@@ -143,6 +143,7 @@ aapki awaaz kahin upload nahi hoti.
 
 ### Phase 2 fixes (is build me)
 
+- **Command na samjhe to ek aur mauka (v12):** "Jarvis" ke baad command samajh na aaye to Jarvis **"Phir se boliye"** bolkar turant ek baar aur sunta hai — dobara "Jarvis" bolne ki zaroorat nahi. Dusri baar bhi na samjhe to pehle wala vyavhaar (kholne ki koshish par saaf mana, warna chup).
 - **Wake word ki fuzzy matching (v1.7):** "Jarvis" ke aam galat-sune roop bhi chalenge, aur app ke background section ki **"Mic ne aakhri suna"** line dikhayegi ki recognizer ne asal me kya suna.
 - **Background se app ab sach me khulta hai.** Pehle Jarvis "YouTube
   khol diya hai" bol deta tha par Android 10+ ke background-launch
