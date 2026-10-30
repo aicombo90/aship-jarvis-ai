@@ -1,5 +1,6 @@
 package com.aship.jarvis.actions
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -30,6 +31,13 @@ import java.util.concurrent.TimeUnit
  *
  * Without the permission we do NOT pretend: [launch] returns
  * [LaunchOutcome.PERMISSION_NEEDED] so the caller can say so.
+ *
+ * v16 lock gate: EVERY background launch passes through [launch],
+ * so the locked-phone rule lives exactly here — while the keyguard
+ * is locked, nothing is launched at all and the caller receives
+ * [LaunchOutcome.LOCKED] (it then asks the user to unlock first).
+ * Non-launch actions (torch, volume, media keys, ...) never come
+ * through here and keep working on a locked phone.
  */
 object OverlayLauncher {
 
@@ -46,6 +54,9 @@ object OverlayLauncher {
      * truthful — LAUNCHED means the intent really was dispatched.
      */
     fun launch(context: Context, intent: Intent): LaunchOutcome {
+        if (isDeviceLocked(context)) {
+            return LaunchOutcome.LOCKED
+        }
         if (!canDrawOverlays(context)) {
             return LaunchOutcome.PERMISSION_NEEDED
         }
@@ -66,6 +77,23 @@ object OverlayLauncher {
             }
         } catch (e: InterruptedException) {
             LaunchOutcome.FAILED
+        }
+    }
+
+    /**
+     * v16: is the phone locked right now? `isKeyguardLocked` is the
+     * primary signal; `isDeviceLocked` covers the same ground on
+     * devices where the keyguard reports loosely. Any failure to
+     * tell means "not provably locked" — the launch proceeds as
+     * before rather than every background launch breaking.
+     */
+    private fun isDeviceLocked(context: Context): Boolean {
+        val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            ?: return false
+        return try {
+            keyguard.isKeyguardLocked || keyguard.isDeviceLocked
+        } catch (e: Exception) {
+            false
         }
     }
 
