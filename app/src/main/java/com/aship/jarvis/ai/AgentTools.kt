@@ -1,8 +1,11 @@
 package com.aship.jarvis.ai
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
+import com.aship.jarvis.actions.OverlayLauncher
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.CommandEngine
 import org.json.JSONObject
@@ -39,6 +42,12 @@ import java.util.concurrent.TimeUnit
  * (AgentBrain apne executor se bulata hai): mobile data
  * wala auzaar Accessibility ke natije ka bandha intezaar
  * (latch) karta hai, bilkul CommandEngine ki tarah.
+ *
+ * v26: ek naya auzaar — youtube_play: mastishk query
+ * chunta hai, results yahin se khulte hain (app ho to
+ * seedha usi par, warna browser par) aur pehle video
+ * par tap Accessibility service karti hai; natija
+ * OK / PARTIAL / FAILED me hamesha sachha.
  */
 class AgentTools(
     private val context: Context,
@@ -56,6 +65,7 @@ class AgentTools(
             mobileData(args.optString("state").trim().lowercase(Locale.ROOT))
         "torch" -> torch(args.optString("state").trim().lowercase(Locale.ROOT))
         "web_search" -> webSearch(args.optString("query").trim())
+        "youtube_play" -> youtubePlay(args.optString("query").trim())
         "get_time" -> ToolResult(
             true,
             "Current time is " +
@@ -69,7 +79,7 @@ class AgentTools(
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
-                "torch, web_search, get_time, get_date."
+                "torch, web_search, youtube_play, get_time, get_date."
         )
     }
 
@@ -136,6 +146,151 @@ class AgentTools(
         } else {
             ToolResult(false, "The browser could not be opened.")
         }
+    }
+
+    /**
+     * v26: YouTube par [query] search karke pehla video
+     * chalao — user ki apni misal ("sad song chalao"):
+     * mastishk query chunta hai, phone ke haath (results
+     * kholna + Accessibility ka ek tap) kaam karte hain,
+     * aur poora kaam ek hi hukm me khatm hota hai. Natija
+     * teen sachon me se ek: video chal gaya (ok), results
+     * khule par tap nahi ho paya (PARTIAL — mastishk
+     * "chala diya" jhooth nahi bolega), ya YouTube khula
+     * hi nahi (FAILED).
+     */
+    private fun youtubePlay(query: String): ToolResult {
+        if (query.isEmpty()) {
+            return ToolResult(false, "No search query was given.")
+        }
+        val url = "https://www.youtube.com/results?search_query=" +
+            URLEncoder.encode(query, "UTF-8")
+        openYouTubeResults(url)?.let { return it }
+        // Results khulne ki ghoshna ho chuki hai — app ke
+        // saamne aane ki ek saans do, phir tap ki koshish.
+        try {
+            Thread.sleep(YOUTUBE_SETTLE_MS)
+        } catch (e: InterruptedException) {
+            // Intezaar kata: tap phir bhi aazmaya jayega.
+        }
+        // Tap ka natija Accessibility service callback se
+        // deti hai; agent ka jawab bandha (sync) chahiye,
+        // isliye latch wala intezaar — mobile_data ki tarah.
+        // Seema service ki apni khoj-seema (10 s) se upar hai.
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.TapOutcome? = null
+        try {
+            JarvisAccessibilityService.tapFirstYouTubeResult(context) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par tap " +
+                    "wali service tak pahunch nahi payi; results " +
+                    "screen par hain."
+            )
+        }
+        val completed = try {
+            latch.await(YOUTUBE_TAP_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed) {
+            return ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par tap " +
+                    "ka jawab samay par nahi aaya; results screen " +
+                    "par hain."
+            )
+        }
+        return when (outcome) {
+            JarvisAccessibilityService.TapOutcome.TAPPED -> ToolResult(
+                true,
+                "YouTube par '$query' search karke pehla video " +
+                    "chala diya."
+            )
+            JarvisAccessibilityService.TapOutcome.SERVICE_OFF -> ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par pehle " +
+                    "video par tap nahi ho paya (accessibility " +
+                    "service band hai); results screen par hain."
+            )
+            JarvisAccessibilityService.TapOutcome.BUSY -> ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par pehle " +
+                    "video par tap nahi ho paya (ek tap-koshish " +
+                    "pehle se chal rahi thi); results screen par hain."
+            )
+            JarvisAccessibilityService.TapOutcome.NOT_FOUND -> ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par pehle " +
+                    "video par tap nahi ho paya (results me video " +
+                    "nahi mila); results screen par hain."
+            )
+            null -> ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain, par tap " +
+                    "ka jawab samay par nahi aaya; results screen " +
+                    "par hain."
+            )
+        }
+    }
+
+    /**
+     * YouTube search-results wala link kholo: app phone me
+     * ho to intent seedha usi par bandha (package laga kar),
+     * warna jo browser mile usi par — web_search wala hi
+     * bandobosto (saamne seedha startActivity, background
+     * me overlay bridge). Khul jaye to null; na khule to
+     * FAILED wala sachha natija.
+     */
+    private fun openYouTubeResults(url: String): ToolResult? {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (isYouTubeInstalled()) {
+                setPackage(YOUTUBE_PACKAGE)
+            }
+        }
+        if (fromBackgroundService) {
+            val hasHandler = try {
+                intent.resolveActivity(context.packageManager) != null
+            } catch (e: Exception) {
+                false
+            }
+            if (!hasHandler) {
+                return ToolResult(false, "FAILED — YouTube khul nahi paya.")
+            }
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> null
+                LaunchOutcome.PERMISSION_NEEDED -> ToolResult(
+                    false,
+                    "FAILED — YouTube khul nahi paya: 'Display over " +
+                        "other apps' permission chahiye."
+                )
+                LaunchOutcome.LOCKED -> ToolResult(
+                    false,
+                    "FAILED — phone locked hai, YouTube khul nahi paya."
+                )
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    ToolResult(false, "FAILED — YouTube khul nahi paya.")
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            null
+        } catch (e: Exception) {
+            ToolResult(false, "FAILED — YouTube khul nahi paya.")
+        }
+    }
+
+    /** YouTube app phone me hai kya (uska launch raasta milta hai kya). */
+    private fun isYouTubeInstalled(): Boolean = try {
+        context.packageManager
+            .getLaunchIntentForPackage(YOUTUBE_PACKAGE) != null
+    } catch (e: Exception) {
+        false
     }
 
     /** Mobile data — disha di ho to woh, warna toggle. */
@@ -276,5 +431,18 @@ class AgentTools(
          * hai aur der ka jawab jhooth se behtar hai).
          */
         const val DATA_WAIT_MS = 12_000L
+
+        /** v26: YouTube app ka package naam. */
+        const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+
+        /** v26: results khulne ke baad app ke saamne aane ki saans. */
+        const val YOUTUBE_SETTLE_MS = 700L
+
+        /**
+         * v26: YouTube tap ke natije ka adhiktam intezaar —
+         * service ki apni khoj-seema 10 s hai, usse upar
+         * rakha hai taaki sachha natija pehle aa jaye.
+         */
+        const val YOUTUBE_TAP_WAIT_MS = 14_000L
     }
 }
