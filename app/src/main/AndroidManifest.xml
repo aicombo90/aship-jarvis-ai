@@ -91,6 +91,27 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- v17: Accessibility service — EK hi kaam: "mobile data
+             on/off karo" par quick-settings ka data tile dabana
+             (Android aam app ko data seedha badalne nahi deta).
+             User Settings > Accessibility se khud ON karta hai;
+             bina uske service band rehti hai aur Jarvis saaf mana
+             kar deta hai. Iske alawa koi screen automation nahi
+             hota. BIND_ACCESSIBILITY_SERVICE permission ki wajah
+             se sirf Android system hi ise bandh sakta hai. -->
+        <service
+            android:name=".access.JarvisAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_config" />
+        </service>
+
         <!-- In-app update: download hue APK ko system installer tak
              pahunchane ke liye FileProvider. -->
         <provider
