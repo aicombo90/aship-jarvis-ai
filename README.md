@@ -35,6 +35,10 @@ Jarvis does it on your phone and speaks the reply back to you.
   অন করো" / "डेटा बंद करो" bolne se Maya quick-settings ka data
   tile dabakar mobile data on/off kar deti hai — lock ho tab bhi
   koshish hoti hai, tile na mile to saaf bol deti hai
+- **Data command bina on/off shabd ke bhi (v18):** "মোবাইল ডাটা
+  করো" bolne par bhi kaam hota hai — disha wala shabd (on/off)
+  sunai na de to Maya data toggle kar deti hai (on hai to off,
+  off hai to on) aur dabane ke baad ki haalat bol deti hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
