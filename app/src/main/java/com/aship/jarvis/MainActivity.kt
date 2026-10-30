@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +24,7 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.access.JarvisAccessibilityService
+import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
@@ -68,6 +71,15 @@ class MainActivity : Activity() {
     // v17: Accessibility (mobile data) section — battery wale
     // bandobosto ki tarah hi ek status line + ek button.
     private lateinit var accessibilityStatusText: TextView
+
+    // v21 Phase 3: Gemini (online brain) section — key sirf
+    // phone par rehti hai; status line kabhi key nahi dikhati.
+    private lateinit var geminiKeyStatusText: TextView
+    private lateinit var geminiKeyInput: EditText
+
+    // v21: is screen ki Gemini baatchit ki yaad — aakhiri 10
+    // user/model turn. Activity zinda hai tab tak rehti hai.
+    private val geminiHistory = mutableListOf<Pair<String, String>>()
 
     // In-app update (GitHub Releases): pending download bookkeeping.
     private var updateDownloadId: Long = -1L
@@ -159,6 +171,18 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.updateCheckButton).setOnClickListener {
             checkForUpdate(manual = true)
         }
+        geminiKeyStatusText = findViewById(R.id.geminiKeyStatusText)
+        geminiKeyInput = findViewById(R.id.geminiKeyInput)
+        findViewById<Button>(R.id.geminiKeySaveButton).setOnClickListener {
+            onGeminiKeySaveClicked()
+        }
+        findViewById<Button>(R.id.geminiKeyClearButton).setOnClickListener {
+            GeminiBrain.clearKey(this)
+            geminiKeyInput.text.clear()
+            refreshGeminiKeyUi()
+            Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
+        }
+        refreshGeminiKeyUi()
         updateWakeUi()
 
         // In-app update: app khulne par ek baar chup-chaap check.
@@ -445,8 +469,106 @@ class MainActivity : Activity() {
             return
         }
         val result = commandEngine.handle(text)
+        // v21 Phase 3: offline engine miss kare aur online brain
+        // uplabdh ho to pehle Gemini ko ek mauka — uske jawab ka
+        // intezaar karo, purana fallback jawab abhi mat bolo.
+        // Gemini null de to askGeminiBrain ke andar wahi purana
+        // jawab chalega. Handled command kabhi yahan nahi aata.
+        if (!result.handled && geminiBrainAllowed()) {
+            responseText.text = "Maya online soch rahi hai..."
+            askGeminiBrain(text, result.responseText)
+            return
+        }
         responseText.text = "Jarvis: ${result.responseText}"
         speaker.speak(result.responseText)
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3 (v21): Gemini online brain — key rakhna + fallback
+    // ------------------------------------------------------------------
+
+    /** Key save karo: khaali na ho tabhi band karo, khana turant saaf. */
+    private fun onGeminiKeySaveClicked() {
+        val typed = geminiKeyInput.text.toString().trim()
+        if (typed.isEmpty()) {
+            Toast.makeText(this, "Pehle khane me key likho.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        GeminiBrain.setKey(this, typed)
+        geminiKeyInput.text.clear()
+        refreshGeminiKeyUi()
+        Toast.makeText(
+            this,
+            "Key save ho gayi — ab Maya online sawalon ke jawab bhi degi.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    /**
+     * Key ki haalat sirf haan/na me dikhao — key ka text screen
+     * par kabhi wapas nahi aata. Key set ho to khana khaali
+     * rahega; badalna ho to naya key likhkar save karna hoga.
+     */
+    private fun refreshGeminiKeyUi() {
+        if (!::geminiKeyStatusText.isInitialized) return
+        if (GeminiBrain.isConfigured(this)) {
+            geminiKeyStatusText.text = "Key: set hai ✓"
+            geminiKeyInput.hint = "Key set hai — badalna hai to naya key likho"
+        } else {
+            geminiKeyStatusText.text = "Key: nahi hai"
+            geminiKeyInput.hint = "Yahan apna Gemini API key likho"
+        }
+    }
+
+    /**
+     * v21 gate (wake service wala hi niyam): mode pure-Offline
+     * na ho, key set ho aur net chalu ho — tabhi Gemini bulao.
+     */
+    private fun geminiBrainAllowed(): Boolean {
+        if (prefs.mode == JarvisMode.OFFLINE) return false
+        if (!GeminiBrain.isConfigured(this)) return false
+        return isNetworkUp()
+    }
+
+    /** Is pal internet uplabdh hai ya nahi (ConnectivityManager se). */
+    private fun isNetworkUp(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager ?: return false
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Gemini se jawab maango (jawab uske apne thread par aata
+     * hai; UI ka saara kaam main thread par wapas aakar hota
+     * hai). Jawab mile to dikhao + bolo aur baatchit yaad me
+     * jodo; na mile to engine wala purana fallback jawab hi
+     * dikhao + bolo — bilkul pehle jaisa.
+     */
+    private fun askGeminiBrain(text: String, fallbackReply: String) {
+        GeminiBrain.chat(this, geminiHistory.toList(), text) { reply ->
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                if (reply == null) {
+                    responseText.text = "Jarvis: $fallbackReply"
+                    speaker.speak(fallbackReply)
+                    return@post
+                }
+                geminiHistory.add("user" to text)
+                geminiHistory.add("model" to reply)
+                while (geminiHistory.size > MAX_GEMINI_HISTORY_ENTRIES) {
+                    geminiHistory.removeAt(0)
+                    geminiHistory.removeAt(0)
+                }
+                responseText.text = "Maya: $reply"
+                speaker.speak(reply)
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -885,5 +1007,8 @@ class MainActivity : Activity() {
         private const val REQUEST_RECORD_AUDIO_WAKE = 1002
         private const val REQUEST_POST_NOTIFICATIONS = 1003
         private const val WAKE_REFRESH_MS = 2_000L
+
+        /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
+        private const val MAX_GEMINI_HISTORY_ENTRIES = 20
     }
 }
