@@ -72,6 +72,11 @@ class MainActivity : Activity() {
     // bandobosto ki tarah hi ek status line + ek button.
     private lateinit var accessibilityStatusText: TextView
 
+    // v23: panel-scan report ki line — Accessibility service
+    // har data koshish ke baad SharedPreferences "jarvis_diag"
+    // me report chhodti hai; yahan sirf use dikhaya jata hai.
+    private lateinit var panelScanText: TextView
+
     // v21 Phase 3: Gemini (online brain) section — key sirf
     // phone par rehti hai; status line kabhi key nahi dikhati.
     private lateinit var geminiKeyStatusText: TextView
@@ -163,6 +168,7 @@ class MainActivity : Activity() {
             onBatteryButtonClicked()
         }
         accessibilityStatusText = findViewById(R.id.accessibilityStatusText)
+        panelScanText = findViewById(R.id.panelScanText)
         findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
             onAccessibilityButtonClicked()
         }
@@ -250,9 +256,17 @@ class MainActivity : Activity() {
             createEngine()
             updateStatus()
             if (prefs.mode == JarvisMode.ONLINE) {
+                // v23: toast ab key ki haalat ke hisaab se sach
+                // bolta hai — key band ho to "aaya nahi hai"
+                // kehna jhooth tha (header "taiyaar hai" dikha
+                // raha hota tha aur toast usse ulta).
                 Toast.makeText(
                     this,
-                    "Online AI abhi aaya nahi hai — abhi offline commands chalenge.",
+                    if (GeminiBrain.isConfigured(this)) {
+                        "Online AI taiyaar hai — Gemini se jawab milega."
+                    } else {
+                        "Online AI abhi aaya nahi hai — abhi offline commands chalenge."
+                    },
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -708,6 +722,25 @@ class MainActivity : Activity() {
             } else {
                 "Accessibility: নেই — মোবাইল ডাটা কমান্ডের জন্য " +
                     "নিচের বোতাম থেকে চালু করুন।"
+            }
+        }
+        // v23: aakhiri panel-scan ki report — tile na mile to
+        // is line se pata chalta hai ki panel me asal me tha
+        // kya. Report service SharedPreferences "jarvis_diag"
+        // me likhti hai; kabhi koshish hi na hui ho to waisa
+        // saaf likho. Ye bhi updateWakeUi ke saath hi taza
+        // hoti hai (onResume + har 2 s).
+        if (::panelScanText.isInitialized) {
+            val report = try {
+                getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                    .getString("last_panel_scan", null)
+            } catch (t: Throwable) {
+                null
+            }
+            panelScanText.text = if (report.isNullOrBlank()) {
+                "Panel scan: abhi tak koi koshish nahi"
+            } else {
+                "Panel scan: $report"
             }
         }
     }
