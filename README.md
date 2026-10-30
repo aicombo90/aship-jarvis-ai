@@ -140,6 +140,16 @@ Jarvis does it on your phone and speaks the reply back to you.
   baar maangi jati hai; kai log ek naam ke milein to
   Maya poochhti hai kaun sa wala (number ke sirf
   aakhiri 4 ank dikhakar)
+- **WhatsApp sandesh ki taiyaari (v30):** agent ke
+  paas naya auzaar — whatsapp_message. "রাহুলকে
+  WhatsApp-এ লেখো আমি আসছি" bolne par Maya contacts
+  me woh naam dhundhti hai (v29 wali hi khoj, koi
+  nayi permission nahi) aur uski WhatsApp chat
+  kholkar sandesh pehle se likh deti hai — bhejna
+  woh khud NAHI dabati, send wala button hamesha
+  user khud dabata hai. Kai log ek naam ke milein
+  to Maya poochhti hai kaun sa wala (number ke sirf
+  aakhiri 4 ank dikhakar)
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
