@@ -143,6 +143,7 @@ aapki awaaz kahin upload nahi hoti.
 
 ### Phase 2 fixes (is build me)
 
+- **Wake word ki fuzzy matching (v1.7):** "Jarvis" ke aam galat-sune roop bhi chalenge, aur app ke background section ki **"Mic ne aakhri suna"** line dikhayegi ki recognizer ne asal me kya suna.
 - **Background se app ab sach me khulta hai.** Pehle Jarvis "YouTube
   khol diya hai" bol deta tha par Android 10+ ke background-launch
   niyam ki wajah se app khulta hi nahi tha. Ab wake service overlay
