@@ -53,6 +53,15 @@ import java.util.concurrent.Executors
  * kul intezaar bhi 2.5 se badhakar 8 second kiya (vivo wala
  * panel sajne me der lagata hai).
  *
+ * v26: dusra — aur aakhiri ghoshit — kaam:
+ * [tapFirstYouTubeResult], agent ke youtube_play auzaar ke
+ * liye. YouTube search results khulne ke baad pehle asal
+ * video par EK tap, bas itna hi. Kabhi scroll nahi, kabhi
+ * like/comment/subscribe/share nahi dabta; saamne YouTube
+ * na ho to kuch hota hi nahi. Har koshish ki report
+ * "jarvis_diag" me "last_youtube_tap" par band hoti hai —
+ * kaun sa video daba (ya kya-kya dikha tha).
+ *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
  * Kul intezaar ~8 second se bandha hai.
@@ -99,6 +108,25 @@ class JarvisAccessibilityService : AccessibilityService() {
         SERVICE_OFF
     }
 
+    /**
+     * v26: YouTube search results me pehle video par tap
+     * ki koshish ka sachha natija (agent ke youtube_play
+     * auzaar ke liye).
+     */
+    enum class TapOutcome {
+        /** Pehla video mila aur tap ho gaya — chal raha hona chahiye. */
+        TAPPED,
+
+        /** YouTube saamne aaya hi nahi, ya results me video nahi mila. */
+        NOT_FOUND,
+
+        /** Service band hai (ya beech me band ho gayi). */
+        SERVICE_OFF,
+
+        /** Ek tap-koshish pehle se chal rahi hai — dusri maang nahi li gayi. */
+        BUSY
+    }
+
     private val worker = Executors.newSingleThreadExecutor()
 
     // v23: panel-scan report ki kacchi jankari — sirf worker
@@ -112,6 +140,15 @@ class JarvisAccessibilityService : AccessibilityService() {
     private var scanBestScore = 0
     private var scanTileLabel: String? = null
     private var pendingScanReport: String? = null
+
+    // v26: YouTube tap ki haalat. tapBusy ek jhanda hai jo
+    // kisi bhi thread se padha jata hai (@Volatile) — ek
+    // samay me ek hi tap-koshish chalegi. ytLabels sirf
+    // worker thread chhoota hai: khoj ke dauraan YouTube
+    // khidki me mile naam, report (last_youtube_tap) ke liye.
+    @Volatile
+    private var tapBusy = false
+    private val ytLabels = LinkedHashSet<String>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -198,6 +235,59 @@ class JarvisAccessibilityService : AccessibilityService() {
             } catch (t2: Throwable) {
                 // Bulane wala ja chuka hai: natija chhod do.
             }
+        }
+    }
+
+    /**
+     * v26: YouTube search results me pehle asal video par
+     * EK tap ki koshish (agent ke youtube_play auzaar se
+     * bulaayi jati hai). Turant laut aata hai; asal kaam
+     * worker thread par hota hai aur natija [callback] se
+     * (usi thread par) milta hai. Ek samay me ek hi
+     * koshish: dusri maang aaye to kataar me khada karne
+     * ki jagah sachha [TapOutcome.BUSY] milta hai.
+     */
+    fun tapFirstYouTubeResult(callback: (TapOutcome) -> Unit) {
+        if (tapBusy) {
+            saveYouTubeTapDiag("BUSY")
+            deliverTapResult(callback, TapOutcome.BUSY)
+            return
+        }
+        tapBusy = true
+        try {
+            worker.execute {
+                val outcome = try {
+                    runYouTubeTap()
+                } catch (t: Throwable) {
+                    // Ped beech me bigad gaya ho: report ke
+                    // saath imaandaar NOT_FOUND.
+                    saveYouTubeTapDiag(
+                        "NOT_FOUND seen: [" +
+                            ytLabels.joinToString(" | ") + "]"
+                    )
+                    TapOutcome.NOT_FOUND
+                }
+                tapBusy = false
+                deliverTapResult(callback, outcome)
+            }
+        } catch (t: Throwable) {
+            // Service band ho rahi hai aur worker band ho
+            // chuka: kaam nahi ho payega — sach bata do.
+            tapBusy = false
+            saveYouTubeTapDiag("SERVICE_OFF")
+            deliverTapResult(callback, TapOutcome.SERVICE_OFF)
+        }
+    }
+
+    /** v26: tap ka natija surakshit roop se bulane wale tak pahunchayo. */
+    private fun deliverTapResult(
+        callback: (TapOutcome) -> Unit,
+        outcome: TapOutcome
+    ) {
+        try {
+            callback(outcome)
+        } catch (t: Throwable) {
+            // Bulane wala ja chuka hai: natija chhod do.
         }
     }
 
@@ -430,6 +520,211 @@ class JarvisAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /** v26: YouTube khoj ka ek ummeedwaar — dabane wala node aur uska naam. */
+    private class YouTubeHit(
+        val clickTarget: AccessibilityNodeInfo,
+        val label: String
+    )
+
+    /**
+     * v26: asal tap wali khoj — sirf worker thread se bulana.
+     * ~10 second tak sakriya khidkiyon ke ped baar-baar dekhe
+     * jate hain; kuch bhi dabta hai SIRF tab, jab saamne wala
+     * ped YouTube (package [YOUTUBE_PACKAGE]) ka ho. Pehla
+     * video-umeedwaar mila to EK baar ACTION_CLICK — safal
+     * hote hi koshish khatm. Kabhi scroll nahi hota; khoj
+     * results wali list ke andar bandhi hai, isliye like /
+     * comment / share wale hisse haath hi nahi aate.
+     */
+    private fun runYouTubeTap(): TapOutcome {
+        ytLabels.clear()
+        val deadline = SystemClock.uptimeMillis() + YOUTUBE_TAP_BUDGET_MS
+        while (SystemClock.uptimeMillis() < deadline) {
+            val roots = collectRoots()
+            var hitLabel: String? = null
+            var clicked = false
+            for (root in roots) {
+                if (root.packageName?.toString() != YOUTUBE_PACKAGE) {
+                    continue
+                }
+                val hit = findFirstVideoResult(root) ?: continue
+                hitLabel = hit.label
+                clicked = try {
+                    hit.clickTarget.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK
+                    )
+                } catch (t: Throwable) {
+                    false
+                }
+                // Safal ho ya action nakara gaya ho — is
+                // chakkar me dusra ped nahi aazmate: safalta
+                // par rukna hai, nakare par taaza ped ke
+                // saath agla chakkar pakka hai.
+                break
+            }
+            if (clicked) {
+                saveYouTubeTapDiag(
+                    "TAPPED label=\"" +
+                        (hitLabel ?: "?").take(MAX_SCAN_LABEL_CHARS) + "\""
+                )
+                return TapOutcome.TAPPED
+            }
+            // Is chakkar ke ped saaf kar do; agle me taaza milenge.
+            roots.forEach { root ->
+                try {
+                    root.recycle()
+                } catch (t: Throwable) {
+                    // Pehle se saaf: kuch nahi karna.
+                }
+            }
+            SystemClock.sleep(POLL_INTERVAL_MS)
+        }
+        saveYouTubeTapDiag(
+            "NOT_FOUND seen: [" + ytLabels.joinToString(" | ") + "]"
+        )
+        return TapOutcome.NOT_FOUND
+    }
+
+    /**
+     * v26: ek YouTube ped me pehla asal video-umeedwaar.
+     * Khoj results wali list (pehla scrollable node) ke andar
+     * bandhi hai — upar wale filter-chip aur doosre hisse
+     * ummeedwaar nahi bante; scrollable hissa na mile to
+     * poora ped hi khoj ka maidhan hai. Document order (jaise
+     * screen par dikhta hai) me pehla woh node chunta hai jo
+     * naam wala ho, khud clickable ho ya clickable purvaj
+     * rakhta ho, aur jiski santaan me avadhi (duration) jaisa
+     * "12:34" pattern mile. Woh na mile to dusri chaal: pehla
+     * naam-wala clickable ummeedwaar (uska naam report me
+     * rahega — galat chuna gaya to wahan dikhega).
+     */
+    private fun findFirstVideoResult(
+        root: AccessibilityNodeInfo
+    ): YouTubeHit? {
+        val container = findScrollableContainer(root) ?: root
+        var firstLoose: YouTubeHit? = null
+        for (node in collectInDocumentOrder(container)) {
+            if (node === container) continue
+            val label = nodeLabel(node)
+            if (label.isNotEmpty() && ytLabels.size < MAX_YOUTUBE_LABELS) {
+                ytLabels.add(label.take(MAX_SCAN_LABEL_CHARS))
+            }
+            if (label.isEmpty()) continue
+            if (isNonVideoLabel(label)) continue
+            val target = findClickableAncestor(node) ?: continue
+            val hit = YouTubeHit(target, label)
+            if (subtreeHasDuration(node)) {
+                return hit
+            }
+            if (firstLoose == null) {
+                firstLoose = hit
+            }
+        }
+        return firstLoose
+    }
+
+    /**
+     * v26: ped me pehla scrollable hissa (YouTube par results
+     * wali RecyclerView) — document order me. Na mile to null.
+     */
+    private fun findScrollableContainer(
+        root: AccessibilityNodeInfo
+    ): AccessibilityNodeInfo? {
+        for (node in collectInDocumentOrder(root)) {
+            try {
+                if (node.isScrollable) return node
+            } catch (t: Throwable) {
+                // Ped badal raha hai: aage badho.
+            }
+        }
+        return null
+    }
+
+    /**
+     * v26: ped ko document order (upar se neeche, jaise
+     * screen par dikhta hai) me ikattha karo — [MAX_NODES]
+     * par bandha. findDataTile wali LIFO chaal yahan
+     * jaan-boojh kar nahi li gayi: "pehla result" ke liye
+     * asal dikhai wala kram hi chahiye.
+     */
+    private fun collectInDocumentOrder(
+        root: AccessibilityNodeInfo
+    ): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        while (!stack.isEmpty() && out.size < MAX_NODES) {
+            val node = stack.removeLast()
+            out.add(node)
+            val children = ArrayList<AccessibilityNodeInfo>()
+            for (i in 0 until node.childCount) {
+                try {
+                    node.getChild(i)?.let { child -> children.add(child) }
+                } catch (t: Throwable) {
+                    // Ped beech me badal gaya: jo mila wahi kaafi.
+                }
+            }
+            // Bachcho ko ulte kram me rakho, taaki nikaalne
+            // par asal (screen wala) kram mile.
+            for (child in children.asReversed()) {
+                stack.addLast(child)
+            }
+        }
+        return out
+    }
+
+    /**
+     * v26: node ki santaan (khud samet) me kahin avadhi
+     * jaisa "12:34" / "1:02:03" pattern hai kya — asli
+     * video ki sabse pakki pehchaan. Bandhi ginati par rukti hai.
+     */
+    private fun subtreeHasDuration(node: AccessibilityNodeInfo): Boolean {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(node)
+        var visited = 0
+        while (!stack.isEmpty() && visited < MAX_DURATION_NODES) {
+            val current = stack.removeLast()
+            visited++
+            if (DURATION_PATTERN.containsMatchIn(nodeLabel(current))) {
+                return true
+            }
+            for (i in 0 until current.childCount) {
+                try {
+                    current.getChild(i)?.let { child -> stack.addLast(child) }
+                } catch (t: Throwable) {
+                    // Ped beech me badal gaya: jo mila wahi kaafi.
+                }
+            }
+        }
+        return false
+    }
+
+    /** v26: shelf ke naam / vigyapan wale hisse video nahi hote. */
+    private fun isNonVideoLabel(label: String): Boolean {
+        val lower = label.lowercase(Locale.ROOT)
+        return lower == "shorts" ||
+            lower.startsWith("ad ") || lower.startsWith("ad·") ||
+            lower.startsWith("ad ·") || lower.contains("sponsored")
+    }
+
+    /**
+     * v26: YouTube tap ki report band karo — companion ke
+     * [lastYouTubeTapReport] me aur SharedPreferences
+     * "jarvis_diag" me, bilkul panel-scan report ki tarah.
+     * Report likhne ki gadbad asal natije ko kabhi nahi rokti.
+     */
+    private fun saveYouTubeTapDiag(report: String) {
+        lastYouTubeTapReport = report
+        try {
+            getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(DIAG_KEY_LAST_YOUTUBE_TAP, report)
+                .apply()
+        } catch (t: Throwable) {
+            // Report gauṇ hai: tap ka sach isse bada hai.
+        }
+    }
+
     /**
      * Panel ke ped (tree) me data tile dhoondho. Har node ke
      * text + content-description ko milakar naam banate hain aur
@@ -599,6 +894,17 @@ class JarvisAccessibilityService : AccessibilityService() {
             private set
 
         /**
+         * v26: aakhiri YouTube-tap koshish ki report — har
+         * koshish ke aakhir me service bhar deti hai
+         * (TAPPED label="..." / NOT_FOUND seen: [...] /
+         * BUSY / SERVICE_OFF). App ki screen SharedPreferences
+         * "jarvis_diag" se padh sakti hai.
+         */
+        @Volatile
+        var lastYouTubeTapReport: String? = null
+            private set
+
+        /**
          * Service chalu hai ya nahi. Pehle chalti hui instance
          * dekho; woh na ho to AccessibilityManager ki chalu
          * services wali list me apna naam dhoondho (service
@@ -676,6 +982,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.flipMobileData(callback)
         }
 
+        /**
+         * v26: kahin se bhi YouTube ke pehle-result par tap
+         * ki koshish: service band ho to turant
+         * [TapOutcome.SERVICE_OFF] (report bhi band karke),
+         * warna chalti hui service ko kaam saunp do (natija
+         * callback se, background thread par).
+         */
+        fun tapFirstYouTubeResult(
+            context: Context,
+            callback: (TapOutcome) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                lastYouTubeTapReport = "SERVICE_OFF"
+                try {
+                    context.getSharedPreferences(
+                        DIAG_PREFS_NAME, Context.MODE_PRIVATE
+                    ).edit()
+                        .putString(DIAG_KEY_LAST_YOUTUBE_TAP, "SERVICE_OFF")
+                        .apply()
+                } catch (t: Throwable) {
+                    // Report gauṇ hai: sachha natija callback se jayega.
+                }
+                callback(TapOutcome.SERVICE_OFF)
+                return
+            }
+            service.tapFirstYouTubeResult(callback)
+        }
+
         private const val SYSTEMUI_PACKAGE = "com.android.systemui"
         // v23: 2.5s se 8s — vivo ka panel sajne me der lagata
         // hai; tile ped par chadhne se pehle khoj khatm ho jati
@@ -686,6 +1021,12 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val MAX_SCAN_LABEL_CHARS = 40
         private const val DIAG_PREFS_NAME = "jarvis_diag"
         private const val DIAG_KEY_LAST_PANEL_SCAN = "last_panel_scan"
+        // v26: YouTube tap ke bandobosto.
+        private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val YOUTUBE_TAP_BUDGET_MS = 10_000L
+        private const val MAX_YOUTUBE_LABELS = 10
+        private const val MAX_DURATION_NODES = 120
+        private const val DIAG_KEY_LAST_YOUTUBE_TAP = "last_youtube_tap"
         private const val CLICK_SETTLE_MS = 350L
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
@@ -695,5 +1036,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         private val ON_WORD = Regex("""(^|[\s,:])on([\s,:.]|$)""")
         private val OFF_WORD = Regex("""(^|[\s,:])off([\s,:.]|$)""")
         private val DATA_USAGE_PATTERN = Regex("""\d+(\.\d+)?\s*(gb|mb|kb)\b""")
+        // v26: video ki avadhi jaisa pattern — "12:34", "1:02:03".
+        private val DURATION_PATTERN = Regex("""\d{1,2}:\d{2}""")
     }
 }
