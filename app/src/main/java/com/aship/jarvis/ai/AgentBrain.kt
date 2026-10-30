@@ -232,7 +232,7 @@ object AgentBrain {
                 } else {
                     ""
                 }
-            "call_person" -> args.optString("name")
+            "call_person", "whatsapp_message" -> args.optString("name")
             else -> ""
         }
         return if (mainArg.isEmpty()) tool else "$tool($mainArg)"
@@ -343,6 +343,15 @@ object AgentBrain {
             "kai naam aayein to user se puchho kaun sa wala, aur " +
             "jawab milne par usi poore naam se call_person dobara " +
             "chalao. Use it for 'X ko call karo' type requests.\n" +
+            "- whatsapp_message, args {\"name\": \"<person's name>\", " +
+            "\"message\": \"<message text exactly as the user " +
+            "dictated>\"} — WhatsApp chat kholkar sandesh likh deta " +
+            "hai; bhejna user khud dabata hai — kabhi mat kaho ki " +
+            "sandesh bhej diya. Agar result me kai naam aayein to " +
+            "user se puchho kaun sa wala, aur jawab milne par usi " +
+            "poore naam se whatsapp_message dobara chalao. Use it " +
+            "for 'X ko WhatsApp par likho / message karo' type " +
+            "requests.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
