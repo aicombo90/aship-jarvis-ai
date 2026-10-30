@@ -1000,6 +1000,87 @@ class CommandEngine(
     }
 
     /**
+     * v25: agent ke auzaar (AgentTools) ke liye seedha
+     * app-kholna. Raasta wahi pakka hai jo "kholo" command
+     * leta hai — pehle fixed list, phir launcher ke labels
+     * (galat-suna naam sudhaar ke saath) — par ek farq ke
+     * saath: yahan [CommandResult.handled] me ASAL safalta
+     * bolti hai. Aam command raaste me handled ka matlab
+     * "samajh aaya" hota hai (koshish asafal ho tab bhi
+     * true); agent ko sach chahiye — khula to true, na
+     * khula (nahi mila / overlay permission / lock) to
+     * false, aur jawab ke text me wajah bhi. handle() /
+     * dispatch() ki koi harkat isse nahi badli.
+     */
+    fun tryOpenApp(spokenName: String): CommandResult {
+        val name = stripFillers(normalize(spokenName.lowercase(Locale.ROOT).trim()))
+        if (name.isEmpty()) {
+            return CommandResult("ऐप का नाम समझ नहीं आया।", false)
+        }
+        for ((keyword, target) in appTargets) {
+            if (name.contains(keyword)) {
+                return openTargetHonest(target)
+            }
+        }
+        // Dispatch wala hi label-match: seedha, warna
+        // galat-suna naam sudhaarkar dobara.
+        val match = findLauncherApp(name)
+            ?: findLauncherApp(stripFillers(normalize(fuzzyCorrect(name))))
+        return if (match != null) {
+            openTargetHonest(
+                AppTarget(match.label, TargetKind.PACKAGE, match.packageName)
+            )
+        } else {
+            CommandResult("'$spokenName' नाम की ऐप इस फ़ोन में नहीं मिली।", false)
+        }
+    }
+
+    /**
+     * [openTarget] ki hi koshish, shart ek: jawab ke
+     * saath handled me asal safalta (khula = true; nahi
+     * mila / permission / lock = false). Aam raasta
+     * [openTarget] bilkul pehle jaisa hi rehta hai — ye
+     * roop sirf v25 agent ke liye hai, jise "samajh aaya"
+     * nahi, "sach me hua" chahiye.
+     */
+    private fun openTargetHonest(target: AppTarget): CommandResult {
+        if (fromBackgroundService) {
+            val outcome = when (target.kind) {
+                TargetKind.PACKAGE ->
+                    PhoneActions.openAppFromBackground(context, target.packageName!!)
+                TargetKind.CAMERA -> PhoneActions.openCameraFromBackground(context)
+                TargetKind.SETTINGS -> PhoneActions.openSettingsFromBackground(context)
+            }
+            return when (outcome) {
+                LaunchOutcome.LAUNCHED ->
+                    CommandResult("${target.displayName} खोल दिया है।", true)
+                LaunchOutcome.PERMISSION_NEEDED ->
+                    CommandResult(OVERLAY_PERMISSION_REPLY, false)
+                LaunchOutcome.LOCKED ->
+                    CommandResult(LOCK_REPLY, false)
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    CommandResult(
+                        "${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।",
+                        false
+                    )
+            }
+        }
+        val opened = when (target.kind) {
+            TargetKind.PACKAGE -> PhoneActions.openApp(context, target.packageName!!)
+            TargetKind.CAMERA -> PhoneActions.openCamera(context)
+            TargetKind.SETTINGS -> PhoneActions.openSettings(context)
+        }
+        return if (opened) {
+            CommandResult("${target.displayName} खोल दिया है।", true)
+        } else {
+            CommandResult(
+                "${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।",
+                false
+            )
+        }
+    }
+
+    /**
      * Pulls a time out of commands like "alarm set karo 7:30 par",
      * "alarm lagao 7 baje" or "set alarm for 7 pm". Returns (null, null)
      * when no time is mentioned.
