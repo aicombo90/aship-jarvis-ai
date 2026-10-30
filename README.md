@@ -129,6 +129,17 @@ Jarvis does it on your phone and speaks the reply back to you.
   Koi nayi permission nahi lagi; ghadi wala handler
   hi na mile to "laga diya" ki jagah imaandaar FAILED
   report aati hai
+- **Naam bolkar call ki taiyaari (v29):** agent ke paas
+  naya auzaar — call_person. "রাহুলকে কল করো" bolne
+  par Maya phone ke contacts me woh naam dhundhti hai
+  aur number bharkar dialer khol deti hai — call woh
+  khud NAHI lagati, call wala button hamesha user
+  dabata hai (isiliye CALL_PHONE permission li hi
+  nahi gayi). Ek hi nayi permission lagi: Contacts
+  padhne ki (READ_CONTACTS), jo app khulne par ek
+  baar maangi jati hai; kai log ek naam ke milein to
+  Maya poochhti hai kaun sa wala (number ke sirf
+  aakhiri 4 ank dikhakar)
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
