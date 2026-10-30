@@ -81,6 +81,13 @@ import java.util.concurrent.Executors
  * listening (1.5 s after the reply). Needs the same "Display over
  * other apps" permission as the launch bridge; without it the orb
  * is skipped silently and the voice flow is unchanged.
+ *
+ * v12 retry-once: command samajh na aaye (ya command session bina
+ * handled command ke khatm ho jaye) to Jarvis ek baar "Phir se
+ * boliye" bolkar turant ek aur command session kholta hai — dobara
+ * "Jarvis" bolne ki zaroorat nahi. Dusri baar bhi na samjhe to
+ * purana vyavhaar: kholne ki koshish par CANT_DO_REPLY, warna
+ * chup, aur wapas wake sunne par.
  */
 class JarvisWakeService : Service() {
 
@@ -130,6 +137,11 @@ class JarvisWakeService : Service() {
     // best evidence of what the recognizer was hearing.
     @Volatile
     private var longestWakePartialSinceFinal = ""
+
+    // v12: is wake par command ka ek retry mil chuka hai ya nahi.
+    // Har naye wake (onWakeDetected) par reset hota hai.
+    @Volatile
+    private var commandRetryUsed = false
 
     // ------------------------------------------------------------------
     // Lifecycle
@@ -456,6 +468,8 @@ class JarvisWakeService : Service() {
         stopWakeSession()
         // A real wake proves listening works: clear the error counter.
         wakeErrorCount = 0
+        // v12: har naye wake ke saath command ko ek taaza retry mile.
+        commandRetryUsed = false
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
@@ -509,9 +523,9 @@ class JarvisWakeService : Service() {
             commandLastPartial = ""
             armCommandWatchdog()
         } catch (t: Throwable) {
-            // Mic busy etc.: fall back to wake listening.
-            orbOverlay.hideNow()
-            startWakeSession()
+            // Mic busy etc.: session shuru hi nahi ho paya — pehli
+            // koshish par v12 retry ka mauka, warna wapas wake par.
+            handleCommandMiss()
         }
     }
 
@@ -556,9 +570,8 @@ class JarvisWakeService : Service() {
         override fun onError(exception: Exception?) {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
-                    stopCommandSession()
-                    orbOverlay.hideNow()
-                    startWakeSession()
+                    // v12: bina command ke khatm — retry ya vida.
+                    handleCommandMiss()
                 }
             }
         }
@@ -566,15 +579,17 @@ class JarvisWakeService : Service() {
         override fun onTimeout() {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
-                    stopCommandSession()
-                    orbOverlay.hideNow()
-                    startWakeSession()
+                    // v12: bina command ke khatm — retry ya vida.
+                    handleCommandMiss()
                 }
             }
         }
 
         private fun acceptCommand(text: String) {
             if (state != State.COMMAND || text.isBlank()) return
+            // v12 diagnostics: command recognizer ne jo suna, woh
+            // bhi "Mic ne aakhri suna" me dikhe.
+            rememberCommandFinal(text)
             executor.execute { onCommandHeard(text) }
         }
     }
@@ -586,6 +601,16 @@ class JarvisWakeService : Service() {
         state = State.REPLY
         stopCommandSession()
         val rawResult = commandEngine.handle(text)
+        // v12: "handled" ka faisla RAW result par hota hai — neeche
+        // wale v1.10 CANT_DO conversion se PEHLE. Isliye galat-suna
+        // kholne ka prayas ("pesbuk kholo" jaisa) bhi pehle apna ek
+        // retry payega; can't-do wala bola jawab sirf tab aayega
+        // jab retry wala prayas bhi kholne ka hi nikle aur asafal
+        // rahe.
+        if (!rawResult.handled && !commandRetryUsed) {
+            startCommandRetry()
+            return
+        }
         // v1.10: kholne ki koshish thi par system me nahi hai —
         // chup band hone ke bajay saaf bol do ki nahi kar sakte.
         // Bina verb wali aawazein (shor/TV) pehle ki tarah chup
@@ -613,6 +638,40 @@ class JarvisWakeService : Service() {
         // v1.5: jawab gole ke upar wale bubble me text me bhi dikhe,
         // aur gola jawab ke dauraan chamak (shimmer) mode me rahe.
         orbOverlay.setReply(result.responseText)
+    }
+
+    /**
+     * v12 retry-once: "Phir se boliye" bolkar ACK wale raaste se
+     * ek aur command session kholo (TTS khatm hone par, ya ack
+     * fallback par). Gola dikhta rehta hai — dobara "Jarvis"
+     * bolne ki zaroorat nahi. Sirf executor thread se bulao;
+     * command session pehle hi band ho chuka ho.
+     */
+    private fun startCommandRetry() {
+        commandRetryUsed = true
+        state = State.ACK
+        setStatus("Samajh nahi aaya — phir se boliye, dobara sun raha hoon")
+        updateNotification("Phir se boliye...")
+        speaker.speak(RETRY_PROMPT_TEXT)
+        armAckFallback()
+    }
+
+    /**
+     * v12: command session bina handled command ke khatm ho gaya
+     * (recognizer error/timeout, timeout par khaali salvage, ya
+     * session shuru hi nahi ho paya). Pehli baar par retry ka
+     * mauka; retry ke baad purana chup vida — gola hatao aur
+     * wapas wake sunne par jao. Sirf executor thread se bulao.
+     */
+    private fun handleCommandMiss() {
+        if (destroyed) return
+        stopCommandSession()
+        if (!commandRetryUsed) {
+            startCommandRetry()
+        } else {
+            orbOverlay.hideNow()
+            startWakeSession()
+        }
     }
 
     /** "X kholo" jaisi koshish — kisi bhi script me open-verb ho. */
@@ -649,11 +708,17 @@ class JarvisWakeService : Service() {
                     // hoga — dheere bolne par bhi command bachega.
                     val lastPartial = commandLastPartial
                     if (lastPartial.isNotBlank()) {
+                        // v12 diagnostics: bachaya gaya partial bhi
+                        // "Mic ne aakhri suna" me likho. Dhyaan rahe:
+                        // ye salvage ISI prayas ka hissa hai — retry
+                        // nahi khaata; partial asafal nikle to
+                        // onCommandHeard ke andar retry ab bhi milega.
+                        rememberCommandFinal(lastPartial)
                         onCommandHeard(lastPartial)
                     } else {
-                        stopCommandSession()
-                        orbOverlay.hideNow()
-                        startWakeSession()
+                        // v12: khaali gaya session bhi pehle ek
+                        // retry payega, phir hi wapas wake par.
+                        handleCommandMiss()
                     }
                 } else {
                     mainHandler.postDelayed(this, COMMAND_WATCHDOG_TICK_MS)
@@ -978,6 +1043,19 @@ class JarvisWakeService : Service() {
         prefs.lastHeardPartialAtMs = 0L
     }
 
+    /**
+     * v12 diagnostics: wake listener ki tarah, command session ne
+     * jo suna (final result, ya timeout par bachaya gaya partial)
+     * wahi last-heard fields me likho — taaki "Mic ne aakhri suna"
+     * line command ki pehchan bhi dikhaye, sirf wake wali nahi.
+     */
+    private fun rememberCommandFinal(text: String) {
+        val clean = text.trim().replace('\n', ' ')
+        if (clean.isEmpty()) return
+        prefs.lastHeardText = clean
+        prefs.lastHeardAtMs = System.currentTimeMillis()
+    }
+
     private fun containsWakeWord(text: String): Boolean {
         if (text.isBlank()) return false
         val squashedText = squashWakeText(text)
@@ -1050,6 +1128,9 @@ class JarvisWakeService : Service() {
         private const val SAMPLE_RATE = 16000.0f
 
         private const val ACK_TEXT = "Haan, boliye"
+
+        /** v12: command na samajhne par ek baar dobara mauka dene ka prompt. */
+        private const val RETRY_PROMPT_TEXT = "Phir se boliye"
 
         /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
         const val CANT_DO_REPLY = "Maaf kijiye, abhi main yeh kaam nahi kar sakta hu."
