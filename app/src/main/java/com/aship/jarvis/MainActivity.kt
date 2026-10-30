@@ -80,6 +80,12 @@ class MainActivity : Activity() {
     // v21 Phase 3: Gemini (online brain) section — key sirf
     // phone par rehti hai; status line kabhi key nahi dikhati.
     private lateinit var geminiKeyStatusText: TextView
+
+    // v24: aakhiri online koshish ki report ki line —
+    // GeminiBrain har chat koshish ke baad SharedPreferences
+    // "jarvis_diag" me report chhodta hai; yahan sirf use
+    // dikhaya jata hai (panelScanText ki tarah hi).
+    private lateinit var geminiDiagText: TextView
     private lateinit var geminiKeyInput: EditText
     private lateinit var geminiKeySaveButton: Button
 
@@ -179,6 +185,7 @@ class MainActivity : Activity() {
             checkForUpdate(manual = true)
         }
         geminiKeyStatusText = findViewById(R.id.geminiKeyStatusText)
+        geminiDiagText = findViewById(R.id.geminiDiagText)
         geminiKeyInput = findViewById(R.id.geminiKeyInput)
         geminiKeySaveButton = findViewById(R.id.geminiKeySaveButton)
         geminiKeySaveButton.setOnClickListener {
@@ -560,6 +567,31 @@ class MainActivity : Activity() {
             geminiKeyStatusText.text = "Key: nahi hai"
             geminiKeyInput.hint = "Yahan apna Gemini API key likho"
         }
+        refreshGeminiDiag()
+    }
+
+    /**
+     * v24: "Online koshish (aakhiri)" line ko SharedPreferences
+     * "jarvis_diag" se taza karo — kaun sa model kitni der me
+     * kya bola (OK / HTTP code / timeout / net). GeminiBrain
+     * report likhta hai; wake service se hui koshishen bhi
+     * yahin dikhti hain kyunki prefs file ek hi hai. Ye line
+     * refreshGeminiKeyUi ke saath aur updateWakeUi (onResume
+     * + har 2 s) ke saath taza hoti hai.
+     */
+    private fun refreshGeminiDiag() {
+        if (!::geminiDiagText.isInitialized) return
+        val attempt = try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .getString("last_gemini_attempt", null)
+        } catch (t: Throwable) {
+            null
+        }
+        geminiDiagText.text = if (attempt.isNullOrBlank()) {
+            "Online koshish (aakhiri): abhi tak koi koshish nahi"
+        } else {
+            "Online koshish (aakhiri): $attempt"
+        }
     }
 
     /**
@@ -743,6 +775,11 @@ class MainActivity : Activity() {
                 "Panel scan: $report"
             }
         }
+        // v24: online koshish ki report bhi isi ke saath taza
+        // karo — ye function onResume par aur har 2 s chalta
+        // hai, isliye wake service se hui koshish ki report
+        // bhi screen par khud dikh jayegi.
+        refreshGeminiDiag()
     }
 
     private fun onWakeStartClicked() {
