@@ -67,8 +67,10 @@ import java.util.concurrent.Executors
  * error 7). So MainActivity asks this service to PAUSE
  * (ACTION_PAUSE_WAKE) before tap-to-speak: the wake session stops
  * and releases the mic, but the service and its notification stay
- * alive. ACTION_RESUME_WAKE — or a 45 s safety timer, in case the
+ * alive. ACTION_RESUME_WAKE — or a 12 s safety timer, in case the
  * activity dies without resuming — restarts the wake session.
+ * v1.6: the timer also force-recovers a wedged ACK/COMMAND flow,
+ * but never cuts a reply that is still being spoken.
  *
  * v1.5 Siri orb: on a wake, a glossy floating orb (OrbView) appears
  * at the bottom-center of the screen above other apps — breathing
@@ -253,7 +255,7 @@ class JarvisWakeService : Service() {
         if (wakePaused) {
             // Mic foreground screen ko diya hua hai: state WAKE hi
             // rahega, par koi session mic nahi pakdega. Resume (ya
-            // 45 s wala safety timer) aane par yahi function dobara
+            // 12 s wala safety timer) aane par yahi function dobara
             // chalega aur session sach me shuru hoga.
             setStatus("Background sunna roka hai — mic app ke paas hai")
             return
@@ -298,9 +300,11 @@ class JarvisWakeService : Service() {
     // service ek hi mic ke do daavedar hain — ek saath chal hi nahi
     // sakte. Isliye activity sunna shuru karne se pehle PAUSE bhejti
     // hai: wake session band (mic khali), service + notification
-    // chalu. Sunna khatm hone par RESUME aata hai; na aaye to 45 s
-    // ka safety timer khud resume kar deta hai. Pause na to error
-    // counter badhata hai, na service band karta hai.
+    // chalu. Sunna khatm hone par RESUME aata hai; na aaye to 12 s
+    // ka safety timer khud resume kar deta hai — aur beech ka
+    // command flow kahin phas gaya ho to use tod kar bhi (bolta
+    // hua jawab kabhi nahi katata). Pause na to error counter
+    // badhata hai, na service band karta hai.
     // ------------------------------------------------------------------
 
     private fun pauseWakeListening() {
@@ -336,15 +340,37 @@ class JarvisWakeService : Service() {
 
     private val autoResumeRunnable = Runnable {
         executor.execute {
-            if (!destroyed && wakePaused) {
-                resumeWakeListening()
+            if (destroyed || !wakePaused) return@execute
+            when (state) {
+                State.REPLY -> {
+                    // Jawab abhi bola ja raha hai — use beech me
+                    // kaatna nahi hai. Thodi der baad phir dekho;
+                    // jawab khatm hote hi flow WAKE me jayega aur
+                    // resume wahin se ho jayega.
+                    armAutoResume(REPLY_RESUME_RETRY_MS)
+                }
+                State.ACK, State.COMMAND -> {
+                    // 12 s beet gaye aur flow ab bhi yahin atka hai
+                    // to woh healthy nahi hai: ack fallback 3.5 s ka
+                    // hai aur command session ka hard cap 7 s ka —
+                    // dono beet chuke hain, matlab flow kahin phas
+                    // gaya hai (khoya hua callback). Atki hui haalat
+                    // tod kar wake sunna saaf phir se shuru karo.
+                    disarmAckFallback()
+                    stopCommandSession()
+                    orbOverlay.hideNow()
+                    wakePaused = false
+                    disarmAutoResume()
+                    startWakeSession()
+                }
+                else -> resumeWakeListening()
             }
         }
     }
 
-    private fun armAutoResume() {
+    private fun armAutoResume(delayMs: Long = WAKE_AUTO_RESUME_MS) {
         mainHandler.removeCallbacks(autoResumeRunnable)
-        mainHandler.postDelayed(autoResumeRunnable, WAKE_AUTO_RESUME_MS)
+        mainHandler.postDelayed(autoResumeRunnable, delayMs)
     }
 
     private fun disarmAutoResume() {
@@ -928,7 +954,8 @@ class JarvisWakeService : Service() {
         private const val REPLY_FALLBACK_MAX_MS = 20_000L
         private const val WAKE_RESTART_DELAY_MS = 1_500L
         private const val MAX_WAKE_ERRORS = 5
-        private const val WAKE_AUTO_RESUME_MS = 45_000L
+        private const val WAKE_AUTO_RESUME_MS = 12_000L
+        private const val REPLY_RESUME_RETRY_MS = 2_000L
         private const val ORB_REPLY_LINGER_MS = 1_500L
         private const val ORB_FADE_IN_MS = 250L
         private const val ORB_FADE_OUT_MS = 220L
