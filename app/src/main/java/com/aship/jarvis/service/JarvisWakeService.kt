@@ -24,6 +24,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.aship.jarvis.MainActivity
 import com.aship.jarvis.commands.CommandEngine
+import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.ModelLanguage
@@ -854,8 +855,10 @@ class JarvisWakeService : Service() {
                 }
             }
 
+            // v1.11: gola thoda bada (104 -> 148dp) — pehle wala
+            // bahut chhota lagta tha.
             val orb = OrbView(service).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(104), dp(104))
+                layoutParams = LinearLayout.LayoutParams(dp(148), dp(148))
             }
 
             container = LinearLayout(service).apply {
