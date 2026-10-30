@@ -3,6 +3,14 @@
 
     <!-- Voice commands -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- v29: call_person auzaar ke liye — "Rahul ko call
+         karo" par Maya contacts me naam dhundhkar number
+         dialer me bhar deti hai. Call woh KHUD nahi lagati
+         (CALL_PHONE permission jaan-boojh kar NAHI li
+         gayi); call wala button hamesha user dabata hai.
+         Runtime par app khulne par ek baar maangi jati hai;
+         mana karne par baaki app bilkul aam chalta hai. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- Downloading the offline Vosk model; later also online AI -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v21 Phase 3: Gemini ko bulane se pehle net chalu hai ya
