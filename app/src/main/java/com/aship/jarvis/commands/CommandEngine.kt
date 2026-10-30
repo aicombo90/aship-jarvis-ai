@@ -221,17 +221,33 @@ class CommandEngine(
         // OverlayLauncher se guzarti hi nahi aur v16 wala lock
         // gate (LOCKED) is par lagu nahi hai: lock ho tab bhi
         // koshish hogi (panel na khule to sachha "nahi mila"
-        // jawab milega). Disha (on/off) wala shabd hona shart
-        // hai — sirf "mobile data" bolne se kuch nahi hoga.
+        // jawab milega).
         val dataMention = text.contains("mobile data") || hasWord(text, "data")
         if (dataMention) {
             val turnOffData = hasWord(text, "off") || text.contains("band") ||
                 text.contains("bondho")
-            val turnOnData = hasWord(text, "on") || hasWord(text, "ऑन") ||
-                hasWord(text, "অন") || text.contains("chalu") ||
+            // v18: "on" ke aam galat-sune roop bhi on hi maano
+            // (Vosk chhota "অন" aksar "আন"/"অণ"/"an" sunta hai) —
+            // ye vistaar sirf is data branch ke andar hai,
+            // global normalize par koi farq nahi.
+            val turnOnData = hasWord(text, "on") || hasWord(text, "onn") ||
+                hasWord(text, "an") || hasWord(text, "ऑन") ||
+                hasWord(text, "অন") || hasWord(text, "আন") ||
+                hasWord(text, "অণ") || text.contains("chalu") ||
                 text.contains("chaalu") || text.contains("start")
             if (turnOffData || turnOnData) {
                 return mobileDataCommand(turnOn = turnOnData && !turnOffData)
+            }
+            // v18: disha wala shabd mila hi nahi (asli zindagi me
+            // Vosk "মোবাইল ডাটা অন করো" ko "মোবাইল ডাটা করো" sun
+            // leta hai — chhota "on" gayab), par karne ka iraada
+            // saaf hai, to toggle: on hai to off, off hai to on.
+            val dataActionIntent = hasWord(text, "karo") ||
+                hasWord(text, "करो") || hasWord(text, "করো") ||
+                hasWord(text, "করুন") || hasWord(text, "do") ||
+                text.contains("toggle")
+            if (dataActionIntent) {
+                return mobileDataToggleCommand()
             }
         }
 
@@ -687,6 +703,56 @@ class CommandEngine(
         }
     }
 
+    /**
+     * v18: bina disha ka mobile-data toggle ("মোবাইল ডাটা করো") —
+     * Accessibility service tile dabakar haalat ulta karti hai
+     * aur dabane ke baad ki haalat batati hai, Maya wahi bolti
+     * hai. Service band ho to koshish hi nahi hoti. Sync jawab
+     * ke liye yahan bhi wahi bandha hua latch wala intezaar hai
+     * jo [mobileDataCommand] me hai (khoj ~2.5 s + dabane ke
+     * baad ki padhai — kul seema ke andar).
+     */
+    private fun mobileDataToggleCommand(): CommandResult {
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
+        }
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.DataOutcome? = null
+        try {
+            JarvisAccessibilityService.flipMobileData(context) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+        val completed = try {
+            latch.await(DATA_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed) {
+            return CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+        return when (outcome) {
+            JarvisAccessibilityService.DataOutcome.TURNED_ON -> CommandResult(
+                "मोबाइल डेटा ऑन कर दिया।",
+                true
+            )
+            JarvisAccessibilityService.DataOutcome.TURNED_OFF -> CommandResult(
+                "मोबाइल डेटा बंद कर दिया।",
+                true
+            )
+            JarvisAccessibilityService.DataOutcome.TOGGLED_UNKNOWN ->
+                CommandResult(DATA_TOGGLED_REPLY, true)
+            JarvisAccessibilityService.DataOutcome.SERVICE_OFF ->
+                CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
+            JarvisAccessibilityService.DataOutcome.TILE_NOT_FOUND,
+            JarvisAccessibilityService.DataOutcome.PANEL_NOT_OPENED,
+            null -> CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+    }
+
     // ------------------------------------------------------------------
     // v1.4 helpers
     // ------------------------------------------------------------------
@@ -1003,6 +1069,13 @@ class CommandEngine(
         /** v17: data tile na mile / panel na khule to sachha jawab. */
         const val DATA_NOT_FOUND_REPLY =
             "डेटा वाला बटन मुझे नहीं मिला, एक बार ख़ुद देख लो।"
+
+        /**
+         * v18: toggle ho gaya par dabane ke baad ki haalat padh
+         * nahi paye to Maya ka sachha jawab (Devanagari shaili).
+         */
+        const val DATA_TOGGLED_REPLY =
+            "डेटा का बटन दबा दिया — ऑन था तो बंद, बंद था तो ऑन हो गया।"
 
         /** v17: Accessibility toggle ke natije ka adhiktam intezaar. */
         const val DATA_COMMAND_WAIT_MS = 4_000L
