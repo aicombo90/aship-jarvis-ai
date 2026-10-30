@@ -120,6 +120,15 @@ Jarvis does it on your phone and speaks the reply back to you.
   connection Wi-Fi / mobile data / hai hi nahi —
   internet uplabdh hai ya nahi, uske saath. Koi nayi
   permission nahi lagi
+- **Timer aur alarm (v28):** agent ke paas do naye
+  auzaar — set_timer aur set_alarm. "১০ মিনিটের টাইমার
+  দাও" / "সকাল ৭টায় অ্যালার্ম দাও" bolne par Maya
+  phone ki ghadi (clock) app se asal timer/alarm laga
+  deti hai (AlarmClock intents, EXTRA_SKIP_UI ke saath
+  — jahan support hai wahan bina screen dikhaye).
+  Koi nayi permission nahi lagi; ghadi wala handler
+  hi na mile to "laga diya" ki jagah imaandaar FAILED
+  report aati hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
