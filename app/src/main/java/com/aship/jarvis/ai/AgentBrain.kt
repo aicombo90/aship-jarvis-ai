@@ -232,6 +232,7 @@ object AgentBrain {
                 } else {
                     ""
                 }
+            "call_person" -> args.optString("name")
             else -> ""
         }
         return if (mainArg.isEmpty()) tool else "$tool($mainArg)"
@@ -335,6 +336,13 @@ object AgentBrain {
             "= hour 7, 'raat 10 baje' = hour 22); always send minute " +
             "(0 when the user means on the hour). Use it for alarm " +
             "requests.\n" +
+            "- call_person, args {\"name\": \"<person's name as the " +
+            "user said it>\"} — contacts me naam dhundhkar us number " +
+            "ke saath dialer kholta hai (call khud NAHI lagata — " +
+            "user khud call wala button dabata hai). Agar result me " +
+            "kai naam aayein to user se puchho kaun sa wala, aur " +
+            "jawab milne par usi poore naam se call_person dobara " +
+            "chalao. Use it for 'X ko call karo' type requests.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
