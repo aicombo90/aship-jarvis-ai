@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
+import android.provider.AlarmClock
 import android.telephony.TelephonyManager
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
@@ -63,6 +64,16 @@ import java.util.concurrent.TimeUnit
  * mobile data hai ya hai hi nahi. Koi nayi permission
  * nahi — battery sticky ghoshna se padhi jati hai,
  * network ConnectivityManager se.
+ *
+ * v28: do kaam wale auzaar — set_timer aur set_alarm.
+ * Dono ghadi (clock) app ke AlarmClock intents se
+ * lagte hain; koi nayi permission nahi (AlarmClock
+ * intents permission-free hote hain) aur EXTRA_SKIP_UI
+ * true hai — jahan support hai wahan bina screen
+ * dikhaye lag jata hai. "Laga diya" sirf tab banta
+ * hai jab intent asal me kisi resolving activity ko
+ * bheja gaya ho; ghadi wala handler hi na mile to
+ * imaandaar FAILED — "clock app nahi mila".
  */
 class AgentTools(
     private val context: Context,
@@ -93,11 +104,17 @@ class AgentTools(
         )
         "get_battery" -> getBattery()
         "get_network" -> getNetwork()
+        "set_timer" -> setTimer(args.optInt("seconds", -1))
+        "set_alarm" -> setAlarm(
+            args.optInt("hour", -1),
+            args.optInt("minute", 0),
+            args.optString("label").trim()
+        )
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
-                "get_battery, get_network."
+                "get_battery, get_network, set_timer, set_alarm."
         )
     }
 
@@ -437,6 +454,159 @@ class AgentTools(
                 "No answer from the accessibility service in time."
             )
         }
+    }
+
+    /**
+     * v28: Ghadi app me [seconds] ka countdown timer
+     * lagao — AlarmClock.ACTION_SET_TIMER, koi
+     * permission nahi chahiye. Seconds sahi (positive)
+     * na hon to imaandaar FAILED; ghadi wala handler
+     * na mile to bhi FAILED — "laga diya" sirf asal
+     * dispatch ke baad.
+     */
+    private fun setTimer(seconds: Int): ToolResult {
+        if (seconds <= 0) {
+            return ToolResult(
+                false,
+                "FAILED — timer ke liye seconds ek positive " +
+                    "number hona chahiye (mila: $seconds)."
+            )
+        }
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+            putExtra(AlarmClock.EXTRA_MESSAGE, "Maya timer")
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        }
+        dispatchClockIntent(intent)?.let { return it }
+        return ToolResult(
+            true,
+            "Timer: " + formatDuration(seconds) + " ka laga diya."
+        )
+    }
+
+    /**
+     * v28: Ghadi app me alarm lagao — [hour] 0-23 aur
+     * [minute] 0-59 (24-ghante wala samay jo mastishk
+     * bhejta hai), [label] ho to wahi ghadi par dikhne
+     * wala naam, warna "Maya alarm". Range se bahar ke
+     * args par imaandaar FAILED — crash kabhi nahi.
+     * EXTRA_SKIP_UI true: jahan support hai, bina
+     * screen dikhaye lag jata hai.
+     */
+    private fun setAlarm(hour: Int, minute: Int, label: String): ToolResult {
+        if (hour !in 0..23) {
+            return ToolResult(
+                false,
+                "FAILED — alarm ka hour 0-23 ke beech hona " +
+                    "chahiye (mila: $hour)."
+            )
+        }
+        if (minute !in 0..59) {
+            return ToolResult(
+                false,
+                "FAILED — alarm ka minute 0-59 ke beech hona " +
+                    "chahiye (mila: $minute)."
+            )
+        }
+        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            putExtra(
+                AlarmClock.EXTRA_MESSAGE,
+                if (label.isEmpty()) "Maya alarm" else label
+            )
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        }
+        dispatchClockIntent(intent)?.let { return it }
+        val text = "Alarm: " + formatAlarmTime(hour, minute) +
+            " ka laga diya."
+        return ToolResult(
+            true,
+            if (label.isEmpty()) {
+                text
+            } else {
+                text + " (label: '$label')"
+            }
+        )
+    }
+
+    /**
+     * Ghadi wala intent (timer/alarm) asal me bhejo —
+     * youtube_play ke kholne wale bandobosto wala hi
+     * kram: pehle dekh lo ki use lene wali koi activity
+     * hai bhi ya nahi (na ho to imaandaar "clock app
+     * nahi mila"), saamne ho to seedha startActivity,
+     * background service se ho to overlay bridge
+     * (OverlayLauncher) se. Intent asal me ek resolving
+     * activity ko dispatch ho jaye to null; warna
+     * FAILED wala sachha natija.
+     */
+    private fun dispatchClockIntent(intent: Intent): ToolResult? {
+        val hasHandler = try {
+            intent.resolveActivity(context.packageManager) != null
+        } catch (e: Exception) {
+            false
+        }
+        if (!hasHandler) {
+            return ToolResult(false, "FAILED — clock app nahi mila.")
+        }
+        if (fromBackgroundService) {
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> null
+                LaunchOutcome.PERMISSION_NEEDED -> ToolResult(
+                    false,
+                    "FAILED — clock wala kaam nahi ho paya: " +
+                        "'Display over other apps' permission " +
+                        "chahiye."
+                )
+                LaunchOutcome.LOCKED -> ToolResult(
+                    false,
+                    "FAILED — phone locked hai, clock wala " +
+                        "kaam nahi ho paya."
+                )
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    ToolResult(false, "FAILED — clock app nahi mila.")
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            null
+        } catch (e: Exception) {
+            ToolResult(false, "FAILED — clock app nahi mila.")
+        }
+    }
+
+    /** Timer ki muddat bolne-layak shabdon me: "10 minute", "1 ghanta 30 minute". */
+    private fun formatDuration(totalSeconds: Int): String {
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        val parts = mutableListOf<String>()
+        if (hours > 0) {
+            parts.add(if (hours == 1) "1 ghanta" else "$hours ghante")
+        }
+        if (minutes > 0) parts.add("$minutes minute")
+        if (seconds > 0) parts.add("$seconds second")
+        return parts.joinToString(" ")
+    }
+
+    /** Alarm ka samay bolne-layak roop me: "subah 7:00 baje", "raat 10:30 baje". */
+    private fun formatAlarmTime(hour: Int, minute: Int): String {
+        val partOfDay = when (hour) {
+            in 4..11 -> "subah"
+            in 12..16 -> "dupahar"
+            in 17..20 -> "shaam"
+            else -> "raat"
+        }
+        val hour12 = when {
+            hour == 0 -> 12
+            hour > 12 -> hour - 12
+            else -> hour
+        }
+        val minuteText = minute.toString().padStart(2, '0')
+        return "$partOfDay $hour12:$minuteText baje"
     }
 
     /**
