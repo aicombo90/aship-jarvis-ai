@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
@@ -97,6 +98,17 @@ import java.util.concurrent.Executors
  * hote hi agla command session bina wake word ke khul jata hai.
  * Adda ke andar v12 retry nahi lagta — Maya ke apne nudge/goodbye
  * wale raaste hain. Wake naam "Jarvis" ke saath "Maya" bhi hai.
+ *
+ * v16 screen + lock: wake hit milte hi (dono raaste — Jarvis aur
+ * Maya) display ki roshni jal jati hai: ek SCREEN_BRIGHT wake lock
+ * (~15 s timeout wala) liya jata hai, aur har naye session/jawab
+ * par woh refresh ho jata hai, isliye poori baatchit ke dauraan
+ * screen jala rehta hai aur baad me khud bujh jata hai. Aur phone
+ * LOCK ho to background se koi app NAHI khulta — launch wale saare
+ * raaste OverlayLauncher se guzarte hain, wahin lock ki jaanch
+ * lagti hai, aur Maya "unlock kar lo" bol deti hai. Bina launch
+ * wale kaam (torch, volume, gaana, battery, time) lock me bhi
+ * pehle ki tarah chalte hain.
  */
 class JarvisWakeService : Service() {
 
@@ -115,6 +127,12 @@ class JarvisWakeService : Service() {
     private var model: Model? = null
     private var wakeSpeechService: SpeechService? = null
     private var commandSpeechService: SpeechService? = null
+
+    // v16: screen jalane wala wake lock. Lazily banta hai, hamesha
+    // timeout ke saath acquire hota hai (khud bujh jata hai), aur
+    // setReferenceCounted(false) ki wajah se dobara acquire karna
+    // sirf samay badhata hai — ginati ka jhanjhat nahi.
+    private var screenWakeLock: PowerManager.WakeLock? = null
 
     @Volatile
     private var state: State = State.STOPPED
@@ -242,6 +260,16 @@ class JarvisWakeService : Service() {
         executor.shutdownNow()
         stopWakeSession()
         stopCommandSession()
+        // v16: screen wala wake lock pada ho to chhod do — waise
+        // bhi uska timeout khud use bujha deta, ye bas safaai hai.
+        try {
+            screenWakeLock?.let { lock ->
+                if (lock.isHeld) lock.release()
+            }
+        } catch (t: Throwable) {
+            // Release fail ho jaye to bhi teardown nahi rukega.
+        }
+        screenWakeLock = null
         speaker.shutdown()
         try {
             model?.close()
@@ -481,11 +509,48 @@ class JarvisWakeService : Service() {
     }
 
     // ------------------------------------------------------------------
+    // Screen wake (v16)
+    //
+    // Wake hit milte hi display jal jaye — screen band ho ya lock
+    // screen dikh rahi ho. Ek SCREEN_BRIGHT wake lock
+    // (ACQUIRE_CAUSES_WAKEUP = band screen ko bhi jalaye,
+    // ON_AFTER_RELEASE = chhodne ke baad pal bhar aur roshni)
+    // timeout ke saath liya jata hai; har session/jawab par
+    // dobara bulane se samay aage badh jata hai. Ye lock screen
+    // ko JALATA hai, lock KHOLTA nahi — unlock user hi karega.
+    // Poora kaam try/catch me hai: wake lock kabhi fail ho jaye
+    // to bhi wake flow nahi rukna chahiye.
+    // ------------------------------------------------------------------
+
+    private fun lightScreenOnWake() {
+        try {
+            val powerManager =
+                getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            val lock = screenWakeLock ?: powerManager.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE,
+                "jarvis:wake"
+            ).also { created ->
+                created.setReferenceCounted(false)
+                screenWakeLock = created
+            }
+            lock.acquire(WAKE_SCREEN_TIMEOUT_MS)
+        } catch (t: Throwable) {
+            // Screen na jale to bhi awaaz wala flow pehle jaisa
+            // chalta rahega — yahan rukna kabhi nahi hai.
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Wake -> ack -> command (executor thread)
     // ------------------------------------------------------------------
 
     private fun onWakeDetected() {
         if (destroyed || state != State.WAKE || wakePaused) return
+        // v16: wake hit milte hi sabse pehle screen ki roshni —
+        // screen band ho to bhi user ko dikhe ki Maya jaag gayi.
+        lightScreenOnWake()
         state = State.ACK
         stopWakeSession()
         // A real wake proves listening works: clear the error counter.
@@ -542,6 +607,10 @@ class JarvisWakeService : Service() {
     private fun startCommandSession() {
         if (destroyed) return
         val loadedModel = model ?: return
+        // v16: har naya session (aam command, retry ke baad wala,
+        // ya adda ka agla turn) screen-wake ka samay aage badhata
+        // hai — lambi baatchit me screen beech me nahi bujhega.
+        lightScreenOnWake()
         stopWakeSession()
         stopCommandSession()
         state = State.COMMAND
@@ -676,6 +745,10 @@ class JarvisWakeService : Service() {
         }
         setStatus("Command mila — jawab de raha hoon")
         updateNotification("Jarvis jawab de raha hai...")
+        // v16: jawab bolna shuru — screen-wake ka samay badhao,
+        // taaki jawab ke dauraan aur uske baad wale intezaar me
+        // screen jala rahe.
+        lightScreenOnWake()
         speaker.speak(result.responseText)
         armReplyFallback(result.responseText)
         // v1.5: jawab gole ke upar wale bubble me text me bhi dikhe,
@@ -715,6 +788,8 @@ class JarvisWakeService : Service() {
             setStatus("Adda khatm — jawab de raha hoon")
             updateNotification("Jarvis jawab de raha hai...")
         }
+        // v16: adda ka jawab bolna shuru — screen-wake refresh.
+        lightScreenOnWake()
         speaker.speak(spokenText)
         armReplyFallback(spokenText)
         orbOverlay.setReply(spokenText)
@@ -732,6 +807,8 @@ class JarvisWakeService : Service() {
         state = State.ACK
         setStatus("Samajh nahi aaya — phir se boliye, dobara sun raha hoon")
         updateNotification("Phir se boliye...")
+        // v16: retry prompt bhi ek bola hua jawab hai — screen jala rahe.
+        lightScreenOnWake()
         speaker.speak(RETRY_PROMPT_TEXT)
         armAckFallback()
     }
@@ -1276,6 +1353,9 @@ class JarvisWakeService : Service() {
         private const val ORB_REPLY_LINGER_MS = 1_500L
         private const val ORB_FADE_IN_MS = 250L
         private const val ORB_FADE_OUT_MS = 220L
+
+        /** v16: ek baar ke screen-wake ki umar; har session/jawab use badha deta hai. */
+        private const val WAKE_SCREEN_TIMEOUT_MS = 15_000L
 
         /** Wake-word spellings and close mishearings from the recognizers. */
         private val WAKE_WORDS = listOf(
