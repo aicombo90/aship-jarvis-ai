@@ -26,11 +26,15 @@ import kotlin.math.sin
  * gehra neela -> baingani -> gulabi (magenta) ki paraton wala ek
  * glossy gola, bahar halki si chamak (glow) ke saath.
  *
+ * v1.8: gole ka SIZE AB HAMESHA FIXED rehta hai — poora gola
+ * kabhi bada-chhota nahi hota (owner ne saaf mana kiya hai).
+ * Saari harkat sirf gole ke ANDAR hoti hai (ghoomti chamak),
+ * aur bahar halki neeli aabha (light-blue aura) judi hai.
+ *
  * Do framework animator hi saari harkat karte hain (koi Compose
  * ya nayi dependency nahi):
- *  - "saans" (breathing): command ka intezaar karte samay gola
- *    dheere-dheere 1.0 <-> 1.12 size me phoolta-sikudta hai aur
- *    glow ki roshni bhi saath me badhti-ghatti hai.
+ *  - "saans" (breathing): command ka intezaar karte samay sirf
+ *    glow ki roshni dheere-dheere badhti-ghatti hai — size nahi.
  *  - "chamak" (shimmer): jawab bolte samay gole ke andar ki
  *    gulabi roshni gol-gol ghoomti hai, thodi tez gati se.
  *
@@ -46,7 +50,7 @@ class OrbView(context: Context) : View(context) {
     private var mode: Mode = Mode.LISTENING
 
     // Animator se badalne wali haalat.
-    private var pulseScale = 1f
+    // (v1.8: pulseScale HATA diya — gola kabhi scale nahi hoga.)
     private var glowStrength = GLOW_MIN
     private var swirlPhase = 0f
 
@@ -56,6 +60,8 @@ class OrbView(context: Context) : View(context) {
     private var radius = 0f
 
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // v1.8: gole ke paas halki neeli aabha (light-blue aura).
+    private val blueGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val spherePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val swirlPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -75,7 +81,7 @@ class OrbView(context: Context) : View(context) {
         interpolator = AccelerateDecelerateInterpolator()
         addUpdateListener { animator ->
             val v = animator.animatedValue as Float
-            pulseScale = 1f + PULSE_AMPLITUDE * v
+            // v1.8: sirf glow ki roshni badhti-ghatti hai — size fixed.
             glowStrength = GLOW_MIN + (GLOW_MAX - GLOW_MIN) * v
             poke()
         }
@@ -138,6 +144,17 @@ class OrbView(context: Context) : View(context) {
         clipPath.reset()
         clipPath.addCircle(centerX, centerY, radius, Path.Direction.CW)
 
+        // v1.8: sabse bahar halki neeli aabha (light blue aura).
+        blueGlowPaint.shader = RadialGradient(
+            centerX, centerY, radius * 2.1f,
+            intArrayOf(
+                Color.argb(95, 125, 190, 255),
+                Color.argb(40, 125, 190, 255),
+                Color.argb(0, 125, 190, 255)
+            ),
+            floatArrayOf(0f, 0.55f, 1f),
+            Shader.TileMode.CLAMP
+        )
         // Bahari glow: magenta -> baingani -> poora gayab.
         glowPaint.shader = RadialGradient(
             centerX, centerY, radius * 1.5f,
@@ -189,8 +206,12 @@ class OrbView(context: Context) : View(context) {
         super.onDraw(canvas)
         if (radius <= 0f) return
         canvas.save()
-        // Saans ke saath poora gola (glow samet) phoolta hai.
-        canvas.scale(pulseScale, pulseScale, centerX, centerY)
+        // v1.8: koi scale nahi — gola hamesha ek hi size ka rehta
+        // hai, harkat sirf andar ki chamak me hoti hai.
+
+        // 0) Sabse bahar halki neeli aabha.
+        blueGlowPaint.alpha = (glowStrength * 200).toInt().coerceIn(0, 255)
+        canvas.drawCircle(centerX, centerY, radius * 2.1f, blueGlowPaint)
 
         // 1) Bahari chamak.
         glowPaint.alpha = (glowStrength * 255).toInt().coerceIn(0, 255)
@@ -218,7 +239,6 @@ class OrbView(context: Context) : View(context) {
         const val BREATH_PERIOD_MS = 2_300L
         const val SHIMMER_PERIOD_MS = 900L
         const val FRAME_MS = 33L
-        const val PULSE_AMPLITUDE = 0.12f
         const val GLOW_MIN = 0.5f
         const val GLOW_MAX = 0.95f
         const val SPHERE_FRACTION = 0.72f

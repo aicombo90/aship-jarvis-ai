@@ -342,7 +342,21 @@ class CommandEngine(
             "আলারম" to "alarm", "আলার্ম" to "alarm",
             "बैट्री" to "battery", "बेटरी" to "battery",
             "ব্যাট্রি" to "battery", "বেটারি" to "battery",
-            "वॉल्युम" to "volume", "वाल्यूम" to "volume", "ভলিয়ুম" to "volume"
+            "वॉल्युम" to "volume", "वाल्यूम" to "volume", "ভলিয়ুম" to "volume",
+            // v1.8 fix: time poochhne par jawab nahi milta tha — Hindi
+            // recognizer aksar Devanagari me "टाइम" / "बजे हैं" /
+            // "बज रहे" deta hai, jo upar kahin map nahi hote the.
+            // (List ke ANT me isliye: "टाइमर" -> "timer" aur
+            // "बजे" -> "baje" jaise pehle wale map pehle chal jayein,
+            // warna "टाइम" ke andar chhupa "टाइमर" toot jayega.)
+            "टाइम" to "time", "टाईम" to "time",
+            "हैं" to "hain",
+            "बज" to "baj", "रहे" to "rahe",
+            // v1.8 fix: recognizer kabhi app ke naam ko tod kar sunta
+            // hai ("फेस बुक") — bina space wale roop upar hain, ye
+            // space wale roop yahan mil jayein.
+            "फेस बुक" to "facebook", "यू ट्यूब" to "youtube",
+            "यू टुब" to "youtube"
         )
         for ((from, to) in words) {
             t = t.replace(from, to)
@@ -395,7 +409,9 @@ class CommandEngine(
         if ("alarm" in tokenSet) return dispatch("alarm")
         if ("timer" in tokenSet) return dispatch("timer")
         if ("pause" in tokenSet) return dispatch("pause karo")
-        if ("samay" in tokenSet || "baja" in tokenSet || "time" in tokenSet) {
+        if ("samay" in tokenSet || "baja" in tokenSet || "baje" in tokenSet ||
+            "time" in tokenSet
+        ) {
             return dispatch("samay")
         }
         if ("gaana" in tokenSet || "music" in tokenSet || "song" in tokenSet ||
