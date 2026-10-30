@@ -79,6 +79,14 @@
             android:text="Key: nahi hai"
             android:textSize="13sp" />
 
+        <TextView
+            android:id="@+id/geminiDiagText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Online koshish (aakhiri): abhi tak koi koshish nahi"
+            android:textSize="12sp" />
+
         <EditText
             android:id="@+id/geminiKeyInput"
             android:layout_width="match_parent"
