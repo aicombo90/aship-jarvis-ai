@@ -18,6 +18,8 @@ import com.aship.jarvis.actions.OverlayLauncher
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.CommandEngine
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -108,6 +110,19 @@ import java.util.concurrent.TimeUnit
  * (AgentBrain dekho) aur inhi auzaaron se jodta,
  * ginata aur bhulta hai. Yaad ka text reporton
  * (jarvis_diag) me kabhi nahi jata.
+ *
+ * v32: ek online sirf-padhne wala auzaar —
+ * get_weather. "আজকের আবহাওয়া কেমন?" bolne par
+ * Maya Open-Meteo se us jagah ka ASAL mausam lati
+ * hai: pehle geocoding se jagah ke akshansh/rekhansh,
+ * phir forecast se aaj ya kal ka sabse zyada/kam
+ * taapmaan, barish ki sambhavna aur mausam ka
+ * chhota varnan (WMO code se). Open-Meteo bilkul
+ * muft hai aur iske liye koi API key NAHI chahiye —
+ * is file me bhi koi key nahi hai. Net band ho,
+ * jagah na mile, jawab kharab aaye — har haal me
+ * imaandaar FAILED; andaza lagakar sankhya kabhi
+ * nahi banti.
  */
 class AgentTools(
     private val context: Context,
@@ -152,13 +167,17 @@ class AgentTools(
         "remember_fact" -> rememberFact(args.optString("fact").trim())
         "recall_facts" -> recallFacts()
         "forget_fact" -> forgetFact(args.optString("match").trim())
+        "get_weather" -> getWeather(
+            args.optString("city").trim(),
+            args.optString("when").trim().lowercase(Locale.ROOT)
+        )
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
                 "get_battery, get_network, set_timer, set_alarm, " +
                 "call_person, whatsapp_message, remember_fact, " +
-                "recall_facts, forget_fact."
+                "recall_facts, forget_fact, get_weather."
         )
     }
 
@@ -1017,6 +1036,165 @@ class AgentTools(
     }
 
     /**
+     * v32: [city] ka asal mausam Open-Meteo se lao —
+     * do kadam: (1) geocoding se jagah ka naam,
+     * akshansh/rekhansh aur rajya/desh; (2) wahan ke
+     * forecast se chune hue din ([whenArg] "tomorrow"
+     * ho to kal, warna aaj) ka sabse zyada/kam
+     * taapmaan, barish ki sambhavna aur WMO code ka
+     * chhota varnan. Open-Meteo muft hai, koi API
+     * key nahi chahiye. Har nakami (net band, samay
+     * khatm, HTTP gadbad, kharab JSON, ajnabi jagah)
+     * imaandaar FAILED hai — sankhya kabhi banti
+     * nahi. Barish ki sambhavna forecast me na aaye
+     * (kuch jagahon par null hoti hai) to woh hissa
+     * chhod diya jata hai — jhoothi pratishata nahi
+     * likhti.
+     */
+    private fun getWeather(city: String, whenArg: String): ToolResult {
+        if (city.isEmpty()) {
+            return ToolResult(
+                false,
+                "FAILED — mausam ke liye shahar/jagah ka " +
+                    "naam nahi diya gaya; user se poochho " +
+                    "kis jagah ka mausam chahiye."
+            )
+        }
+        val failText = "FAILED — mausam ki jaankari nahi " +
+            "mil payi (net ya server se jawab nahi aaya)."
+        val tomorrow = whenArg == "tomorrow"
+        val dayWord = if (tomorrow) "kal" else "aaj"
+        val dayIndex = if (tomorrow) 1 else 0
+        // Kadam 1: jagah dhundho (geocoding).
+        val geoUrl = "https://geocoding-api.open-meteo.com/v1/search" +
+            "?name=" + URLEncoder.encode(city, "UTF-8") +
+            "&count=1&language=en&format=json"
+        val geo = fetchJsonObject(geoUrl)
+            ?: return ToolResult(false, failText)
+        val results = geo.optJSONArray("results")
+        if (results == null || results.length() == 0) {
+            return ToolResult(
+                false,
+                "FAILED — jagah '$city' nahi mili; naam " +
+                    "dobara check karke bhejo."
+            )
+        }
+        val place = results.optJSONObject(0)
+            ?: return ToolResult(false, failText)
+        val latitude = place.optDouble("latitude", Double.NaN)
+        val longitude = place.optDouble("longitude", Double.NaN)
+        if (latitude.isNaN() || longitude.isNaN()) {
+            return ToolResult(false, failText)
+        }
+        val placeText = listOf(
+            place.optString("name"),
+            place.optString("admin1"),
+            place.optString("country")
+        ).filter { it.isNotEmpty() }.distinct()
+            .joinToString(", ")
+            .ifEmpty { city }
+        // Kadam 2: us jagah ka forecast lao.
+        val forecastUrl = "https://api.open-meteo.com/v1/forecast" +
+            "?latitude=$latitude&longitude=$longitude" +
+            "&daily=temperature_2m_max,temperature_2m_min," +
+            "precipitation_probability_max,weathercode" +
+            "&timezone=auto&forecast_days=3"
+        val forecast = fetchJsonObject(forecastUrl)
+            ?: return ToolResult(false, failText)
+        val daily = forecast.optJSONObject("daily")
+            ?: return ToolResult(false, failText)
+        val maxArr = daily.optJSONArray("temperature_2m_max")
+        val minArr = daily.optJSONArray("temperature_2m_min")
+        if (maxArr == null || minArr == null ||
+            maxArr.length() <= dayIndex || minArr.length() <= dayIndex
+        ) {
+            return ToolResult(false, failText)
+        }
+        val tempMax = maxArr.optDouble(dayIndex, Double.NaN)
+        val tempMin = minArr.optDouble(dayIndex, Double.NaN)
+        if (tempMax.isNaN() || tempMin.isNaN()) {
+            return ToolResult(false, failText)
+        }
+        val phrase = weatherCodePhrase(
+            daily.optJSONArray("weathercode")
+                ?.optInt(dayIndex, -1) ?: -1
+        )
+        val rainPart = daily.optJSONArray("precipitation_probability_max")
+            ?.optDouble(dayIndex, Double.NaN)
+            ?.takeIf { !it.isNaN() }
+            ?.let { ", barish ki sambhavna " + Math.round(it) + "%" }
+            ?: ""
+        return ToolResult(
+            true,
+            "Weather — " + placeText + ": " + dayWord +
+                " sabse zyada " + Math.round(tempMax) + "°, " +
+                "sabse kam " + Math.round(tempMin) + "°" +
+                rainPart + " (" + phrase + ")."
+        )
+    }
+
+    /**
+     * v32: Ek URL se JSON jawab lao (GET) —
+     * GeminiBrain wali hi HttpURLConnection paddhati
+     * (bandha connect/read samay, safalta par hi body
+     * padhi jati hai). Koi bhi gadbad null — bulane
+     * wala use imaandaar FAILED me badalta hai. Koi
+     * key ya khaas header nahi bheja jata: Open-Meteo
+     * ko chahiye hi nahi.
+     */
+    private fun fetchJsonObject(urlText: String): JSONObject? {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection =
+                (URL(urlText).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = WEATHER_CONNECT_TIMEOUT_MS
+                    readTimeout = WEATHER_READ_TIMEOUT_MS
+                }
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                null
+            } else {
+                val body = connection.inputStream
+                    .bufferedReader().use { it.readText() }
+                JSONObject(body)
+            }
+        } catch (t: Throwable) {
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * v32: WMO mausam-code ka chhota sa bolne-layak
+     * varnan — Open-Meteo ke daily weathercode ke
+     * liye bandhi hui saarani, koi library nahi.
+     * Ajnabi code par bhi bana-banaaya jhooth nahi —
+     * mila-jula wala imaandaar varnan.
+     */
+    private fun weatherCodePhrase(code: Int): String = when (code) {
+        0 -> "saaf aasmaan"
+        1 -> "zyadatar saaf"
+        2 -> "aanshik badal"
+        3 -> "badal chhaye hue"
+        45, 48 -> "dhundh chhayi hui"
+        51, 53, 55 -> "halki boonda-baandi ho sakti hai"
+        56, 57 -> "jamne wali boonda-baandi ho sakti hai"
+        61 -> "halki barish ho sakti hai"
+        63 -> "barish ho sakti hai"
+        65 -> "tez barish ho sakti hai"
+        66, 67 -> "jamne wali barish ho sakti hai"
+        71, 73, 75, 77 -> "barf gir sakti hai"
+        80 -> "halki barish ki bauchhar ho sakti hai"
+        81 -> "barish ki bauchhar ho sakti hai"
+        82 -> "tez barish ki bauchhar ho sakti hai"
+        85, 86 -> "barf ki bauchhar ho sakti hai"
+        95 -> "garaj ke saath toofan aa sakta hai"
+        96, 99 -> "ole ke saath toofan aa sakta hai"
+        else -> "mausam mila-jula reh sakta hai"
+    }
+
+    /**
      * v29: [name] ko contacts me dhundho aur mile to
      * uske number ke saath dialer kholo (ACTION_DIAL
      * — call KHUD nahi lagta, button user dabata hai).
@@ -1423,5 +1601,11 @@ class AgentTools(
 
         /** v29: tel: URI se hatne wale nishan (jagah, dash, koshthak). */
         val DIAL_STRIP_CHARS = Regex("[\\s\\-()]")
+
+        /** v32: Open-Meteo mausam ke liye bandha connect intezaar. */
+        const val WEATHER_CONNECT_TIMEOUT_MS = 15_000
+
+        /** v32: Open-Meteo mausam ke liye bandha padhne ka intezaar. */
+        const val WEATHER_READ_TIMEOUT_MS = 15_000
     }
 }
