@@ -76,6 +76,7 @@ class MainActivity : Activity() {
     // phone par rehti hai; status line kabhi key nahi dikhati.
     private lateinit var geminiKeyStatusText: TextView
     private lateinit var geminiKeyInput: EditText
+    private lateinit var geminiKeySaveButton: Button
 
     // v21: is screen ki Gemini baatchit ki yaad — aakhiri 10
     // user/model turn. Activity zinda hai tab tak rehti hai.
@@ -173,13 +174,15 @@ class MainActivity : Activity() {
         }
         geminiKeyStatusText = findViewById(R.id.geminiKeyStatusText)
         geminiKeyInput = findViewById(R.id.geminiKeyInput)
-        findViewById<Button>(R.id.geminiKeySaveButton).setOnClickListener {
+        geminiKeySaveButton = findViewById(R.id.geminiKeySaveButton)
+        geminiKeySaveButton.setOnClickListener {
             onGeminiKeySaveClicked()
         }
         findViewById<Button>(R.id.geminiKeyClearButton).setOnClickListener {
             GeminiBrain.clearKey(this)
             geminiKeyInput.text.clear()
             refreshGeminiKeyUi()
+            updateStatus()
             Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
         }
         refreshGeminiKeyUi()
@@ -487,21 +490,46 @@ class MainActivity : Activity() {
     // Phase 3 (v21): Gemini online brain — key rakhna + fallback
     // ------------------------------------------------------------------
 
-    /** Key save karo: khaali na ho tabhi band karo, khana turant saaf. */
+    /**
+     * v22: Key save dabane par pehle JAANCH hoti hai — Gemini
+     * se halki si puchh karke dekha jata hai ki likhi hui key
+     * sach me chalti hai ya nahi. Jaanch pass ho tabhi key
+     * band hoti hai, aur Maya bolkar + status me dikhakar
+     * batati hai ki online buddhi taiyaar hai. Fail ho to
+     * kuch save NAHI hota, likha hua khane me hi rehta hai
+     * aur wajah (galat key / net band) status line par aur
+     * awaaz se — dono se — saaf milti hai.
+     */
     private fun onGeminiKeySaveClicked() {
         val typed = geminiKeyInput.text.toString().trim()
         if (typed.isEmpty()) {
             Toast.makeText(this, "Pehle khane me key likho.", Toast.LENGTH_SHORT).show()
             return
         }
-        GeminiBrain.setKey(this, typed)
-        geminiKeyInput.text.clear()
-        refreshGeminiKeyUi()
-        Toast.makeText(
-            this,
-            "Key save ho gayi — ab Maya online sawalon ke jawab bhi degi.",
-            Toast.LENGTH_LONG
-        ).show()
+        geminiKeySaveButton.isEnabled = false
+        geminiKeyStatusText.text = "Key जांच हो रही है..."
+        GeminiBrain.validateKey(typed) { ok, code ->
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                geminiKeySaveButton.isEnabled = true
+                if (ok) {
+                    GeminiBrain.setKey(this, typed)
+                    geminiKeyInput.text.clear()
+                    refreshGeminiKeyUi()
+                    updateStatus()
+                    speaker.speak(
+                        "API key मिल गया है। अब मैं online सवालों के जवाब भी दे सकती हूँ।"
+                    )
+                } else {
+                    geminiKeyStatusText.text = if (code == -1) {
+                        "Key: जांच नहीं हो पाई — net check karo ✗"
+                    } else {
+                        "Key: galat hai ✗ (error $code)"
+                    }
+                    speaker.speak("यह key काम नहीं कर रही, एक बार फिर देखकर डालो।")
+                }
+            }
+        }
     }
 
     /**
@@ -512,7 +540,7 @@ class MainActivity : Activity() {
     private fun refreshGeminiKeyUi() {
         if (!::geminiKeyStatusText.isInitialized) return
         if (GeminiBrain.isConfigured(this)) {
-            geminiKeyStatusText.text = "Key: set hai ✓"
+            geminiKeyStatusText.text = "Key: set hai ✓ — online buddhi taiyaar"
             geminiKeyInput.hint = "Key set hai — badalna hai to naya key likho"
         } else {
             geminiKeyStatusText.text = "Key: nahi hai"
@@ -988,10 +1016,20 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     private fun updateStatus() {
+        // v22: key band ho to header me "AI abhi aaya nahi hai"
+        // ki jagah saaf "Gemini taiyaar hai" — user ko dikhe ki
+        // online buddhi sach me chalu hai.
+        val geminiReady = GeminiBrain.isConfigured(this)
         val modeLabel = when (prefs.mode) {
             JarvisMode.OFFLINE -> "Offline"
-            JarvisMode.ONLINE -> "Online (AI abhi aaya nahi hai)"
-            JarvisMode.AUTO -> "Auto"
+            JarvisMode.ONLINE ->
+                if (geminiReady) {
+                    "Online (Gemini taiyaar hai)"
+                } else {
+                    "Online (AI abhi aaya nahi hai)"
+                }
+            JarvisMode.AUTO ->
+                if (geminiReady) "Auto (Gemini taiyaar hai)" else "Auto"
         }
         val engineName = engine?.displayName ?: "-"
         val modelState = if (modelManager.isModelReady(ModelLanguage.HINDI)) {
