@@ -44,6 +44,20 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- v1.4: "koi bhi app naam bolkar kholo" ke liye launcher ki
+             saari apps ki list dekhni padti hai, aur Google/YouTube
+             search ke liye browser ka hona jaanchna padta hai. Ye
+             <queries> wale intent hi un apps ko dikhai dene dete hain —
+             QUERY_ALL_PACKAGES jaisi badi permission nahi li gayi. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
         <package android:name="com.google.android.youtube" />
         <package android:name="com.facebook.katana" />
         <package android:name="com.whatsapp" />
