@@ -42,6 +42,14 @@ import java.util.concurrent.Executors
  * ke naam aur unke args (khud user ke bole hue kaam)
  * aate hain.
  *
+ * v31: Maya ki lambi-yaad — user ki bandhi baatein
+ * ([MayaMemory], sirf phone par) har daud ki shuruaat
+ * me instruction ke aakhir me sandarbh bankar judti
+ * hain ([buildInstruction]), taaki niji sawalon ka
+ * jawab mastishk bina auzaar ke de sake. Upar wala
+ * report-niyam yahan aur sakht hai: yaad ka text
+ * report me KABHI nahi aata (stepLabel par dekho).
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -94,11 +102,15 @@ object AgentBrain {
         val contents = mutableListOf<Pair<String, String>>()
         contents.addAll(history)
         contents.add("user" to userText)
+        // v31: instruction is daud ke liye taiyaar hota
+        // hai — bandhi hui yaad taaza padhkar uske
+        // aakhir me sandarbh bankar judti hai.
+        val instruction = buildInstruction(context)
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
             val raw = GeminiBrain.requestAgentRound(
-                context, AGENT_INSTRUCTION, contents
+                context, instruction, contents
             )
             if (raw == null) {
                 // Poori model kataar chup hai.
@@ -154,6 +166,23 @@ object AgentBrain {
         steps.add("STOP (max rounds)")
         saveRunSummary(context, "steps: " + steps.joinToString(" -> "))
         return lastSay ?: PARTIAL_REPLY
+    }
+
+    /**
+     * v31: Is daud ka instruction — sthair [AGENT_INSTRUCTION]
+     * ke aakhir me, bandhi hui yaad ho to, uska sandarbh-block
+     * ([MayaMemory.contextBlock], taaza padha hua). Mastishk
+     * in baaton se niji sawalon ka jawab seedha deta hai —
+     * auzaar bulane ki zaroorat nahi. Yaad khali ho to
+     * instruction bilkul pehle jaisa hi rehta hai.
+     */
+    private fun buildInstruction(context: Context): String {
+        val block = MayaMemory.contextBlock(context)
+            ?: return AGENT_INSTRUCTION
+        return AGENT_INSTRUCTION +
+            "\n\nMEMORY — the user has asked you to remember " +
+            "these things; use them to answer personal " +
+            "questions directly, with NO tool call:\n" + block
     }
 
     // ------------------------------------------------------------------
@@ -233,6 +262,10 @@ object AgentBrain {
                     ""
                 }
             "call_person", "whatsapp_message" -> args.optString("name")
+            // v31 PRIVACY: yaad wale auzaaron ke args —
+            // khud yaad rakhi baatein/match — report me
+            // KABHI nahi; sirf auzaar ka naam dikhega.
+            "remember_fact", "recall_facts", "forget_fact" -> ""
             else -> ""
         }
         return if (mainArg.isEmpty()) tool else "$tool($mainArg)"
@@ -352,6 +385,22 @@ object AgentBrain {
             "poore naam se whatsapp_message dobara chalao. Use it " +
             "for 'X ko WhatsApp par likho / message karo' type " +
             "requests.\n" +
+            "- remember_fact, args {\"fact\": \"<one clean " +
+            "standalone fact>\"} — remembers something on the " +
+            "phone for good. Use it when the user says 'yaad " +
+            "rakho / মনে রাখো' (remember this). Compose ONE " +
+            "clean standalone fact from what the user said — " +
+            "e.g. the user says 'yaad rakho, meri bike ka " +
+            "number WB12AB3456 hai' → fact: 'User ki bike ka " +
+            "number WB12AB3456 hai'.\n" +
+            "- recall_facts, args {} — returns everything you " +
+            "have been asked to remember, as a numbered list. " +
+            "Use it when the user asks 'kya-kya yaad hai' " +
+            "(what all do you remember).\n" +
+            "- forget_fact, args {\"match\": \"<a word or " +
+            "phrase>\"} — removes every remembered fact " +
+            "containing the match. Use it when the user says " +
+            "'bhool jao / ভুলে যাও' (forget that).\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
