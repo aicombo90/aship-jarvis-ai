@@ -150,6 +150,29 @@ Jarvis does it on your phone and speaks the reply back to you.
   user khud dabata hai. Kai log ek naam ke milein
   to Maya poochhti hai kaun sa wala (number ke sirf
   aakhiri 4 ank dikhakar)
+- **Maya ki lambi-yaad (v31):** agent ke paas teen
+  naye auzaar — remember_fact, recall_facts,
+  forget_fact. "মনে রাখো, আমার বাইকের নম্বর …"
+  bolne par Maya woh baat sirf phone par bandh
+  leti hai (zyada se zyada 50 baatein) aur agli
+  baatchiton me usi yaad se "আমার বাইকের নম্বর
+  কত?" jaise niji sawalon ka jawab deti hai;
+  "ভুলে যাও / bhool jao" bolne par milti-julti
+  baatein hata deti hai. Yaad phone se bahar
+  kahin nahi jati aur reporton (jarvis_diag) me
+  bhi uska text kabhi nahi aata — facts live only
+  on the phone and are part of her context in
+  every conversation
+- **Asal mausam (v32):** agent ke paas naya auzaar
+  — get_weather. "আজকের আবহাওয়া কেমন?" / "কাল
+  কলকাতায় বৃষ্টি হবে?" bolne par Maya Open-Meteo
+  se us jagah ka asal mausam laati hai — aaj ya
+  kal ka sabse zyada/kam taapmaan aur barish ki
+  sambhavna. Ye seva bilkul muft hai aur iske
+  liye koi API key nahi chahiye (real weather for
+  any named place via Open-Meteo, no API key);
+  jagah na mile ya net band ho to imaandaar
+  FAILED — andaza lagakar sankhya kabhi nahi
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
