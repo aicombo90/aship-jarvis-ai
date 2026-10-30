@@ -124,6 +124,12 @@ class JarvisWakeService : Service() {
     @Volatile
     private var commandLastPartial = ""
 
+    // v1.7 diagnostics: the longest wake partial since the last final
+    // result. Kept separately so a blank final result cannot erase the
+    // best evidence of what the recognizer was hearing.
+    @Volatile
+    private var longestWakePartialSinceFinal = ""
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -403,21 +409,27 @@ class JarvisWakeService : Service() {
         // nahi judni chahiye.
         override fun onPartialResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
-            if (containsWakeWord(parseJsonField(hypothesis, "partial"))) {
+            val partial = parseJsonField(hypothesis, "partial")
+            rememberWakePartial(partial)
+            if (containsWakeWord(partial)) {
                 executor.execute { onWakeDetected() }
             }
         }
 
         override fun onResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
-            if (containsWakeWord(parseJsonField(hypothesis, "text"))) {
+            val text = parseJsonField(hypothesis, "text")
+            rememberWakeFinal(text)
+            if (containsWakeWord(text)) {
                 executor.execute { onWakeDetected() }
             }
         }
 
         override fun onFinalResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
-            if (containsWakeWord(parseJsonField(hypothesis, "text"))) {
+            val text = parseJsonField(hypothesis, "text")
+            rememberWakeFinal(text)
+            if (containsWakeWord(text)) {
                 executor.execute { onWakeDetected() }
             }
         }
@@ -918,10 +930,74 @@ class JarvisWakeService : Service() {
         statusMessage = message
     }
 
+    private fun rememberWakePartial(text: String) {
+        val clean = text.trim().replace('\n', ' ')
+        if (clean.length > longestWakePartialSinceFinal.length) {
+            longestWakePartialSinceFinal = clean
+            prefs.lastHeardPartialText = clean
+            prefs.lastHeardPartialAtMs = System.currentTimeMillis()
+        }
+    }
+
+    private fun rememberWakeFinal(text: String) {
+        val clean = text.trim().replace('\n', ' ')
+        if (clean.isEmpty()) return
+        prefs.lastHeardText = clean
+        prefs.lastHeardAtMs = System.currentTimeMillis()
+        longestWakePartialSinceFinal = ""
+        prefs.lastHeardPartialText = ""
+        prefs.lastHeardPartialAtMs = 0L
+    }
+
     private fun containsWakeWord(text: String): Boolean {
         if (text.isBlank()) return false
-        val lower = text.lowercase()
-        return WAKE_WORDS.any { lower.contains(it) }
+        val squashedText = squashWakeText(text)
+        if (squashedText.isEmpty()) return false
+        val variants = WAKE_WORDS.map { squashWakeText(it) }
+        if (variants.any { squashedText.contains(it) }) return true
+
+        // Fuzzy word match: one small spelling/recognition slip in a
+        // word is enough, but unrelated short words never qualify.
+        val words = text.split(Regex("\\s+"))
+            .map { squashWakeText(it) }
+            .filter { it.length >= 5 }
+        for (word in words) {
+            for (variant in variants) {
+                if (variant.length >= 5 && levenshteinDistance(word, variant) <= 1) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun squashWakeText(text: String): String {
+        val result = StringBuilder()
+        for (ch in text.lowercase()) {
+            if (ch.isLetterOrDigit()) result.append(ch)
+        }
+        return result.toString()
+    }
+
+    private fun levenshteinDistance(first: String, second: String): Int {
+        if (kotlin.math.abs(first.length - second.length) > 1) return 2
+        var previous = IntArray(second.length + 1) { it }
+        var current = IntArray(second.length + 1)
+        for (i in 1..first.length) {
+            current[0] = i
+            for (j in 1..second.length) {
+                val substitutionCost = if (first[i - 1] == second[j - 1]) 0 else 1
+                current[j] = minOf(
+                    current[j - 1] + 1,
+                    previous[j] + 1,
+                    previous[j - 1] + substitutionCost
+                )
+            }
+            val swap = previous
+            previous = current
+            current = swap
+        }
+        return previous[second.length]
     }
 
     /** Vosk hypotheses are JSON strings like {"text" : "youtube kholo"}. */
@@ -960,9 +1036,12 @@ class JarvisWakeService : Service() {
         private const val ORB_FADE_IN_MS = 250L
         private const val ORB_FADE_OUT_MS = 220L
 
-        /** Wake-word spellings the Hindi model / recognizers produce. */
+        /** Wake-word spellings and close mishearings from the recognizers. */
         private val WAKE_WORDS = listOf(
-            "जार्विस", "जारविस", "জার্ভিস", "জারবিস", "jarvis"
+            "जार्विस", "जारविस", "जर्भिस", "जारभिस", "जार्बिस",
+            "जार्भिस", "जार्बीस", "जारवीस", "जारिस", "जाविस",
+            "জার্ভিস", "জারবিস", "জারভিস", "জার্বিস", "জার্ভীস",
+            "jarvis", "jarbis", "jarwis", "jarvish"
         )
 
         /** True while the wake service is alive (same process as the UI). */
