@@ -280,8 +280,11 @@ permission na ho to Jarvis sach bolega, jhootha "khol diya" nahi.
 ### Siri orb + casual speech (v1.5)
 
 - **Siri jaisa gola (orb)** — background me "Jarvis" sunte hi
-  screen ke neeche beech me ek chamakta hua gola (gehra neela →
-  baingani → gulabi) Siri ke andaaz me ubhar aata hai. Command ka
+  screen ke neeche beech me ek chamakta hua gola Siri ke andaaz
+  me ubhar aata hai. **(v14)** Ab gola ek behta hua fluid-marble
+  gola hai — ghane cyan/blue/violet/magenta rang andar lagatar
+  ghoom-bahte hain, neeche sonhri roshni ki lakerein aur
+  chingariyon ke saath (owner ke reference video jaisa). Command ka
   intezaar karte samay woh dheere-dheere "saans" leta hai (pulse),
   aur jawab bolte samay uske andar ki chamak ghoomti hai
   (shimmer). **Jawab text me bhi** gole ke upar ek chhote kaale
