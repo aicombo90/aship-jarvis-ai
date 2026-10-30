@@ -101,6 +101,15 @@ Jarvis does it on your phone and speaks the reply back to you.
   kadam-round. Offline engine ab no-net / no-key wala
   fallback hai; online uplabdh hone par mastishk hi
   pehle chalta hai
+- **YouTube par gana chalana (v26):** agent ke paas naya
+  auzaar — youtube_play. "Sad song chalao" / "অমুক গান
+  চালাও" bolne par mastishk query chunta hai, app YouTube
+  ke search results kholta hai aur Accessibility service
+  pehle asal video par ek tap karke use chala deti hai —
+  poora kaam ek hi hukm me. Tap na ho paye to jhootha
+  "chala diya" nahi banta: PARTIAL report aati hai ki
+  results khul gaye hain, tap nahi hua (har koshish ki
+  report "last_youtube_tap" me band hoti hai)
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
