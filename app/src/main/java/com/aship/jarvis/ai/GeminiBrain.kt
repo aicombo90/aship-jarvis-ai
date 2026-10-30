@@ -26,6 +26,14 @@ import java.util.concurrent.Executors
  * Koi bhi gadbad (net band, galat key, khaali jawab, parse fail)
  * callback(null) ban jati hai — bulane wala apne purane offline
  * raaste par gir jata hai, user ko koi error nahi dikhta.
+ *
+ * v23: baatchit ke liye modelon ki kataar hai ([MODELS]) —
+ * naye key ke liye gemini-2.5-flash generateContent par 404
+ * deta hai (models list me ab bhi dikhta hai, isliye key
+ * jaanch pass hokar bhi jawab nahi aata tha). Pehla model
+ * 404/503 de ya khaali nikle to agla aazmaya jata hai; key
+ * ya request wali gadbad (400/401/403) par wahin ruk jate
+ * hain — woh model badalne se nahi sudhregi.
  */
 object GeminiBrain {
 
@@ -114,15 +122,43 @@ object GeminiBrain {
         }
     }
 
+    /**
+     * v23: [MODELS] ki kataar me ek-ek karke koshish — pehla
+     * model 404 (naye key par band) / 503 (bheed) de ya 200
+     * par khaali jawab nikle to agla; net gadbad (-1) par bhi
+     * agle ko ek mauka. 400/401/403 jaisi key/request wali
+     * gadbad par wahin ruk jao — model badalna bekaar hai.
+     * Sab khatm ho jayein to null.
+     */
     private fun requestReply(
         key: String,
         history: List<Pair<String, String>>,
         userText: String
     ): String? {
+        val body = buildRequestBody(history, userText).toString()
+        for (model in MODELS) {
+            val (code, reply) = tryModel(key, model, body)
+            if (code == HttpURLConnection.HTTP_OK && reply != null) {
+                return reply
+            }
+            val tryNext = code == HttpURLConnection.HTTP_OK ||
+                code == HttpURLConnection.HTTP_NOT_FOUND ||
+                code == HttpURLConnection.HTTP_UNAVAILABLE ||
+                code == -1
+            if (!tryNext) {
+                return null
+            }
+        }
+        return null
+    }
+
+    /** Ek model par ek koshish: (HTTP code, jawab ya null). Net gadbad par code -1. */
+    private fun tryModel(key: String, model: String, body: String): Pair<Int, String?> {
         var connection: HttpURLConnection? = null
         return try {
             connection =
-                (URL(GENERATE_CONTENT_URL).openConnection() as HttpURLConnection).apply {
+                (URL(GENERATE_CONTENT_BASE_URL + model + ":generateContent")
+                    .openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = CONNECT_TIMEOUT_MS
                     readTimeout = READ_TIMEOUT_MS
@@ -131,19 +167,20 @@ object GeminiBrain {
                     setRequestProperty("x-goog-api-key", key)
                     setRequestProperty("Content-Type", "application/json")
                 }
-            val body = buildRequestBody(history, userText).toString()
             connection.outputStream.use { out ->
                 out.write(body.toByteArray(Charsets.UTF_8))
             }
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                null
-            } else {
+            val code = connection.responseCode
+            val reply = if (code == HttpURLConnection.HTTP_OK) {
                 val responseText =
                     connection.inputStream.bufferedReader().use { it.readText() }
                 parseReply(responseText)
+            } else {
+                null
             }
+            code to reply
         } catch (e: Exception) {
-            null
+            -1 to null
         } finally {
             connection?.disconnect()
         }
@@ -210,9 +247,22 @@ object GeminiBrain {
     private const val PREFS_NAME = "jarvis_ai"
     private const val KEY_GEMINI_KEY = "gemini_key"
 
-    private const val GENERATE_CONTENT_URL =
-        "https://generativelanguage.googleapis.com/v1beta/models/" +
-            "gemini-2.5-flash:generateContent"
+    private const val GENERATE_CONTENT_BASE_URL =
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+
+    /**
+     * v23: baatchit ke model, kram se. Naye key ke liye
+     * gemini-2.5-flash band ho chuka hai (generateContent par
+     * 404), isliye sabse pehle gemini-3-flash-preview; phir
+     * gemini-flash-latest (kabhi 503 bheed deta hai, isliye
+     * beech me); aakhir me purana 2.5-flash — purane keyon
+     * par woh ab bhi chalta hai.
+     */
+    private val MODELS = listOf(
+        "gemini-3-flash-preview",
+        "gemini-flash-latest",
+        "gemini-2.5-flash"
+    )
 
     /** v22: key jaanch ke liye models list wala pata. */
     private const val MODELS_URL =
@@ -221,7 +271,10 @@ object GeminiBrain {
     private const val CONNECT_TIMEOUT_MS = 20_000
     private const val READ_TIMEOUT_MS = 20_000
     private const val VALIDATE_TIMEOUT_MS = 15_000
-    private const val MAX_OUTPUT_TOKENS = 320
+    // v23: 320 se 512 — naye model sochne (thinking) me bhi
+    // token kha jate hain; jawab ki jagah bachi rahe isliye.
+    // Bolne wala jawab persona phir bhi chhota rakhti hai.
+    private const val MAX_OUTPUT_TOKENS = 512
     private const val TEMPERATURE = 0.8
 
     /**
