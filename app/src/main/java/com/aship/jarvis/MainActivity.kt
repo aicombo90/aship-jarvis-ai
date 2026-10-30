@@ -472,6 +472,16 @@ class MainActivity : Activity() {
                 else -> append("Background sunna band hai.")
             }
             append("\nWake hits (kitni baar 'Jarvis' suna): ${prefs.wakeHitCount}")
+            val lastHeard = if (
+                prefs.lastHeardPartialAtMs > prefs.lastHeardAtMs &&
+                prefs.lastHeardPartialText.isNotBlank()
+            ) {
+                prefs.lastHeardPartialText
+            } else {
+                prefs.lastHeardText.ifBlank { prefs.lastHeardPartialText }
+            }
+            val lastHeardLabel = if (lastHeard.isBlank()) "—" else "'$lastHeard'"
+            append("\nMic ne aakhri suna: $lastHeardLabel")
             if (running && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
