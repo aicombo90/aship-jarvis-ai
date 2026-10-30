@@ -21,6 +21,7 @@ import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
+import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
@@ -63,6 +64,10 @@ class MainActivity : Activity() {
     private lateinit var wakeStartButton: Button
     private lateinit var wakeStopButton: Button
     private var pendingWakeStart = false
+
+    // v17: Accessibility (mobile data) section — battery wale
+    // bandobosto ki tarah hi ek status line + ek button.
+    private lateinit var accessibilityStatusText: TextView
 
     // In-app update (GitHub Releases): pending download bookkeeping.
     private var updateDownloadId: Long = -1L
@@ -143,6 +148,10 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.batteryButton).setOnClickListener {
             onBatteryButtonClicked()
+        }
+        accessibilityStatusText = findViewById(R.id.accessibilityStatusText)
+        findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
+            onAccessibilityButtonClicked()
         }
         findViewById<Button>(R.id.overlayPermissionButton).setOnClickListener {
             onOverlayPermissionClicked()
@@ -538,6 +547,19 @@ class MainActivity : Activity() {
                 }
             )
         }
+        // v17: Accessibility ki haalat — ye function onResume par
+        // aur har 2 s me chalta hai, isliye Settings se wapas
+        // aate hi line khud taza ho jati hai.
+        if (::accessibilityStatusText.isInitialized) {
+            accessibilityStatusText.text = if (
+                JarvisAccessibilityService.isEnabled(this)
+            ) {
+                "Accessibility: চালু আছে — 'মোবাইল ডাটা অন করো' বললেই হবে।"
+            } else {
+                "Accessibility: নেই — মোবাইল ডাটা কমান্ডের জন্য " +
+                    "নিচের বোতাম থেকে চালু করুন।"
+            }
+        }
     }
 
     private fun onWakeStartClicked() {
@@ -627,6 +649,34 @@ class MainActivity : Activity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    /**
+     * v17: "Accessibility চালু করো" — battery wale button ki
+     * tarah seedha sahi Settings page kholta hai. Wahan
+     * "Installed apps" ke andar ASHIP JARVIS AI ko ON karna
+     * hai; wapas aane par status line khud badal jayegi.
+     * Service pehle se chalu ho to sirf bata do.
+     */
+    private fun onAccessibilityButtonClicked() {
+        if (JarvisAccessibilityService.isEnabled(this)) {
+            Toast.makeText(
+                this,
+                "Accessibility pehle se chalu hai — 'mobile data on karo' bolkar dekho.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "Settings > Accessibility > Installed apps > " +
+                    "ASHIP JARVIS AI > On kijiye.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
