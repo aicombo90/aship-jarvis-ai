@@ -191,7 +191,11 @@ aapki awaaz kahin upload nahi hoti.
   mic khali — par service aur uska notification chalu rehte hain.
   Saamne wala sunna khatm hote hi app use **khud wapas chalu** kar
   deta hai; activity kabhi resume bhejna bhool jaye to service
-  **45 second** me khud hi wapas sunne lagta hai.
+  **12 second** me khud hi wapas sunne lagta hai. (v1.6: resume ab
+  result/error aane par aur app se bahar jaate hi bhi turant bhej
+  diya jata hai; atka hua command flow ho to timer use tod kar
+  wapas sunna shuru kar deta hai — bolta hua jawab kabhi beech me
+  nahi katata.)
 
 ### Advanced command pack (v1.4)
 
