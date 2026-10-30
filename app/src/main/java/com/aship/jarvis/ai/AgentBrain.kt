@@ -303,6 +303,14 @@ object AgentBrain {
             "you to use in your answer.\n" +
             "- get_date, args {} — returns the current date as text, for " +
             "you to use in your answer.\n" +
+            "- get_battery, args {} — returns the battery percentage " +
+            "and whether the phone is charging, from the real device " +
+            "state. Use it for battery questions — never guess the " +
+            "charge.\n" +
+            "- get_network, args {} — returns the current connection " +
+            "(none, Wi-Fi or mobile data) and whether internet is " +
+            "available, from the real device state. Use it for " +
+            "network questions — never guess.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
