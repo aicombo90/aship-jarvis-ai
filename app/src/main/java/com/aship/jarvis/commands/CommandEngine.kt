@@ -465,8 +465,14 @@ class CommandEngine(
         for ((from, to) in words) {
             t = t.replace(from, to)
         }
+        // v12: "pesbuk" / "pes book" — Facebook ke Latin galat-sune
+        // roop. Script wale roop (पेसबुक aadi) fuzzy correction se
+        // sambhal jate hain, par ye Latin roop usse bahut door hain
+        // (distance 5), isliye yahan spasht map zaroori hai.
         t = t.replace("you tube", "youtube")
             .replace("face book", "facebook")
+            .replace("pes book", "facebook")
+            .replace("pesbuk", "facebook")
             .replace("whats app", "whatsapp")
         return t
     }
