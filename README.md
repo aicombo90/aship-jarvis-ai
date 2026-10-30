@@ -22,6 +22,8 @@ Jarvis does it on your phone and speaks the reply back to you.
 - **Offline adda with Maya (v13):** "Maya" naam ki persona ke saath
   poori offline, multi-turn halki-phulki baatchit — gaana khulwana,
   roothna-manaana, joke aur roz ki baatein, hamesha saaf-suthri
+- **Clear spoken replies (v15):** all spoken replies are now written
+  in Devanagari script, so the Hindi TTS voice pronounces them clearly
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
