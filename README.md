@@ -16,6 +16,9 @@ Jarvis does it on your phone and speaks the reply back to you.
   me khulta hai (overlay bridge), background me samajh na aane par
   Jarvis chup rehta hai, command session ki samay-seema, aur app ke
   andar hi update check/download (GitHub Releases se)
+- **Advanced command pack (v1.4):** kisi bhi installed app ko naam
+  bolkar kholna, battery status, volume control, gaana (media)
+  control, Google / YouTube search, aur timer
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
@@ -176,6 +179,85 @@ aapki awaaz kahin upload nahi hoti.
   raaston par lagta hai, aur koi bhi na mile to wahi sachha
   "nahi mila" wala jawab milega.
 
+### Mic sharing (v1.3)
+
+- **Tap-to-speak aur background sunna ab mic baant lete hain.**
+  Phone me mic ek hi hota hai: background wake service (Vosk) mic
+  pakde ho to Android saamne wale Google recognizer ko mana kar
+  deta tha ("Speech Recognition and Synthesis from Google cannot
+  record now as ASHIP JARVIS AI is recording") aur woh chalu hote
+  hi band ho jata tha. Ab 🎤 Tap-to-speak dabate hi app wake
+  service ko kuch der ke liye **rok** deta hai — wake session band,
+  mic khali — par service aur uska notification chalu rehte hain.
+  Saamne wala sunna khatm hote hi app use **khud wapas chalu** kar
+  deta hai; activity kabhi resume bhejna bhool jaye to service
+  **45 second** me khud hi wapas sunne lagta hai.
+
+### Advanced command pack (v1.4)
+
+Naye commands — ye sab saamne (🎤 Tap to speak) bhi chalte hain aur
+background wake word se bhi:
+
+- **Koi bhi app naam bolkar kholo** — "Telegram kholo", "MX Player
+  kholo", "… open karo". Jarvis launcher ki saari apps ke naam
+  (label) se mila kar dhoondhta hai; YouTube / Facebook / WhatsApp /
+  Camera / Chrome / Settings wale pakke naam pehle ki tarah pehle
+  khulenge. App na mile to Jarvis saaf kahega — "… naam ki app is
+  phone me nahi mili". (Android 11+ ke package-visibility niyam ki
+  wajah se manifest me MAIN/LAUNCHER wala `<queries>` block hai —
+  `QUERY_ALL_PACKAGES` jaisi badi permission **nahi** li gayi.)
+- **Battery** — "Battery kitna hai" / "Battery dekho" → percent aur
+  charging ka haal awaaz me. Koi permission nahi chahiye.
+- **Volume** — "Volume badhao" / "Awaaz tez karo" (ek step upar),
+  "Volume kam karo", "Volume full karo", "Mute karo" / "Volume
+  band". Sirf "Volume" bolne par haal bata dega. Ye AudioManager se
+  seedha hota hai — activity nahi chahiye, isliye background se bhi
+  sach me chalta hai.
+- **Gaana (media)** — "Gaana chalao" / "Play karo", "Gaana roko" /
+  "Pause karo", "Agla gaana", "Pichla gaana" — jo music app chal
+  rahi hai use media button ka signal jata hai.
+- **Google search** — "Google par \<sawaal\> search karo" ya
+  "\<sawaal\> google karo" → browser me search khul jayega.
+  Background se overlay bridge wala raasta lagega.
+- **YouTube search** — "YouTube par \<cheez\> search karo" /
+  "YouTube me \<cheez\> dikhao" → YouTube ke search results
+  khulenge (sirf "YouTube kholo" bolne par pehle ki tarah app
+  khulega, search nahi).
+- **Timer** — "5 minute ka timer lagao", "30 second timer",
+  "1 ghante ka timer" → clock app me timer lag jayega (jahan
+  support hai wahan bina screen dikhaye, `EXTRA_SKIP_UI` se).
+  `ACTION_SET_TIMER` ke liye koi permission nahi chahiye.
+
+Jo naye kaam activity kholte hain (search, timer, naam wala app),
+woh background me pehle ki tarah overlay bridge se hi jaate hain —
+permission na ho to Jarvis sach bolega, jhootha "khol diya" nahi.
+
+### Siri orb + casual speech (v1.5)
+
+- **Siri jaisa gola (orb)** — background me "Jarvis" sunte hi
+  screen ke neeche beech me ek chamakta hua gola (gehra neela →
+  baingani → gulabi) Siri ke andaaz me ubhar aata hai. Command ka
+  intezaar karte samay woh dheere-dheere "saans" leta hai (pulse),
+  aur jawab bolte samay uske andar ki chamak ghoomti hai
+  (shimmer). **Jawab text me bhi** gole ke upar ek chhote kaale
+  bubble me dikhta hai — bina app khole padh sakte ho. Jawab
+  khatm hone ke ~1.5 second baad gola khud fade hokar gayab ho
+  jata hai. Ye sirf tab dikhega jab "Display over other apps"
+  permission mili ho; na ho to awaaz wala flow pehle jaisa hi
+  chalega, kuch atakta nahi. Gola sirf dikhawa hai — us par tap
+  karne se kuch nahi hota, aur neeche wali app ke taps bhi nahi
+  rukte.
+- **Halki-phulki boli bhi samajhta hai** — beech ke bina-matlab
+  shabd ("zara", "bhai", "please", "ek", "toh" ...) khud hat
+  jate hain, aur command kisi lambe vakya ke beech me chhupa ho
+  ("accha suno torch band kar do") to bhi Jarvis use pakad leta
+  hai. Do suraksha niyam: Google / YouTube search ki query kabhi
+  nahi kat-ti (search hamesha pehle chalti hai), aur bina
+  "kholo / open" bole sirf app ka naam lene se app NAHI khulta.
+- Torch / alarm / battery / volume ke kuch aur galat-sune roop
+  (टार्च, अलारम, ব্যাট্রি, वॉल्युम ...) bhi ab pehchane jate
+  hain.
+
 ### Imandari wali seemayein (honest limits)
 
 - **Screen band ho to pakka nahi.** Screen ON ho ya dusri app khuli
@@ -189,9 +271,11 @@ aapki awaaz kahin upload nahi hoti.
 - **Battery lagegi.** Lagatar mic chalu matlab lagatar bijli kharch.
   Din-bhar chalu rakhna hai to battery zyada giregi — jab zaroorat
   na ho, band kar do.
-- **Ek samay par ek hi sunna.** Background sunna chalu ho to app ke
-  andar wala 🎤 Tap-to-speak ek saath mat chalao — do mic ek saath
-  takra sakte hain.
+- **Ek samay par ek hi sunna.** Mic ek hi hai, isliye background
+  sunna aur 🎤 Tap-to-speak ek hi pal me saath nahi chalte — v1.3
+  se app khud pehle background sunna rok kar phir saamne sunta
+  hai, aur baad me use wapas chalu kar deta hai (upar "Mic
+  sharing" dekho).
 - Aas-paas ke log "Jarvis" shabd bol dein to galti se bhi jaag sakta
   hai — ye wake-word takneek ki fitrat hai.
 
