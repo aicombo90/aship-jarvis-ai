@@ -1,12 +1,15 @@
 package com.aship.jarvis.commands
 
 import android.content.Context
+import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Result of handling one command: the reply Jarvis shows and speaks.
@@ -51,6 +54,14 @@ data class CommandResult(
  * commands ki query is routing se pehle hi nikal chuki hoti hai
  * (kabhi nahi kat-ti), aur bina open-verb ke sirf app ka naam
  * lene se app nahi khulta.
+ *
+ * v17 mobile data: "mobile data on/off karo" Accessibility
+ * service ke quick-settings tile se hota hai. Is raaste me koi
+ * activity launch NAHI hoti, isliye v16 wala lock gate
+ * (OverlayLauncher.LOCKED) is par lagu nahi hai — lock ho tab
+ * bhi koshish hogi, aur panel/tile na mile to sachha jawab
+ * milega. Service band ho to Maya pehle app se Accessibility
+ * chalu karne ko kehti hai.
  */
 class CommandEngine(
     private val context: Context,
@@ -156,6 +167,8 @@ class CommandEngine(
                     LaunchOutcome.LAUNCHED -> alarmOpenedResult(hour, minute)
                     LaunchOutcome.PERMISSION_NEEDED ->
                         CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                    LaunchOutcome.LOCKED ->
+                        CommandResult(LOCK_REPLY, true)
                     LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
                         CommandResult("अलार्म ऐप नहीं खुल पाया।", true)
                 }
@@ -199,6 +212,26 @@ class CommandEngine(
                     },
                     true
                 )
+            }
+        }
+
+        // --- Mobile data on/off (v17) ---------------------------------------
+        // Accessibility service quick-settings ka data tile dabati
+        // hai — koi activity launch nahi hoti, isliye ye branch
+        // OverlayLauncher se guzarti hi nahi aur v16 wala lock
+        // gate (LOCKED) is par lagu nahi hai: lock ho tab bhi
+        // koshish hogi (panel na khule to sachha "nahi mila"
+        // jawab milega). Disha (on/off) wala shabd hona shart
+        // hai — sirf "mobile data" bolne se kuch nahi hoga.
+        val dataMention = text.contains("mobile data") || hasWord(text, "data")
+        if (dataMention) {
+            val turnOffData = hasWord(text, "off") || text.contains("band") ||
+                text.contains("bondho")
+            val turnOnData = hasWord(text, "on") || hasWord(text, "ऑन") ||
+                hasWord(text, "অন") || text.contains("chalu") ||
+                text.contains("chaalu") || text.contains("start")
+            if (turnOffData || turnOnData) {
+                return mobileDataCommand(turnOn = turnOnData && !turnOffData)
             }
         }
 
@@ -426,6 +459,14 @@ class CommandEngine(
             "पिछला" to "pichla",
             "म्यूट" to "mute", "মিউট" to "mute",
             "तेज़" to "tez", "तेज" to "tez",
+            // v17: mobile data ke script roop. Vakya wala roop
+            // pehle, phir alag-alag shabd — dono raaston se
+            // "mobile data" hi banna chahiye.
+            "मोबाइल डेटा" to "mobile data", "মোবাইল ডেটা" to "mobile data",
+            "মোবাইল ডাটা" to "mobile data",
+            "मोबाइल" to "mobile", "মোবাইল" to "mobile",
+            "डेटा" to "data", "ডেটা" to "data", "ডাটা" to "data",
+            "चालू" to "chalu", "চালু" to "chalu",
             // v1.5: torch / alarm / battery / volume ke aur galat-sune roop
             "टार्च" to "torch", "टोर्च" to "torch",
             "টার্চ" to "torch", "টোর্চ" to "torch",
@@ -591,6 +632,62 @@ class CommandEngine(
         }
 
     // ------------------------------------------------------------------
+    // v17: mobile data
+    // ------------------------------------------------------------------
+
+    /**
+     * Mobile data on/off — Accessibility service se. Service
+     * band ho to koshish hi nahi hoti: Maya pehle app kholkar
+     * Accessibility chalu karne ko kehti hai.
+     *
+     * Service ka kaam background thread par hota hai aur natija
+     * callback se aata hai; CommandEngine ka jawab sync chahiye,
+     * isliye yahan ek bandha hua intezaar (latch, ~4 s) hai.
+     * Bulane wale dono raaste (wake service ka executor,
+     * saamne wali screen) itna intezaar jhel sakte hain — tile
+     * dhoondhne ki kul seema ~2.5 s hi hai. Intezaar poora na
+     * ho to "nahi mila" wala sach ke sabse kareeb jawab milta
+     * hai.
+     */
+    private fun mobileDataCommand(turnOn: Boolean): CommandResult {
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
+        }
+        val latch = CountDownLatch(1)
+        // Latch ki wajah se callback wale thread ki likhai
+        // await() ke baad dikhna pakka hai — alag jhanda nahi
+        // chahiye.
+        var outcome: JarvisAccessibilityService.DataResult? = null
+        try {
+            JarvisAccessibilityService.toggleMobileData(context, turnOn) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+        val completed = try {
+            latch.await(DATA_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed) {
+            return CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+        return when (outcome) {
+            JarvisAccessibilityService.DataResult.SUCCESS -> CommandResult(
+                if (turnOn) "मोबाइल डेटा ऑन कर दिया।" else "मोबाइल डेटा बंद कर दिया।",
+                true
+            )
+            JarvisAccessibilityService.DataResult.SERVICE_OFF ->
+                CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
+            JarvisAccessibilityService.DataResult.TILE_NOT_FOUND,
+            JarvisAccessibilityService.DataResult.PANEL_NOT_OPENED,
+            null -> CommandResult(DATA_NOT_FOUND_REPLY, true)
+        }
+    }
+
+    // ------------------------------------------------------------------
     // v1.4 helpers
     // ------------------------------------------------------------------
 
@@ -624,6 +721,8 @@ class CommandEngine(
                 LaunchOutcome.LAUNCHED -> CommandResult(successReply, true)
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                LaunchOutcome.LOCKED ->
+                    CommandResult(LOCK_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
                     CommandResult("टाइमर नहीं लग पाया।", true)
             }
@@ -692,6 +791,8 @@ class CommandEngine(
                 LaunchOutcome.LAUNCHED -> CommandResult(successReply, true)
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                LaunchOutcome.LOCKED ->
+                    CommandResult(LOCK_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
                     CommandResult("ब्राउज़र नहीं खुल पाया।", true)
             }
@@ -784,6 +885,8 @@ class CommandEngine(
                     CommandResult("${target.displayName} खोल दिया है।", true)
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
+                LaunchOutcome.LOCKED ->
+                    CommandResult(LOCK_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
                     CommandResult(
                         "${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।",
@@ -881,6 +984,30 @@ class CommandEngine(
                 "ऐप खोलकर नीचे वाला बटन दबाइए।"
 
         /**
+         * v16: phone lock ho to background se koi app nahi khulta —
+         * Maya pehle unlock karne ko kehti hai (v15 wali Devanagari
+         * shaili). Ye jawab handled=true ke saath jata hai, isliye
+         * wake service me na retry lagta hai, na chup vida.
+         */
+        const val LOCK_REPLY =
+            "फ़ोन लॉक है, पहले अनलॉक कर लो, फिर खोल देती हूँ।"
+
+        /**
+         * v17: mobile data ke liye Accessibility service chalu
+         * na ho to Maya ka jawab (Devanagari, v15 wali shaili).
+         */
+        const val DATA_NEEDS_ACCESSIBILITY_REPLY =
+            "पहले ऐप खोलकर Accessibility ऑन कर लो, " +
+                "फिर मैं डेटा ऑन कर पाऊँगी।"
+
+        /** v17: data tile na mile / panel na khule to sachha jawab. */
+        const val DATA_NOT_FOUND_REPLY =
+            "डेटा वाला बटन मुझे नहीं मिला, एक बार ख़ुद देख लो।"
+
+        /** v17: Accessibility toggle ke natije ka adhiktam intezaar. */
+        const val DATA_COMMAND_WAIT_MS = 4_000L
+
+        /**
          * v1.5: casual boli ke bhare shabd (sirf poore token ki
          * tarah milne par hat-te hain). Set jaan-boojh kar chhota
          * hai — zyada bada set asli shabdon ko kha sakta hai.
@@ -910,6 +1037,8 @@ class CommandEngine(
             "play", "pause", "mute", "roko", "band", "chalao",
             "tez", "kam", "badhao", "agla", "pichla", "next",
             "previous", "awaaz", "full", "max",
+            // v17: mobile data ("deta" -> "data" jaise sudhaar)
+            "data", "mobile",
             // Devanagari (normalize me na hone wale galat-sune roop)
             "यूट्यूब", "फेसबुक", "व्हाट्सएप", "टेलीग्राम", "कैमरा",
             "क्रोम", "सेटिंग्स", "टॉर्च", "बैटरी", "वॉल्यूम",
