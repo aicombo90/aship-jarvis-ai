@@ -1,201 +1,217 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- v22: jad (root) ab ScrollView hai. Pehle poora content ek
+     bina-scroll wale LinearLayout me tha — screen se lamba
+     content neeche kat jata tha aur Gemini key wala hissa
+     kabhi pahunch me hi nahi aata tha. Ab saare hisse ek hi
+     scroll hone wale dabbe ke andar hain, aur Gemini key ka
+     hissa Mode ke turant baad upar rakh diya gaya hai. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="20dp">
+    android:fillViewport="true">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="ASHIP JARVIS AI"
-        android:textSize="24sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/statusText"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Status: taiyaar ho raha hai..."
-        android:textSize="13sp" />
+        android:orientation="vertical"
+        android:padding="20dp">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Mode:"
-        android:textStyle="bold" />
-
-    <RadioGroup
-        android:id="@+id/modeGroup"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <RadioButton
-            android:id="@+id/modeOffline"
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Offline" />
+            android:text="ASHIP JARVIS AI"
+            android:textSize="24sp"
+            android:textStyle="bold" />
 
-        <RadioButton
-            android:id="@+id/modeOnline"
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Status: taiyaar ho raha hai..."
+            android:textSize="13sp" />
+
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Online" />
+            android:layout_marginTop="16dp"
+            android:text="Mode:"
+            android:textStyle="bold" />
 
-        <RadioButton
-            android:id="@+id/modeAuto"
+        <RadioGroup
+            android:id="@+id/modeGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/modeOffline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Offline" />
+
+            <RadioButton
+                android:id="@+id/modeOnline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Online" />
+
+            <RadioButton
+                android:id="@+id/modeAuto"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Auto" />
+        </RadioGroup>
+
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Auto" />
-    </RadioGroup>
+            android:layout_marginTop="24dp"
+            android:text="Maya ki online buddhi (Gemini API key)"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
-    <Button
-        android:id="@+id/micButton"
-        android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:layout_marginTop="16dp"
-        android:text="🎤 Tap to speak"
-        android:textSize="18sp" />
+        <TextView
+            android:id="@+id/geminiKeyStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Key: nahi hai"
+            android:textSize="13sp" />
 
-    <TextView
-        android:id="@+id/recognizedText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Aapne kaha: —"
-        android:textSize="15sp" />
+        <EditText
+            android:id="@+id/geminiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/input_box_bg"
+            android:hint="Yahan apna Gemini API key likho"
+            android:importantForAutofill="no"
+            android:inputType="textPassword"
+            android:maxLines="1"
+            android:minHeight="52dp"
+            android:padding="12dp" />
 
-    <TextView
-        android:id="@+id/responseText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Jarvis: —"
-        android:textSize="15sp" />
+        <Button
+            android:id="@+id/geminiKeySaveButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="KEY SAVE KARO" />
 
-    <EditText
-        android:id="@+id/commandInput"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
-        android:hint="Ya yahan command type kijiye (e.g. telegram kholo, battery kitna hai)"
-        android:importantForAutofill="no"
-        android:inputType="text"
-        android:maxLines="1" />
+        <Button
+            android:id="@+id/geminiKeyClearButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="KEY HATAO" />
 
-    <Button
-        android:id="@+id/sendButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Send command" />
+        <Button
+            android:id="@+id/micButton"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginTop="16dp"
+            android:text="🎤 Tap to speak"
+            android:textSize="18sp" />
 
-    <Button
-        android:id="@+id/downloadModelButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Download Hindi offline voice model" />
+        <TextView
+            android:id="@+id/recognizedText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Aapne kaha: —"
+            android:textSize="15sp" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="Background sunna (wake word)"
-        android:textSize="16sp"
-        android:textStyle="bold" />
+        <TextView
+            android:id="@+id/responseText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Jarvis: —"
+            android:textSize="15sp" />
 
-    <TextView
-        android:id="@+id/wakeStatusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="Background sunna band hai."
-        android:textSize="13sp" />
+        <EditText
+            android:id="@+id/commandInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:hint="Ya yahan command type kijiye (e.g. telegram kholo, battery kitna hai)"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1" />
 
-    <Button
-        android:id="@+id/wakeStartButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:text="▶ Background sunna START karo" />
+        <Button
+            android:id="@+id/sendButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Send command" />
 
-    <Button
-        android:id="@+id/wakeStopButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="⏹ Background sunna BAND karo" />
+        <Button
+            android:id="@+id/downloadModelButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Download Hindi offline voice model" />
 
-    <Button
-        android:id="@+id/batteryButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Background sunna (wake word)"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/accessibilityStatusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:text="Accessibility: নেই"
-        android:textSize="13sp" />
+        <TextView
+            android:id="@+id/wakeStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Background sunna band hai."
+            android:textSize="13sp" />
 
-    <Button
-        android:id="@+id/accessibilityButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Accessibility চালু করো" />
+        <Button
+            android:id="@+id/wakeStartButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="▶ Background sunna START karo" />
 
-    <Button
-        android:id="@+id/overlayPermissionButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
+        <Button
+            android:id="@+id/wakeStopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⏹ Background sunna BAND karo" />
 
-    <Button
-        android:id="@+id/updateCheckButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="UPDATE CHECK KARO" />
+        <Button
+            android:id="@+id/batteryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="Maya ki online buddhi (Gemini API key)"
-        android:textSize="16sp"
-        android:textStyle="bold" />
+        <TextView
+            android:id="@+id/accessibilityStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Accessibility: নেই"
+            android:textSize="13sp" />
 
-    <TextView
-        android:id="@+id/geminiKeyStatusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="Key: nahi hai"
-        android:textSize="13sp" />
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Accessibility চালু করো" />
 
-    <EditText
-        android:id="@+id/geminiKeyInput"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:hint="Yahan apna Gemini API key likho"
-        android:importantForAutofill="no"
-        android:inputType="textPassword"
-        android:maxLines="1" />
+        <Button
+            android:id="@+id/overlayPermissionButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
 
-    <Button
-        android:id="@+id/geminiKeySaveButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="KEY SAVE KARO" />
+        <Button
+            android:id="@+id/updateCheckButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="UPDATE CHECK KARO" />
 
-    <Button
-        android:id="@+id/geminiKeyClearButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="KEY HATAO" />
+    </LinearLayout>
 
-</LinearLayout>
+</ScrollView>
