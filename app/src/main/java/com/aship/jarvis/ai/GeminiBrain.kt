@@ -46,6 +46,15 @@ import java.util.concurrent.Executors
  * "jarvis_diag" me band hoti hai, jo app ki screen par
  * dikhti hai. Key, sawal aur jawab report me KABHI nahi
  * aate.
+ *
+ * v25: ye file ab sirf TRANSPORT aur key ka bhandaar hai —
+ * modelon ki kataar, timeout, koshish-report aur key ki
+ * raksha yahin rehti hai. Uske upar chalne wala AGENT
+ * (protocol, kadmon ki kataar, auzaar bulana) AgentBrain
+ * me hai; woh har round ke liye [requestAgentRound] se
+ * ek kachhi koshish maangta hai — kataar aur report ke
+ * niyam chat walon se ek hi hain, isliye "Online koshish"
+ * wali report agent ke round bhi dikhati hai.
  */
 object GeminiBrain {
 
@@ -155,6 +164,25 @@ object GeminiBrain {
         userText: String
     ): String? {
         val body = buildRequestBody(history, userText).toString()
+        return requestWithChain(context, key, body)
+    }
+
+    /**
+     * v25: [MODELS] ki kataar par ek taiyaar-shuda body
+     * chalao — chat aur agent dono raaston ki ek hi jagah,
+     * taaki kataar ke niyam (404/503/khaali par agla model,
+     * 400/401/403 par rok, net gadbad par bhi ek mauka) aur
+     * koshish-report kabhi alag na hon. Kataar khatm hone
+     * par report "jarvis_diag" me band hoti hai (v24 wala
+     * [saveLastAttempt]) aur pehla safal jawab laut-ta hai;
+     * koi safal na ho to null. (v24 tak ye loop requestReply
+     * ke andar tha — harkat byte-for-byte wahi hai.)
+     */
+    private fun requestWithChain(
+        context: Context,
+        key: String,
+        body: String
+    ): String? {
         val attempts = mutableListOf<String>()
         var result: String? = null
         for (model in MODELS) {
@@ -176,6 +204,73 @@ object GeminiBrain {
         }
         saveLastAttempt(context, attempts.joinToString(" | "))
         return result
+    }
+
+    // ------------------------------------------------------------------
+    // v25: agent ke round — AgentBrain ke liye kaccha transport
+    // ------------------------------------------------------------------
+
+    /**
+     * Agent ke ek round ki koshish: di gayi [systemInstruction]
+     * (agent wala protocol) aur poori [contents] baatchit
+     * (user/model/tool-result wale turn, kram se) par model
+     * kataar ki ek chaal. Model ka kaccha jawab-text laut-ta
+     * hai (protocol JSON hone ki aasha hai — use samajhna
+     * AgentBrain ka kaam hai); key na ho ya poori kataar
+     * fail ho jaye to null.
+     *
+     * Ye BANDHA HUA (sync) call hai — bulane wale ke apne
+     * background thread se hi bulana (AgentBrain apne
+     * executor se bulata hai). Kataar, timeout aur
+     * "Online koshish" report chat walon se ek hi hai.
+     */
+    internal fun requestAgentRound(
+        context: Context,
+        systemInstruction: String,
+        contents: List<Pair<String, String>>
+    ): String? {
+        val appContext = context.applicationContext
+        val key = getKey(appContext) ?: return null
+        val body = buildAgentRequestBody(systemInstruction, contents).toString()
+        return requestWithChain(appContext, key, body)
+    }
+
+    /**
+     * Agent wali body: [contents] ke saare turn kram se,
+     * upar di gayi system instruction. Aakar (shape) chat
+     * wali body se ek hi hai — isliye [buildRequestBody]
+     * bhi ab isi par bana hai.
+     */
+    private fun buildAgentRequestBody(
+        systemInstruction: String,
+        contents: List<Pair<String, String>>
+    ): JSONObject {
+        val turns = JSONArray()
+        for ((role, text) in contents) {
+            turns.put(
+                JSONObject()
+                    .put("role", role)
+                    .put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", text))
+                    )
+            )
+        }
+        return JSONObject()
+            .put(
+                "system_instruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(JSONObject().put("text", systemInstruction))
+                )
+            )
+            .put("contents", turns)
+            .put(
+                "generationConfig",
+                JSONObject()
+                    .put("maxOutputTokens", MAX_OUTPUT_TOKENS)
+                    .put("temperature", TEMPERATURE)
+            )
     }
 
     /**
@@ -245,45 +340,17 @@ object GeminiBrain {
         }
     }
 
+    /**
+     * Chat wali body — v25 se [buildAgentRequestBody] par
+     * hi banti hai: persona wali instruction ke saath
+     * history ke turn aur aakhir me naya user turn. Banti
+     * hui JSON pehle wali se ek hi hai.
+     */
     private fun buildRequestBody(
         history: List<Pair<String, String>>,
         userText: String
-    ): JSONObject {
-        val contents = JSONArray()
-        for ((role, text) in history) {
-            contents.put(
-                JSONObject()
-                    .put("role", role)
-                    .put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", text))
-                    )
-            )
-        }
-        contents.put(
-            JSONObject()
-                .put("role", "user")
-                .put(
-                    "parts",
-                    JSONArray().put(JSONObject().put("text", userText))
-                )
-        )
-        return JSONObject()
-            .put(
-                "system_instruction",
-                JSONObject().put(
-                    "parts",
-                    JSONArray().put(JSONObject().put("text", MAYA_PERSONA))
-                )
-            )
-            .put("contents", contents)
-            .put(
-                "generationConfig",
-                JSONObject()
-                    .put("maxOutputTokens", MAX_OUTPUT_TOKENS)
-                    .put("temperature", TEMPERATURE)
-            )
-    }
+    ): JSONObject =
+        buildAgentRequestBody(MAYA_PERSONA, history + ("user" to userText))
 
     /** candidates[0] ke saare text tukde jodkar ek jawab. Khaali ho to null. */
     private fun parseReply(responseText: String): String? {
