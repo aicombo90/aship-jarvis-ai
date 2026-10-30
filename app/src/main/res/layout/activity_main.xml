@@ -160,4 +160,42 @@
         android:layout_height="wrap_content"
         android:text="UPDATE CHECK KARO" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Maya ki online buddhi (Gemini API key)"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/geminiKeyStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="Key: nahi hai"
+        android:textSize="13sp" />
+
+    <EditText
+        android:id="@+id/geminiKeyInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="Yahan apna Gemini API key likho"
+        android:importantForAutofill="no"
+        android:inputType="textPassword"
+        android:maxLines="1" />
+
+    <Button
+        android:id="@+id/geminiKeySaveButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="KEY SAVE KARO" />
+
+    <Button
+        android:id="@+id/geminiKeyClearButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="KEY HATAO" />
+
 </LinearLayout>
