@@ -69,7 +69,9 @@ object PhoneActions {
 
     private val PACKAGE_FALLBACKS: Map<String, List<String>> = mapOf(
         "com.facebook.katana" to listOf("com.facebook.katana", "com.facebook.lite"),
-        "com.whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b")
+        "com.whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+        "com.google.android.dialer" to
+            listOf("com.google.android.dialer", "com.android.dialer")
     )
 
     /** Opens the camera in still-photo capture mode. */

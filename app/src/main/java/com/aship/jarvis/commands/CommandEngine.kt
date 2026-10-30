@@ -71,7 +71,11 @@ class CommandEngine(
         // wala fallback hi rahega (galat app khulne ka dar nahi).
         val corrected = fuzzyCorrect(text)
         if (corrected != text) {
-            val second = dispatch(corrected)
+            // v1.10: fuzzy sudhaar Devanagari roop de sakta hai
+            // (jaise "इंस्टग्राम" -> "इंस्टाग्राम") — dobara
+            // normalize karo taaki woh Latin keyword ban kar
+            // fixed list se mile.
+            val second = dispatch(stripFillers(normalize(corrected)))
             if (second.handled) return second
         }
         return first
@@ -300,10 +304,16 @@ class CommandEngine(
         // pehle wale raaste se khulenge. Yahan launcher ki saari apps ke
         // label se mila kar dhoondhte hain ("telegram kholo",
         // "mx player kholo").
-        if (text.contains("kholo") || text.contains("khol do") || hasWord(text, "open")) {
+        // v1.10: nanga "khol" bhi chalega ("instagram khol") —
+        // contains("khol") me kholo/khol/khol do sab aa jate hain.
+        if (text.contains("khol") || hasWord(text, "open")) {
             val spokenName = extractAppName(text)
             if (spokenName.isNotEmpty()) {
+                // v1.10: seedha label na mile to galat-suna naam
+                // sudhar kar dobara dhoondho ("इंस्टग्राम" ->
+                // "इंस्टाग्राम" -> "instagram" -> label match).
                 val match = findLauncherApp(spokenName)
+                    ?: findLauncherApp(stripFillers(normalize(fuzzyCorrect(spokenName))))
                 return if (match != null) {
                     openTarget(
                         AppTarget(match.label, TargetKind.PACKAGE, match.packageName)
@@ -432,7 +442,25 @@ class CommandEngine(
             // hai ("फेस बुक") — bina space wale roop upar hain, ye
             // space wale roop yahan mil jayein.
             "फेस बुक" to "facebook", "यू ट्यूब" to "youtube",
-            "यू टुब" to "youtube"
+            "यू टुब" to "youtube",
+            // v1.10: naye apps ke Devanagari/Bangla roop + nanga "khol".
+            // "खोल" ANT me isliye: "खोलो" pehle kha jaye, warna
+            // "खोलो" ka "खोल" hissa badal kar "kholो" ban jayega.
+            "इंस्टाग्राम" to "instagram", "ইনস্টাগ্রাম" to "instagram",
+            "इंस्टा" to "insta", "ইনস্টা" to "insta",
+            "जीमेल" to "gmail", "জিমেইল" to "gmail",
+            "मैप्स" to "maps", "ম্যাপস" to "maps",
+            "प्ले स्टोर" to "play store", "প্লে স্টোর" to "play store",
+            "फोटो" to "photos", "ফটো" to "photos",
+            "फ़ोनपे" to "phonepe", "ফোনপে" to "phonepe",
+            "पेटीएम" to "paytm", "পেটিএম" to "paytm",
+            "स्पॉटिफाई" to "spotify", "স্পটিফাই" to "spotify",
+            "स्नैपचैट" to "snapchat", "স্ন্যাপচ্যাট" to "snapchat",
+            "मैसेज" to "messages", "মেসেজ" to "messages",
+            "कैलकुलेटर" to "calculator", "ক্যালকুলেটর" to "calculator",
+            "घड़ी" to "clock", "ঘড়ি" to "clock",
+            "गूगल पे" to "gpay", "গুগল পে" to "gpay",
+            "खोल" to "khol", "খোল" to "khol"
         )
         for ((from, to) in words) {
             t = t.replace(from, to)
@@ -807,6 +835,28 @@ class CommandEngine(
         "youtube" to AppTarget("YouTube", TargetKind.PACKAGE, "com.google.android.youtube"),
         "facebook" to AppTarget("Facebook", TargetKind.PACKAGE, "com.facebook.katana"),
         "whatsapp" to AppTarget("WhatsApp", TargetKind.PACKAGE, "com.whatsapp"),
+        // v1.10: Instagram + aam apps — sirf naam bolne se bhi
+        // khulenge, jaise Facebook/YouTube khulte hain. ORDER:
+        // "phonepe" "phone" se PEHLE, warna "phonepe" me chhupa
+        // "phone" dialer khol dega.
+        "instagram" to AppTarget("Instagram", TargetKind.PACKAGE, "com.instagram.android"),
+        "insta" to AppTarget("Instagram", TargetKind.PACKAGE, "com.instagram.android"),
+        "telegram" to AppTarget("Telegram", TargetKind.PACKAGE, "org.telegram.messenger"),
+        "gmail" to AppTarget("Gmail", TargetKind.PACKAGE, "com.google.android.gm"),
+        "maps" to AppTarget("Google Maps", TargetKind.PACKAGE, "com.google.android.apps.maps"),
+        "play store" to AppTarget("Play Store", TargetKind.PACKAGE, "com.android.vending"),
+        "photos" to AppTarget("Photos", TargetKind.PACKAGE, "com.google.android.apps.photos"),
+        "gallery" to AppTarget("Photos", TargetKind.PACKAGE, "com.google.android.apps.photos"),
+        "phonepe" to AppTarget("PhonePe", TargetKind.PACKAGE, "com.phonepe.app"),
+        "phone" to AppTarget("Phone", TargetKind.PACKAGE, "com.google.android.dialer"),
+        "messages" to AppTarget("Messages", TargetKind.PACKAGE, "com.google.android.apps.messaging"),
+        "clock" to AppTarget("Clock", TargetKind.PACKAGE, "com.google.android.deskclock"),
+        "calculator" to AppTarget("Calculator", TargetKind.PACKAGE, "com.google.android.calculator"),
+        "spotify" to AppTarget("Spotify", TargetKind.PACKAGE, "com.spotify.music"),
+        "snapchat" to AppTarget("Snapchat", TargetKind.PACKAGE, "com.snapchat.android"),
+        "mx player" to AppTarget("MX Player", TargetKind.PACKAGE, "com.mxtech.videoplayer.ad"),
+        "paytm" to AppTarget("Paytm", TargetKind.PACKAGE, "net.one97.paytm"),
+        "gpay" to AppTarget("Google Pay", TargetKind.PACKAGE, "com.google.android.apps.nbu.paisa.user"),
         "camera" to AppTarget("Camera", TargetKind.CAMERA),
         "chrome" to AppTarget("Chrome", TargetKind.PACKAGE, "com.android.chrome"),
         "settings" to AppTarget("Settings", TargetKind.SETTINGS),
@@ -860,7 +910,19 @@ class CommandEngine(
             "ক্যামেরা", "ক্রোম", "সেটিংস", "টর্চ", "ব্যাটারি",
             "ভলিউম", "গান", "অ্যালার্ম", "টাইমার", "গুগল",
             "সার্চ", "দেখাও", "খোলো", "সময়", "বাজে", "তারিখ",
-            "চালাও", "থামাও", "বন্ধ", "পরের", "মিউট", "আওয়াজ"
+            "চালাও", "থামাও", "বন্ধ", "পরের", "মিউট", "আওয়াজ",
+            // v1.10: naye apps (Latin + Devanagari/Bangla roop)
+            "instagram", "insta", "telegram", "gmail", "maps",
+            "store", "photos", "gallery", "phonepe", "phone",
+            "messages", "clock", "calculator", "spotify", "snapchat",
+            "paytm", "gpay",
+            "इंस्टाग्राम", "ইনস্টাগ্রাম", "इंस्टा", "ইনস্টা",
+            "टेलीग्राम", "টেলিগ্রাম", "जीमेल", "জিমেইল",
+            "मैप्स", "ম্যাপস", "फोटो", "ফটো",
+            "फ़ोनपे", "ফোনপে", "पेटीएम", "পেটিএম",
+            "स्पॉटिफाई", "স্পটিফাই", "स्नैपचैट", "স্ন্যাপচ্যাট",
+            "मैसेज", "মেসেজ", "कैलकुलेटर", "ক্যালকুলেটর",
+            "घड़ी", "ঘড়ি"
         )
 
         /** v1.5: app ke naam se pehle/peeche aane wale bandhe shabd. */

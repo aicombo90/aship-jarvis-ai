@@ -584,7 +584,16 @@ class JarvisWakeService : Service() {
         // callback fired by stop() is ignored.
         state = State.REPLY
         stopCommandSession()
-        val result = commandEngine.handle(text)
+        val rawResult = commandEngine.handle(text)
+        // v1.10: kholne ki koshish thi par system me nahi hai —
+        // chup band hone ke bajay saaf bol do ki nahi kar sakte.
+        // Bina verb wali aawazein (shor/TV) pehle ki tarah chup
+        // rahengi, taaki background bak-bak na kare.
+        val result = if (!rawResult.handled && looksLikeOpenAttempt(text)) {
+            CommandResult(CANT_DO_REPLY, true)
+        } else {
+            rawResult
+        }
         if (!result.handled) {
             // Bug-2 fix: in background mode an unrecognized utterance
             // is almost always room noise, TV, or someone else talking.
@@ -604,6 +613,12 @@ class JarvisWakeService : Service() {
         // aur gola jawab ke dauraan chamak (shimmer) mode me rahe.
         orbOverlay.setReply(result.responseText)
     }
+
+    /** "X kholo" jaisi koshish — kisi bhi script me open-verb ho. */
+    private fun looksLikeOpenAttempt(text: String): Boolean =
+        text.contains("khol", ignoreCase = true) ||
+            text.contains("open", ignoreCase = true) ||
+            text.contains("खोल") || text.contains("খোল")
 
     // ------------------------------------------------------------------
     // Timers (main looper; each re-checks state on the executor)
@@ -1032,6 +1047,9 @@ class JarvisWakeService : Service() {
         private const val SAMPLE_RATE = 16000.0f
 
         private const val ACK_TEXT = "Haan, boliye"
+
+        /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
+        const val CANT_DO_REPLY = "Maaf kijiye, abhi main yeh kaam nahi kar sakta hu."
         private const val COMMAND_SILENCE_TIMEOUT_MS = 2_500L
         private const val COMMAND_HARD_CAP_MS = 7_000L
         private const val COMMAND_WATCHDOG_TICK_MS = 400L
