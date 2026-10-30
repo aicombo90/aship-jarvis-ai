@@ -99,6 +99,15 @@ import java.util.concurrent.TimeUnit
  * likha hua. Bhejna woh KHUD nahi dabata — send
  * wala button hamesha user khud dabata hai; koi
  * nayi permission nahi lagi.
+ *
+ * v31: teen yaad wale auzaar — remember_fact,
+ * recall_facts, forget_fact. User jo baatein "yaad
+ * rakho" bolkar bandhta hai woh [MayaMemory] me
+ * sirf phone par rehti hain; mastishk unhe har
+ * baatchit me sandarbh ke roop me pata hai
+ * (AgentBrain dekho) aur inhi auzaaron se jodta,
+ * ginata aur bhulta hai. Yaad ka text reporton
+ * (jarvis_diag) me kabhi nahi jata.
  */
 class AgentTools(
     private val context: Context,
@@ -140,12 +149,16 @@ class AgentTools(
             args.optString("name").trim(),
             args.optString("message").trim()
         )
+        "remember_fact" -> rememberFact(args.optString("fact").trim())
+        "recall_facts" -> recallFacts()
+        "forget_fact" -> forgetFact(args.optString("match").trim())
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
                 "get_battery, get_network, set_timer, set_alarm, " +
-                "call_person, whatsapp_message."
+                "call_person, whatsapp_message, remember_fact, " +
+                "recall_facts, forget_fact."
         )
     }
 
@@ -895,6 +908,112 @@ class AgentTools(
             digits.length == 10 -> "91" + digits
             else -> digits
         }
+    }
+
+    /**
+     * v31: Ek baat hamesha ke liye yaad bandho
+     * ([MayaMemory] — sirf phone par). Baat bilkul
+     * waisi hi pehle se bandhi ho to dobara NAHI
+     * jodti, natija usi ka zikr karta hai. Yaad ki
+     * seema ([MayaMemory.MAX_FACTS]) poori ho to
+     * sabse purani baat hat-ti hai — natija woh bhi
+     * saaf kehta hai.
+     */
+    private fun rememberFact(fact: String): ToolResult {
+        val clean = MayaMemory.cleanFact(fact)
+        if (clean.isEmpty()) {
+            return ToolResult(
+                false,
+                "FAILED — yaad rakhne wali baat khaali " +
+                    "hai; user se poochho kya yaad rakhna hai."
+            )
+        }
+        val facts = MayaMemory.readFacts(context).toMutableList()
+        if (facts.any { it.equals(clean, ignoreCase = true) }) {
+            return ToolResult(
+                true,
+                "Ye baat pehle se yaad hai: '$clean' " +
+                    "(kul ${facts.size} baatein yaad hain)."
+            )
+        }
+        val droppedOldest = facts.size >= MayaMemory.MAX_FACTS
+        facts.add(clean)
+        MayaMemory.writeFacts(context, facts)
+        val total = minOf(facts.size, MayaMemory.MAX_FACTS)
+        val dropNote = if (droppedOldest) {
+            " Yaad ki seema (${MayaMemory.MAX_FACTS}) poori " +
+                "ho gayi thi, isliye sabse purani baat hata " +
+                "di gayi hai."
+        } else {
+            ""
+        }
+        return ToolResult(
+            true,
+            "Yaad rakh liya: '$clean' " +
+                "(kul $total baatein yaad hain)." + dropNote
+        )
+    }
+
+    /**
+     * v31: Bandhi hui saari baatein ginkar lautao —
+     * mastishk unhe user ko ginakar sunata hai. Yaad
+     * khaali ho to natija wahi saaf kehta hai.
+     */
+    private fun recallFacts(): ToolResult {
+        val facts = MayaMemory.readFacts(context)
+        if (facts.isEmpty()) {
+            return ToolResult(
+                true,
+                "abhi tak koi baat yaad nahi rakhi gayi hai."
+            )
+        }
+        val list = facts.mapIndexed { index, fact ->
+            "${index + 1}) $fact"
+        }.joinToString("\n")
+        return ToolResult(
+            true,
+            "Yaad rakhi hui baatein (kul ${facts.size}):\n$list"
+        )
+    }
+
+    /**
+     * v31: [match] shabd/ansh se milti-julti HAR
+     * bandhi baat yaad se hatao (bade-chhote aksharon
+     * ka bhed nahi). Natija kehta hai kitni hatayi
+     * gayin; ek bhi na mile to imaandaar "nahi mili"
+     * — kuch nahi hataya jata. Match khaali ho to
+     * kuch NAHI hat-ta (galti se poori yaad saaf
+     * hone se bachav).
+     */
+    private fun forgetFact(match: String): ToolResult {
+        val needle = match.trim()
+        if (needle.isEmpty()) {
+            return ToolResult(
+                false,
+                "FAILED — bhoolne ke liye koi shabd ya " +
+                    "ansh nahi diya gaya; user se poochho " +
+                    "kaun si baat bhoolni hai."
+            )
+        }
+        val facts = MayaMemory.readFacts(context)
+        val kept = facts.filter {
+            !it.contains(needle, ignoreCase = true)
+        }
+        val removed = facts.size - kept.size
+        if (removed == 0) {
+            return ToolResult(
+                true,
+                "'$needle' se milti koi baat yaad me " +
+                    "nahi mili — kuch nahi hataya gaya."
+            )
+        }
+        MayaMemory.writeFacts(context, kept)
+        return ToolResult(
+            true,
+            "'$needle' se milti $removed baat(en) bhool " +
+                "di gayi (ab kul ${kept.size} baatein " +
+                "yaad hain)."
+        )
     }
 
     /**
