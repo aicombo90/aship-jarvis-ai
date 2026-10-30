@@ -60,7 +60,7 @@ class CommandEngine(
     fun handle(rawText: String): CommandResult {
         val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
         if (text.isEmpty()) {
-            return CommandResult("Kuch sunai nahi diya, phir se boliye.", false)
+            return CommandResult("कुछ सुनाई नहीं दिया, फिर से बोलिए।", false)
         }
         val first = dispatch(text)
         if (first.handled) return first
@@ -157,12 +157,12 @@ class CommandEngine(
                     LaunchOutcome.PERMISSION_NEEDED ->
                         CommandResult(OVERLAY_PERMISSION_REPLY, true)
                     LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
-                        CommandResult("Alarm app nahi khul paya.", true)
+                        CommandResult("अलार्म ऐप नहीं खुल पाया।", true)
                 }
             } else if (PhoneActions.setAlarm(context, hour, minute)) {
                 alarmOpenedResult(hour, minute)
             } else {
-                CommandResult("Alarm app nahi khul paya.", true)
+                CommandResult("अलार्म ऐप नहीं खुल पाया।", true)
             }
         }
 
@@ -178,9 +178,9 @@ class CommandEngine(
             val turnOff = text.contains("off") || text.contains("band")
             val ok = PhoneActions.setTorch(context, !turnOff)
             return if (ok) {
-                CommandResult(if (turnOff) "Torch band kar diya." else "Torch jala diya.", true)
+                CommandResult(if (turnOff) "टॉर्च बंद कर दिया।" else "टॉर्च जला दिया।", true)
             } else {
-                CommandResult("Is phone par torch control nahi ho paya.", true)
+                CommandResult("इस फ़ोन पर टॉर्च कंट्रोल नहीं हो पाया।", true)
             }
         }
 
@@ -188,14 +188,14 @@ class CommandEngine(
         if (text.contains("battery")) {
             val status = PhoneActions.batteryStatus(context)
             return if (status == null) {
-                CommandResult("Battery ki jaankari abhi nahi mil payi.", true)
+                CommandResult("बैटरी की जानकारी अभी नहीं मिल पाई।", true)
             } else {
                 val (percent, charging) = status
                 CommandResult(
                     if (charging) {
-                        "Battery $percent% hai aur charging ho rahi hai."
+                        "बैटरी $percent% है और चार्जिंग हो रही है।"
                     } else {
-                        "Battery $percent% hai."
+                        "बैटरी $percent% है।"
                     },
                     true
                 )
@@ -224,7 +224,7 @@ class CommandEngine(
             } else {
                 openWebUrl(
                     "https://www.google.com/search?q=" + URLEncoder.encode(query, "UTF-8"),
-                    "Google par '$query' search kar diya hai."
+                    "Google पर '$query' सर्च कर दिया है।"
                 )
             }
         }
@@ -240,7 +240,7 @@ class CommandEngine(
                 return openWebUrl(
                     "https://www.youtube.com/results?search_query=" +
                         URLEncoder.encode(query, "UTF-8"),
-                    "YouTube par '$query' search kar diya hai."
+                    "YouTube पर '$query' सर्च कर दिया है।"
                 )
             }
         }
@@ -265,22 +265,22 @@ class CommandEngine(
                 text.contains("agla") || text.contains("next") ->
                     mediaResult(
                         PhoneActions.mediaNext(context),
-                        "Agla gaana chala diya hai."
+                        "अगला गाना चला दिया है।"
                     )
                 text.contains("pichla") || text.contains("previous") ->
                     mediaResult(
                         PhoneActions.mediaPrevious(context),
-                        "Pichla gaana chala diya hai."
+                        "पिछला गाना चला दिया है।"
                     )
                 text.contains("pause") || text.contains("roko") || text.contains("band") ->
                     mediaResult(
                         PhoneActions.mediaPause(context),
-                        "Gaana rok diya hai."
+                        "गाना रोक दिया है।"
                     )
                 else ->
                     mediaResult(
                         PhoneActions.mediaPlay(context),
-                        "Gaana chala diya hai."
+                        "गाना चला दिया है।"
                     )
             }
         }
@@ -290,13 +290,13 @@ class CommandEngine(
             text.contains("baje hain") || text.contains("baj rahe")
         ) {
             val time = SimpleDateFormat("h:mm a", Locale.US).format(Date())
-            return CommandResult("Abhi samay hai $time.", true)
+            return CommandResult("अभी समय है $time।", true)
         }
 
         // --- Date -----------------------------------------------------------
         if (text.contains("date") || text.contains("tarikh") || text.contains("taarikh")) {
             val date = SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US).format(Date())
-            return CommandResult("Aaj ki date hai $date.", true)
+            return CommandResult("आज की तारीख़ है $date।", true)
         }
 
         // --- Koi bhi app naam bolkar kholo (v1.4) ------------------------------
@@ -320,7 +320,7 @@ class CommandEngine(
                     )
                 } else {
                     CommandResult(
-                        "'$spokenName' naam ki app is phone me nahi mili.",
+                        "'$spokenName' नाम की ऐप इस फ़ोन में नहीं मिली।",
                         true
                     )
                 }
@@ -336,20 +336,20 @@ class CommandEngine(
             text.contains("तुम कौन हो") || text.contains("तुम्हारा नाम") ||
             text.contains("তুমি কে") || text.contains("তোমার নাম")
         ) {
-            return CommandResult("Mera naam Maya hai — aapki apni Maya.", true)
+            return CommandResult("मेरा नाम माया है — आपकी अपनी माया।", true)
         }
 
         // --- Small talk -----------------------------------------------------
         if (text.contains("kaise ho")) {
-            return CommandResult("Main bilkul theek hoon. Aap boliye, kya seva karun?", true)
+            return CommandResult("मैं बिल्कुल ठीक हूँ। आप बोलिए, क्या सेवा करूँ?", true)
         }
         if (text.contains("thank")) {
-            return CommandResult("Aapka swagat hai!", true)
+            return CommandResult("आपका स्वागत है!", true)
         }
         if (text.contains("namaste") || text.contains("hello") ||
             text.contains("hey jarvis") || text.contains("hi jarvis") || text == "hi"
         ) {
-            return CommandResult("Namaste! Main sun raha hoon. Boliye, kya karna hai?", true)
+            return CommandResult("नमस्ते! मैं सुन रहा हूँ। बोलिए, क्या करना है?", true)
         }
 
         // --- Token-containment routing (v1.5) --------------------------------
@@ -361,8 +361,8 @@ class CommandEngine(
 
         // --- Fallback ---------------------------------------------------------
         return CommandResult(
-            "Ye kaam main abhi nahi kar sakta. " +
-                "Har update ke saath main naye kaam seekhta rahunga.",
+            "यह काम मैं अभी नहीं कर सकता। " +
+                "हर अपडेट के साथ मैं नए काम सीखता रहूँगा।",
             false
         )
     }
@@ -583,11 +583,11 @@ class CommandEngine(
     private fun alarmOpenedResult(hour: Int?, minute: Int?): CommandResult =
         if (hour != null) {
             CommandResult(
-                "Alarm screen khol diya hai, $hour bajkar ${minute ?: 0} minute par. Confirm kar dijiye.",
+                "अलार्म स्क्रीन खोल दिया है, $hour बजकर ${minute ?: 0} मिनट पर। कन्फ़र्म कर दीजिए।",
                 true
             )
         } else {
-            CommandResult("Alarm screen khol diya hai, time set karke confirm kar dijiye.", true)
+            CommandResult("अलार्म स्क्रीन खोल दिया है, समय सेट करके कन्फ़र्म कर दीजिए।", true)
         }
 
     // ------------------------------------------------------------------
@@ -600,7 +600,7 @@ class CommandEngine(
             """(\d+)\s*(ghante|ghanta|hours|hour|minutes|minute|min|seconds|second|sec)"""
         ).find(text)
             ?: return CommandResult(
-                "Kitne samay ka timer lagaun? Aise boliye: 5 minute ka timer lagao.",
+                "कितने समय का टाइमर लगाऊँ? ऐसे बोलिए: 5 मिनट का टाइमर लगाओ।",
                 true
             )
         val amount = match.groupValues[1].toInt()
@@ -611,26 +611,26 @@ class CommandEngine(
             else -> amount
         }
         if (totalSeconds <= 0) {
-            return CommandResult("Timer ka samay samajh nahi aaya.", true)
+            return CommandResult("टाइमर का समय समझ नहीं आया।", true)
         }
         val label = when {
-            totalSeconds % 3600 == 0 -> "${totalSeconds / 3600} ghante"
-            totalSeconds % 60 == 0 -> "${totalSeconds / 60} minute"
-            else -> "$totalSeconds second"
+            totalSeconds % 3600 == 0 -> "${totalSeconds / 3600} घंटे"
+            totalSeconds % 60 == 0 -> "${totalSeconds / 60} मिनट"
+            else -> "$totalSeconds सेकंड"
         }
-        val successReply = "$label ka timer laga diya hai."
+        val successReply = "$label का टाइमर लगा दिया है।"
         return if (fromBackgroundService) {
             when (PhoneActions.setTimerFromBackground(context, totalSeconds)) {
                 LaunchOutcome.LAUNCHED -> CommandResult(successReply, true)
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
-                    CommandResult("Timer nahi lag paya.", true)
+                    CommandResult("टाइमर नहीं लग पाया।", true)
             }
         } else if (PhoneActions.setTimer(context, totalSeconds)) {
             CommandResult(successReply, true)
         } else {
-            CommandResult("Timer nahi lag paya.", true)
+            CommandResult("टाइमर नहीं लग पाया।", true)
         }
     }
 
@@ -641,38 +641,38 @@ class CommandEngine(
         when {
             text.contains("full") || text.contains("max") -> {
                 done = PhoneActions.maximizeMusicVolume(context)
-                actionText = "Volume full kar diya hai."
+                actionText = "वॉल्यूम फुल कर दिया है।"
             }
             text.contains("mute") || text.contains("band") || text.contains("off") -> {
                 done = PhoneActions.muteMusicVolume(context)
-                actionText = "Volume band (mute) kar diya hai."
+                actionText = "वॉल्यूम बंद (म्यूट) कर दिया है।"
             }
             text.contains("badha") || text.contains("tez") ||
                 text.contains("zyada") || text.contains("increase") -> {
                 done = PhoneActions.raiseMusicVolume(context)
-                actionText = "Volume badha diya hai."
+                actionText = "वॉल्यूम बढ़ा दिया है।"
             }
             text.contains("kam") || text.contains("ghata") ||
                 text.contains("dheere") || text.contains("decrease") -> {
                 done = PhoneActions.lowerMusicVolume(context)
-                actionText = "Volume kam kar diya hai."
+                actionText = "वॉल्यूम कम कर दिया है।"
             }
             else -> {
                 // Sirf "volume" / "awaaz kitni hai" — haal bata do.
                 val percent = PhoneActions.musicVolumePercent(context)
                 return if (percent >= 0) {
-                    CommandResult("Volume abhi $percent% hai.", true)
+                    CommandResult("वॉल्यूम अभी $percent% है।", true)
                 } else {
-                    CommandResult("Volume ki jaankari nahi mil payi.", true)
+                    CommandResult("वॉल्यूम की जानकारी नहीं मिल पाई।", true)
                 }
             }
         }
         if (!done) {
-            return CommandResult("Volume control nahi ho paya.", true)
+            return CommandResult("वॉल्यूम कंट्रोल नहीं हो पाया।", true)
         }
         val percent = PhoneActions.musicVolumePercent(context)
         return if (percent >= 0) {
-            CommandResult("$actionText Ab volume $percent% hai.", true)
+            CommandResult("$actionText अब वॉल्यूम $percent% है।", true)
         } else {
             CommandResult(actionText, true)
         }
@@ -682,7 +682,7 @@ class CommandEngine(
         if (ok) {
             CommandResult(successReply, true)
         } else {
-            CommandResult("Media control nahi ho paya.", true)
+            CommandResult("मीडिया कंट्रोल नहीं हो पाया।", true)
         }
 
     /** Ek URL browser me kholo — background ho to overlay bridge se. */
@@ -693,12 +693,12 @@ class CommandEngine(
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
-                    CommandResult("Browser nahi khul paya.", true)
+                    CommandResult("ब्राउज़र नहीं खुल पाया।", true)
             }
         } else if (PhoneActions.openUrl(context, url)) {
             CommandResult(successReply, true)
         } else {
-            CommandResult("Browser nahi khul paya.", true)
+            CommandResult("ब्राउज़र नहीं खुल पाया।", true)
         }
     }
 
@@ -781,12 +781,12 @@ class CommandEngine(
             }
             return when (outcome) {
                 LaunchOutcome.LAUNCHED ->
-                    CommandResult("${target.displayName} khol diya hai.", true)
+                    CommandResult("${target.displayName} खोल दिया है।", true)
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
                 LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
                     CommandResult(
-                        "${target.displayName} is phone me nahi mila ya khul nahi paya.",
+                        "${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।",
                         true
                     )
             }
@@ -797,9 +797,9 @@ class CommandEngine(
             TargetKind.SETTINGS -> PhoneActions.openSettings(context)
         }
         return if (opened) {
-            CommandResult("${target.displayName} khol diya hai.", true)
+            CommandResult("${target.displayName} खोल दिया है।", true)
         } else {
-            CommandResult("${target.displayName} is phone me nahi mila ya khul nahi paya.", true)
+            CommandResult("${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।", true)
         }
     }
 
@@ -877,8 +877,8 @@ class CommandEngine(
     private companion object {
         /** Spoken when a background launch needs the overlay permission. */
         const val OVERLAY_PERMISSION_REPLY =
-            "Iske liye 'Display over other apps' permission chahiye — " +
-                "app kholkar neeche wala button dabaiye."
+            "इसके लिए 'Display over other apps' अनुमति चाहिए — " +
+                "ऐप खोलकर नीचे वाला बटन दबाइए।"
 
         /**
          * v1.5: casual boli ke bhare shabd (sirf poore token ki
