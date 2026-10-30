@@ -50,6 +50,40 @@ object GeminiBrain {
     /** Key set hai ya nahi — key ka text kabhi bahar nahi jata. */
     fun isConfigured(context: Context): Boolean = getKey(context) != null
 
+    /**
+     * v22: ummeedwaar key ki JAANCH — save karne se pehle.
+     * Models wali halki list-waali call [key] (jo user ne abhi
+     * likhi hai, band ki hui purani key NAHI) ke saath ki jati
+     * hai. Callback isi class ke executor thread par aata hai:
+     * (true, 200) = key chalti hai; (false, HTTP code) = server
+     * ne mana kiya; (false, -1) = net/apraadhi gadbad, jaanch
+     * ho hi nahi payi. Key kabhi log nahi hoti — seedha header
+     * me jaati hai.
+     */
+    fun validateKey(key: String, callback: (Boolean, Int) -> Unit) {
+        val candidate = key.trim()
+        executor.execute {
+            val code = try {
+                var connection: HttpURLConnection? = null
+                try {
+                    connection =
+                        (URL(MODELS_URL).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            connectTimeout = VALIDATE_TIMEOUT_MS
+                            readTimeout = VALIDATE_TIMEOUT_MS
+                            setRequestProperty("x-goog-api-key", candidate)
+                        }
+                    connection.responseCode
+                } finally {
+                    connection?.disconnect()
+                }
+            } catch (e: Exception) {
+                -1
+            }
+            callback(code == HttpURLConnection.HTTP_OK, code)
+        }
+    }
+
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -180,8 +214,13 @@ object GeminiBrain {
         "https://generativelanguage.googleapis.com/v1beta/models/" +
             "gemini-2.5-flash:generateContent"
 
+    /** v22: key jaanch ke liye models list wala pata. */
+    private const val MODELS_URL =
+        "https://generativelanguage.googleapis.com/v1beta/models"
+
     private const val CONNECT_TIMEOUT_MS = 20_000
     private const val READ_TIMEOUT_MS = 20_000
+    private const val VALIDATE_TIMEOUT_MS = 15_000
     private const val MAX_OUTPUT_TOKENS = 320
     private const val TEMPERATURE = 0.8
 
