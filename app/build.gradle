@@ -79,7 +79,7 @@ android {
     // hoga: aship-jarvis-v<versionCode>.apk
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            output.outputFileName = "aship-jarvis-v${defaultConfig.versionCode}.apk"
+            output.outputFileName = "aship-jarvis-v${variant.versionCode}.apk"
         }
     }
 
