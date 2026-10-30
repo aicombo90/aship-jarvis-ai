@@ -245,8 +245,26 @@ class CommandEngine(
             val dataActionIntent = hasWord(text, "karo") ||
                 hasWord(text, "करो") || hasWord(text, "করো") ||
                 hasWord(text, "করুন") || hasWord(text, "do") ||
-                text.contains("toggle")
+                text.contains("toggle") ||
+                // v19: encoding-surakshit stem — "কর" (ক+র) har
+                // roop me milta hai (করো/করুন/কর — ো jis roop
+                // me bhi aaye, stem waisa ka waisa rehta hai),
+                // isliye hasWord kabhi fail ho tab bhi iraada
+                // pakda jayega. Devanagari "कर" bhi aise hi.
+                text.contains("কর") || text.contains("कर")
             if (dataActionIntent) {
+                return mobileDataToggleCommand()
+            }
+            // v19: aakhri jaal — disha bhi nahi mili, iraade
+            // wala shabd bhi nahi (asli garble "মোবাইল ডাটা
+            // অর": "অর" na disha hai na iraada), par command
+            // session ke andar ek chhota (5 shabd tak) vakya
+            // jisme mobile data ka zikr hai, woh asal zindagi
+            // me data command hi hota hai — toggle kar do.
+            // Lambe vakya is jaal me nahi aate; woh pehle
+            // jaise hi bina chhue aage badhte hain.
+            val dataTokenCount = text.split(Regex("""\s+""")).count { it.isNotEmpty() }
+            if (dataTokenCount <= 5) {
                 return mobileDataToggleCommand()
             }
         }
@@ -424,6 +442,15 @@ class CommandEngine(
      */
     private fun normalize(input: String): String {
         var t = input
+        // v19: Bangla recognizer "করো" ka ো (U+09CB) aksar uske
+        // bikhre roop ে+া (U+09C7+U+09BE) me bhejta hai, jabki
+        // is file ke saare Bangla shabd ek-codepoint roop me
+        // likhe hain — exact milaane (hasWord / table replace)
+        // chup-chaap fail ho jata tha ("মোবাইল ডাটা করো" sun
+        // kar bhi data command nahi chalta tha). Sabse pehle
+        // bikhre roopon ko ek roop me lao: ে+া -> ো, ে+ৗ -> ৌ.
+        t = t.replace("\u09C7\u09BE", "\u09CB")
+            .replace("\u09C7\u09D7", "\u09CC")
         val digitMap = mapOf(
             '०' to '0', '१' to '1', '२' to '2', '३' to '3', '४' to '4',
             '५' to '5', '६' to '6', '७' to '7', '८' to '8', '९' to '9',
