@@ -81,7 +81,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
-        android:hint="Ya yahan command type kijiye (e.g. youtube kholo)"
+        android:hint="Ya yahan command type kijiye (e.g. telegram kholo, battery kitna hai)"
         android:importantForAutofill="no"
         android:inputType="text"
         android:maxLines="1" />
