@@ -47,10 +47,42 @@ class AppPrefs(context: Context) {
             prefs.edit().putBoolean(KEY_WAKE_SERVICE_RUNNING, value).apply()
         }
 
+    /** v1.7 diagnostics: latest non-blank final text heard by the wake recognizer. */
+    var lastHeardText: String
+        get() = prefs.getString(KEY_LAST_HEARD_TEXT, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_LAST_HEARD_TEXT, value).apply()
+        }
+
+    /** v1.7 diagnostics: longest partial heard since the latest final result. */
+    var lastHeardPartialText: String
+        get() = prefs.getString(KEY_LAST_HEARD_PARTIAL_TEXT, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_LAST_HEARD_PARTIAL_TEXT, value).apply()
+        }
+
+    /** v1.7 diagnostics: when the wake recognizer last stored a final result. */
+    var lastHeardAtMs: Long
+        get() = prefs.getLong(KEY_LAST_HEARD_AT_MS, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_HEARD_AT_MS, value).apply()
+        }
+
+    /** v1.7 diagnostics: when the wake recognizer last stored a partial result. */
+    var lastHeardPartialAtMs: Long
+        get() = prefs.getLong(KEY_LAST_HEARD_PARTIAL_AT_MS, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_HEARD_PARTIAL_AT_MS, value).apply()
+        }
+
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
         private const val KEY_WAKE_HITS = "wake_hits"
         private const val KEY_WAKE_SERVICE_RUNNING = "wake_service_running"
+        private const val KEY_LAST_HEARD_TEXT = "last_heard_text"
+        private const val KEY_LAST_HEARD_PARTIAL_TEXT = "last_heard_partial_text"
+        private const val KEY_LAST_HEARD_AT_MS = "last_heard_at_ms"
+        private const val KEY_LAST_HEARD_PARTIAL_AT_MS = "last_heard_partial_at_ms"
     }
 }
