@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ASHIP JARVIS AI</string>
+
+    <!-- v17: Accessibility service — sirf mobile-data tile ke liye.
+         Ye naam/description Android ki Accessibility settings me
+         dikhta hai, isliye saaf shabdon me likha hai ki service
+         kya karti hai aur kya NAHI karti. -->
+    <string name="accessibility_service_label">ASHIP JARVIS AI — Mobile Data</string>
+    <string name="accessibility_service_description">मोबाइल डेटा ऑन/ऑफ़ करने के लिए। "मोबाइल डेटा ऑन करो" बोलने पर Jarvis क्विक सेटिंग्स खोलकर डेटा वाला टाइल दबाता है — बस इतना ही। यह सेवा आपकी स्क्रीन नहीं पढ़ती, कोई टैप या स्क्रॉल अपने आप नहीं करती, और कोई जानकारी कहीं नहीं भेजती।</string>
 </resources>
