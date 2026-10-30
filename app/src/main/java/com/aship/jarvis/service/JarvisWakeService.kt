@@ -11,6 +11,8 @@ import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -24,11 +26,13 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.aship.jarvis.MainActivity
+import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.prefs.AppPrefs
+import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
@@ -109,6 +113,12 @@ import java.util.concurrent.Executors
  * lagti hai, aur Maya "unlock kar lo" bol deti hai. Bina launch
  * wale kaam (torch, volume, gaana, battery, time) lock me bhi
  * pehle ki tarah chalte hain.
+ *
+ * v21 Phase 3 online brain: CommandEngine kisi baat ko na
+ * sambhale, mode Offline na ho, Gemini key set ho aur net chalu
+ * ho — tabhi Maya Gemini se jawab lati hai (GeminiBrain).
+ * Offline command hamesha pehle jeet-ta hai; key na ho to ye
+ * raasta band hi rehta hai aur purana vyavhaar nahi badalta.
  */
 class JarvisWakeService : Service() {
 
@@ -176,6 +186,13 @@ class JarvisWakeService : Service() {
     // hai. Koi asli utterance aate hi ye ginati reset ho jati hai.
     @Volatile
     private var addaNoSpeechCount = 0
+
+    // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
+    // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
+    // Sirf executor thread par chhoota hai. Har naye wake par
+    // saaf ho jati hai (onWakeDetected), taaki har chain taaza
+    // shuru ho; lambi padaav par khud kat-ti rehti hai.
+    private val geminiHistory = mutableListOf<Pair<String, String>>()
 
     // ------------------------------------------------------------------
     // Lifecycle
@@ -561,6 +578,9 @@ class JarvisWakeService : Service() {
         // hua purana adda state saath nahi ghisdega.
         addaEngine.endSession()
         addaNoSpeechCount = 0
+        // v21: pichhli chain ki Gemini baatchit bhi saath saaf —
+        // naya wake matlab nayi baatchit.
+        geminiHistory.clear()
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
@@ -713,6 +733,28 @@ class JarvisWakeService : Service() {
             return
         }
         val rawResult = commandEngine.handle(text)
+        // v21 Phase 3: offline engine miss kare aur online brain
+        // uplabdh ho (mode Offline na ho, key set ho, net chalu
+        // ho) to usi miss par pehle Gemini ko ek mauka — jawab
+        // mile to wahi bola jayega. Na mile (ya gate band ho) to
+        // finishCommandResult wala purana raasta bilkul pehle
+        // jaisa chalega. Engine ka HANDLED jawab kabhi Gemini
+        // tak jata hi nahi — offline command ki pehchan pehle.
+        if (!rawResult.handled && geminiBrainAllowed()) {
+            askGeminiBrain(text, rawResult)
+            return
+        }
+        finishCommandResult(text, rawResult)
+    }
+
+    /**
+     * Engine ke result ka aakhiri faisla — v21 se pehle ye saara
+     * kaam onCommandHeard ke andar hota tha; ab wahi code yahan
+     * hai taaki Gemini ke null jawab par bhi bilkul waisa hi
+     * vyavhaar mile. Sirf executor thread se bulao; state REPLY
+     * ho aur command session band ho chuka ho.
+     */
+    private fun finishCommandResult(text: String, rawResult: CommandResult) {
         // v12: "handled" ka faisla RAW result par hota hai — neeche
         // wale v1.10 CANT_DO conversion se PEHLE. Isliye galat-suna
         // kholne ka prayas ("pesbuk kholo" jaisa) bhi pehle apna ek
@@ -754,6 +796,83 @@ class JarvisWakeService : Service() {
         // v1.5: jawab gole ke upar wale bubble me text me bhi dikhe,
         // aur gola jawab ke dauraan chamak (shimmer) mode me rahe.
         orbOverlay.setReply(result.responseText)
+    }
+
+    /**
+     * v21 Phase 3 gate: online brain kab bulaya jaye. Teenon
+     * shartein — mode pure-Offline na ho (prefs wala mode hi
+     * aakhiri shabd hai), user ne Gemini key di ho, aur is pal
+     * net sach me chalu ho. Ek bhi na mile to Gemini ka naam
+     * bhi nahi liya jata — purana offline raasta hi chalega.
+     */
+    private fun geminiBrainAllowed(): Boolean {
+        if (prefs.mode == JarvisMode.OFFLINE) return false
+        if (!GeminiBrain.isConfigured(applicationContext)) return false
+        return isNetworkUp()
+    }
+
+    /** Is pal internet uplabdh hai ya nahi (ConnectivityManager se). */
+    private fun isNetworkUp(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager ?: return false
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v21 Phase 3: Gemini se jawab maango. State pehle se REPLY
+     * hai aur command session band ho chuka hai; net wala jawab
+     * aane tak koi timer is flow ko nahi chhedta — reply fallback
+     * sirf kuch BOLNE par arm hota hai, auto-resume sirf
+     * wakePaused par chalta hai. Jawab GeminiBrain ke thread se
+     * wapas executor par aata hai (onGeminiBrainAnswer).
+     */
+    private fun askGeminiBrain(text: String, rawResult: CommandResult) {
+        setStatus("Maya online soch rahi hai...")
+        updateNotification("Maya online soch rahi hai...")
+        GeminiBrain.chat(applicationContext, geminiHistory.toList(), text) { reply ->
+            executor.execute { onGeminiBrainAnswer(text, rawResult, reply) }
+        }
+    }
+
+    /**
+     * Gemini ka jawab (ya uski anupasthiti). Jawab mila to use
+     * ek aam handled jawab ki tarah bolo — gola bubble, reply
+     * fallback, sab waisa hi; aur baatchit yaad me jud jati hai.
+     * Jawab na mila to engine ke miss wala purana raasta
+     * (finishCommandResult) — retry ab bhi waisa hi bacha hai.
+     */
+    private fun onGeminiBrainAnswer(
+        text: String,
+        rawResult: CommandResult,
+        reply: String?
+    ) {
+        // Beech me service band ho gayi ho ya flow aage badh
+        // gaya ho to der se aaya jawab chup-chaap chhod do.
+        if (destroyed || state != State.REPLY) return
+        if (reply == null) {
+            finishCommandResult(text, rawResult)
+            return
+        }
+        // Baatchit ki yaad: aakhiri 10 turn rakho, jodi todna mat.
+        geminiHistory.add("user" to text)
+        geminiHistory.add("model" to reply)
+        while (geminiHistory.size > MAX_GEMINI_HISTORY_ENTRIES) {
+            geminiHistory.removeAt(0)
+            geminiHistory.removeAt(0)
+        }
+        setStatus("Online jawab mila — bol rahi hoon")
+        updateNotification("Jarvis jawab de raha hai...")
+        // v16 wala screen-wake refresh, aam jawab ki tarah.
+        lightScreenOnWake()
+        speaker.speak(reply)
+        armReplyFallback(reply)
+        orbOverlay.setReply(reply)
     }
 
     /**
@@ -1356,6 +1475,9 @@ class JarvisWakeService : Service() {
 
         /** v16: ek baar ke screen-wake ki umar; har session/jawab use badha deta hai. */
         private const val WAKE_SCREEN_TIMEOUT_MS = 15_000L
+
+        /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
+        private const val MAX_GEMINI_HISTORY_ENTRIES = 20
 
         /** Wake-word spellings and close mishearings from the recognizers. */
         private val WAKE_WORDS = listOf(
