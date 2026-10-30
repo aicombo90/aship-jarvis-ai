@@ -21,6 +21,8 @@ import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
+import com.aship.jarvis.chat.AddaAction
+import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.update.UpdateChecker
@@ -70,6 +72,7 @@ class MainActivity : Activity() {
     private lateinit var prefs: AppPrefs
     private lateinit var speaker: TtsSpeaker
     private lateinit var commandEngine: CommandEngine
+    private lateinit var addaEngine: AddaEngine
     private lateinit var modelManager: ModelManager
 
     private var engine: SpeechEngine? = null
@@ -99,6 +102,7 @@ class MainActivity : Activity() {
         prefs = AppPrefs(this)
         speaker = TtsSpeaker(this)
         commandEngine = CommandEngine(this)
+        addaEngine = AddaEngine()
         modelManager = ModelManager(this)
 
         statusText = findViewById(R.id.statusText)
@@ -407,6 +411,30 @@ class MainActivity : Activity() {
 
     private fun processCommand(text: String) {
         recognizedText.text = "Aapne kaha: $text"
+        // v13: adda trigger ya is screen par chalu adda ho to pehle
+        // Maya ka AddaEngine — uski state is activity instance me
+        // har tap ke beech bani rehti hai. CommandEngine baad me.
+        if (addaEngine.shouldHandle(text)) {
+            val step = addaEngine.respond(text)
+            val spokenText = if (step.action == AddaAction.OPEN_YOUTUBE) {
+                val launchResult = commandEngine.handle("youtube kholo")
+                if (launchResult.responseText == "YouTube khol diya hai.") {
+                    step.text
+                } else {
+                    addaEngine.endSession()
+                    launchResult.responseText
+                }
+            } else {
+                step.text
+            }
+            responseText.text = if (addaEngine.isActive) {
+                "Maya: $spokenText\nAdda mode: ON — 'bye' bolne par band hoga."
+            } else {
+                "Maya: $spokenText"
+            }
+            speaker.speak(spokenText)
+            return
+        }
         val result = commandEngine.handle(text)
         responseText.text = "Jarvis: ${result.responseText}"
         speaker.speak(result.responseText)
