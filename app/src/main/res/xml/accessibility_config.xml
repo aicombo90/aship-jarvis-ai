@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  v17: JarvisAccessibilityService ki ghoshna.
+
+  Service ka EK hi kaam hai: "mobile data on/off karo" par
+  quick-settings panel kholkar data tile dabana. Isiliye:
+   - event types sirf window badlav wale hain (panel khulne ka
+     pata chale) — koi key/view monitoring nahi maanga gaya;
+   - canRetrieveWindowContent is liye chahiye taaki panel ke
+     andar data tile dhoondha ja sake;
+   - global actions (panel kholna / back) har accessibility
+     service ko Android se mile hue hote hain — unke liye alag
+     ghoshna nahi hoti.
+  Koi gesture, koi filter-key, koi touch-exploration nahi hai.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100" />
