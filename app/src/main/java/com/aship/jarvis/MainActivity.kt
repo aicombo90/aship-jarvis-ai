@@ -163,12 +163,23 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         mainHandler.removeCallbacks(wakeRefreshRunnable)
+        // Screen peeche ja rahi hai: mic wake service ka tha, to
+        // wapas kar do — user dusri app me jaakar 'Jarvis' bolega
+        // to wake sunna wahan chalu hona chahiye.
+        resumeWakeService()
         super.onPause()
+    }
+
+    override fun onStop() {
+        // onPause ke baad wala doosra jaal: kisi bhi raaste se app
+        // background me gaya ho, wake service ruka na reh jaye.
+        resumeWakeService()
+        super.onStop()
     }
 
     override fun onDestroy() {
         // Screen ja rahi hai aur mic wake service ko diya hua tha to
-        // wapas kar do — warna wake sunna 45 s wale safety timer tak
+        // wapas kar do — warna wake sunna 12 s wale safety timer tak
         // ruka rahega.
         resumeWakeService()
         unregisterUpdateReceiver()
@@ -201,7 +212,7 @@ class MainActivity : Activity() {
             if (prefs.mode == JarvisMode.ONLINE) {
                 Toast.makeText(
                     this,
-                    "Online AI Phase 3 me aayega — abhi offline commands chalenge.",
+                    "Online AI abhi aaya nahi hai — abhi offline commands chalenge.",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -225,6 +236,11 @@ class MainActivity : Activity() {
             listening = isListening
             if (isListening) {
                 engineStartedOk = true
+                // Sunna SACH ME shuru hua — ab wake service ko mic
+                // ke liye roko (v1.6). Pehle ye startListening() par
+                // hota tha; wahan rokne se aise session bhi rukte
+                // the jo kabhi shuru hi nahi hue.
+                pauseWakeServiceForMic()
             } else {
                 // Foreground sunna band — mic wake service ko wapas
                 // do (agar is session ke liye use roka tha to hi).
@@ -242,6 +258,11 @@ class MainActivity : Activity() {
         }
 
         override fun onFinalResult(text: String) {
+            // Session khatm ho gaya hai. Kuch flows me iske baad
+            // onListeningStateChanged(false) aata hi nahi — wahi
+            // v1.5 wala atkav tha — isliye mic yahin se wake
+            // service ko wapas kar do.
+            resumeWakeService()
             processCommand(text)
         }
 
@@ -266,6 +287,10 @@ class MainActivity : Activity() {
                 startListening()
                 return
             }
+            // Error ke saath session khatm — mic wake service ko
+            // wapas kar do. (Fallback wale raaste par naya session
+            // shuru hote hi khud pause bhej dega.)
+            resumeWakeService()
             statusText.text = message
         }
     }
@@ -287,10 +312,11 @@ class MainActivity : Activity() {
     private fun startListening() {
         // Don't let Jarvis hear its own voice.
         speaker.stop()
-        // Mic-sharing (v1.3): wake service mic pakde ho to pehle use
-        // roko — do recorder ek saath chal hi nahi sakte, aur Google
-        // recognizer turant "cannot record now" error de deta hai.
-        pauseWakeServiceForMic()
+        // Mic-sharing (v1.3, v1.6): wake service ko rokna YAHAN
+        // nahi hai — woh onListeningStateChanged(true) me hota hai,
+        // jab sunna sach me shuru ho jata hai. Do recorder ek saath
+        // chal hi nahi sakte, isliye asal shuruaat wala pal hi
+        // rokne ka sahi pal hai.
         engineStartedOk = false
         engine?.startListening()
     }
@@ -754,7 +780,7 @@ class MainActivity : Activity() {
     private fun updateStatus() {
         val modeLabel = when (prefs.mode) {
             JarvisMode.OFFLINE -> "Offline"
-            JarvisMode.ONLINE -> "Online (AI Phase 3 me aayega)"
+            JarvisMode.ONLINE -> "Online (AI abhi aaya nahi hai)"
             JarvisMode.AUTO -> "Auto"
         }
         val engineName = engine?.displayName ?: "-"
