@@ -2,7 +2,12 @@ package com.aship.jarvis.ai
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.BatteryManager
+import android.telephony.TelephonyManager
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.OverlayLauncher
@@ -48,6 +53,16 @@ import java.util.concurrent.TimeUnit
  * seedha usi par, warna browser par) aur pehle video
  * par tap Accessibility service karti hai; natija
  * OK / PARTIAL / FAILED me hamesha sachha.
+ *
+ * v27: do aur SIRF-PADHNE wale auzaar — get_battery aur
+ * get_network. "Battery koto ache?" / "net cholche,
+ * Wi-Fi na data?" jaise sawalon ka jawab Maya ab
+ * andaze se nahi, phone ki asal haalat padhkar deti
+ * hai: battery kitne percent hai, charging ho rahi
+ * hai ya nahi, aur is pal connection Wi-Fi hai,
+ * mobile data hai ya hai hi nahi. Koi nayi permission
+ * nahi — battery sticky ghoshna se padhi jati hai,
+ * network ConnectivityManager se.
  */
 class AgentTools(
     private val context: Context,
@@ -76,10 +91,13 @@ class AgentTools(
             "Today's date is " +
                 SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US).format(Date()) + "."
         )
+        "get_battery" -> getBattery()
+        "get_network" -> getNetwork()
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
-                "torch, web_search, youtube_play, get_time, get_date."
+                "torch, web_search, youtube_play, get_time, get_date, " +
+                "get_battery, get_network."
         )
     }
 
@@ -418,6 +436,135 @@ class AgentTools(
                 false,
                 "No answer from the accessibility service in time."
             )
+        }
+    }
+
+    /**
+     * v27: Battery ki asal haalat — kitne percent hai,
+     * charging ho rahi hai ya nahi (ho rahi ho to AC/USB
+     * ka zikr bhi). Koi receiver register nahi karna
+     * padta: ACTION_BATTERY_CHANGED wali sticky ghoshna
+     * ko registerReceiver(null, ...) se seedha padh lete
+     * hain — isiliye koi nayi permission bhi nahi chahiye
+     * (BATTERY_STATS bhi nahi). Padha hi na jaye to
+     * jhoothi sankhya nahi, imaandaar fail.
+     */
+    private fun getBattery(): ToolResult {
+        val intent = try {
+            context.registerReceiver(
+                null,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            )
+        } catch (t: Throwable) {
+            null
+        } ?: return ToolResult(false, "Battery ki jaankari nahi mil payi.")
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) {
+            return ToolResult(false, "Battery ki jaankari nahi mil payi.")
+        }
+        val percent = (level * 100) / scale
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+        if (!charging) {
+            return ToolResult(
+                true,
+                "Battery: $percent%, charging nahi ho raha."
+            )
+        }
+        val source = when (
+            intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        ) {
+            BatteryManager.BATTERY_PLUGGED_AC -> " (AC se)"
+            BatteryManager.BATTERY_PLUGGED_USB -> " (USB se)"
+            BatteryManager.BATTERY_PLUGGED_WIRELESS -> " (wireless se)"
+            else -> ""
+        }
+        return ToolResult(
+            true,
+            "Battery: $percent%, charging ho raha hai$source."
+        )
+    }
+
+    /**
+     * v27: Is pal ka connection — hai ya nahi, Wi-Fi hai
+     * ya mobile data (mobile ho to 4G/5G ka label bhi,
+     * jahan bina permission ke seedha mil jaye), aur
+     * internet wali kshamta hai ya nahi. Raasta vahi jo
+     * app ka isNetworkUp leta hai: ConnectivityManager
+     * ka activeNetwork + uski capabilities (permission
+     * ACCESS_NETWORK_STATE pehle se manifest me hai).
+     * Connection "nahi hai" bhi ek asal padhi hui haalat
+     * hai (ok) — padh hi na payein to fail.
+     */
+    private fun getNetwork(): ToolResult {
+        val cm = try {
+            context.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager
+        } catch (t: Throwable) {
+            null
+        } ?: return ToolResult(false, "Network ki jaankari nahi mil payi.")
+        val network = try {
+            cm.activeNetwork
+        } catch (t: Throwable) {
+            null
+        } ?: return ToolResult(
+            true,
+            "Network: koi connection nahi hai — " +
+                "internet uplabdh nahi hai."
+        )
+        val caps = try {
+            cm.getNetworkCapabilities(network)
+        } catch (t: Throwable) {
+            null
+        } ?: return ToolResult(false, "Network ki jaankari nahi mil payi.")
+        val internetText = if (
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        ) {
+            "internet uplabdh hai"
+        } else {
+            "internet uplabdh nahi hai"
+        }
+        val typeText = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                val label = mobileGenerationLabel()
+                if (label != null) "mobile data $label" else "mobile data"
+            }
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ->
+                "Ethernet"
+            else -> "doosra connection"
+        }
+        return ToolResult(true, "Network: $typeText ($internetText).")
+    }
+
+    /**
+     * Mobile data ki peedhi (4G/5G...) — sirf tab jab
+     * bina koi permission maange seedha mil jaye.
+     * dataNetworkType aam taur par READ_PHONE_STATE
+     * maangta hai; woh permission hamare paas nahi hai,
+     * isliye SecurityException par chup chaap null
+     * (koi label nahi) — jhootha label kabhi nahi.
+     */
+    private fun mobileGenerationLabel(): String? {
+        val type = try {
+            val tm = context.getSystemService(
+                Context.TELEPHONY_SERVICE
+            ) as? TelephonyManager ?: return null
+            @Suppress("DEPRECATION")
+            tm.dataNetworkType
+        } catch (t: Throwable) {
+            return null
+        }
+        return when (type) {
+            TelephonyManager.NETWORK_TYPE_NR -> "5G"
+            TelephonyManager.NETWORK_TYPE_LTE -> "4G"
+            TelephonyManager.NETWORK_TYPE_HSPAP,
+            TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
+            TelephonyManager.NETWORK_TYPE_EDGE,
+            TelephonyManager.NETWORK_TYPE_GPRS -> "2G"
+            else -> null
         }
     }
 
