@@ -34,9 +34,23 @@ class AppPrefs(context: Context) {
             prefs.edit().putInt(KEY_WAKE_HITS, value).apply()
         }
 
+    /**
+     * v1.3 mic sharing: true while JarvisWakeService is alive. The
+     * service sets it on start and clears it in onDestroy/teardown;
+     * MainActivity reads it so it only sends pause/resume intents
+     * when the service actually exists (starting the service just to
+     * pause it would be wrong).
+     */
+    var wakeServiceRunning: Boolean
+        get() = prefs.getBoolean(KEY_WAKE_SERVICE_RUNNING, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_WAKE_SERVICE_RUNNING, value).apply()
+        }
+
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
         private const val KEY_WAKE_HITS = "wake_hits"
+        private const val KEY_WAKE_SERVICE_RUNNING = "wake_service_running"
     }
 }
