@@ -219,6 +219,19 @@ object AgentBrain {
             "open_app" -> args.optString("app")
             "mobile_data", "torch" -> args.optString("state")
             "web_search", "youtube_play" -> args.optString("query").take(20)
+            "set_timer" ->
+                if (args.has("seconds")) {
+                    args.optInt("seconds").toString()
+                } else {
+                    ""
+                }
+            "set_alarm" ->
+                if (args.has("hour")) {
+                    args.optInt("hour").toString() + ":" +
+                        args.optInt("minute").toString().padStart(2, '0')
+                } else {
+                    ""
+                }
             else -> ""
         }
         return if (mainArg.isEmpty()) tool else "$tool($mainArg)"
@@ -311,6 +324,17 @@ object AgentBrain {
             "(none, Wi-Fi or mobile data) and whether internet is " +
             "available, from the real device state. Use it for " +
             "network questions — never guess.\n" +
+            "- set_timer, args {\"seconds\": <total seconds as an " +
+            "integer>} — sets a countdown timer in the phone's clock. " +
+            "Convert the user's duration to SECONDS yourself: '10 " +
+            "minute' = 600, 'aadha ghanta' (half an hour) = 1800, " +
+            "'1 ghanta' = 3600. Use it for timer requests.\n" +
+            "- set_alarm, args {\"hour\": <0-23>, \"minute\": <0-59>, " +
+            "\"label\": \"<optional short label>\"} — sets an alarm in " +
+            "the phone's clock. hour is 24-hour time ('subah 7 baje' " +
+            "= hour 7, 'raat 10 baje' = hour 22); always send minute " +
+            "(0 when the user means on the hour). Use it for alarm " +
+            "requests.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
