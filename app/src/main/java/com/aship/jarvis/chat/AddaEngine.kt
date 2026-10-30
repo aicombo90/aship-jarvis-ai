@@ -191,6 +191,7 @@ class AddaEngine(
                     "Chala diya! Ab to Maya ko ek smile de do."
                 ),
                 sessionActive = false,
+                nextContext = Context.NONE,
                 action = AddaAction.OPEN_YOUTUBE
             )
         }
@@ -634,6 +635,7 @@ class AddaEngine(
             return deliver(
                 "Thik hai meri jaan, YouTube khol rahi hu.",
                 sessionActive = false,
+                nextContext = Context.NONE,
                 action = AddaAction.OPEN_YOUTUBE
             )
         }
