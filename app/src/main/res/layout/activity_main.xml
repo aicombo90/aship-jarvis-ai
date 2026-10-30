@@ -134,6 +134,20 @@
         android:layout_height="wrap_content"
         android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
 
+    <TextView
+        android:id="@+id/accessibilityStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="Accessibility: নেই"
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/accessibilityButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Accessibility চালু করো" />
+
     <Button
         android:id="@+id/overlayPermissionButton"
         android:layout_width="match_parent"
