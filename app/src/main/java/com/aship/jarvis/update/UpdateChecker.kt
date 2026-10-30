@@ -13,9 +13,12 @@ import java.util.concurrent.Executors
  *
  * Every feature build is also published as a GitHub Release with
  * tag "v<versionCode>" (e.g. v2) and the APK attached as an asset
- * named exactly "app-debug.apk". This class fetches the latest
- * release from the public GitHub API (no auth, public repo) and
- * compares the tag number with this app's VERSION_CODE.
+ * named "aship-jarvis-v<versionCode>.apk" (v17 se versioned naam;
+ * usse pehle "app-debug.apk" tha — isiliye asset dhoondhne me
+ * koi bhi ".apk" naam chalega, neeche dekho). This class fetches
+ * the latest release from the public GitHub API (no auth,
+ * public repo) and compares the tag number with this app's
+ * VERSION_CODE.
  *
  * The asset's browser_download_url is taken from the release JSON —
  * never hardcoded — so the flow keeps working whatever the release
@@ -88,21 +91,34 @@ object UpdateChecker {
             return Result.UpToDate
         }
         val assets = json.optJSONArray("assets") ?: return Result.Failed
+        // v17: asset ka naam versioned hai — pehle usi tag wale
+        // naam ko pasand karo; na mile to koi bhi ".apk" asset
+        // chalega (purane "app-debug.apk" wale release bhi isse
+        // pehchan me rahenge).
+        val expectedName = "aship-jarvis-v$remoteCode.apk"
+        var fallbackUrl = ""
         for (i in 0 until assets.length()) {
             val asset = assets.optJSONObject(i) ?: continue
-            if (asset.optString("name") == APK_ASSET_NAME) {
-                val url = asset.optString("browser_download_url", "")
-                if (url.isNotBlank()) {
-                    return Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, url))
-                }
+            val url = asset.optString("browser_download_url", "")
+            if (url.isBlank()) continue
+            if (asset.optString("name") == expectedName) {
+                return Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, url))
+            }
+            if (fallbackUrl.isEmpty() &&
+                asset.optString("name").endsWith(".apk")
+            ) {
+                fallbackUrl = url
             }
         }
-        return Result.Failed
+        return if (fallbackUrl.isNotEmpty()) {
+            Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, fallbackUrl))
+        } else {
+            Result.Failed
+        }
     }
 
     private const val LATEST_RELEASE_URL =
         "https://api.github.com/repos/aicombo90/aship-jarvis-ai/releases/latest"
-    private const val APK_ASSET_NAME = "app-debug.apk"
     private const val CONNECT_TIMEOUT_MS = 10_000
     private const val READ_TIMEOUT_MS = 15_000
 }
