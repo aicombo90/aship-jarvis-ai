@@ -83,6 +83,12 @@ class MainActivity : Activity() {
     private var engineStartedOk = false
     private var systemStartFallbackUsed = false
 
+    // Mic-sharing (v1.3): foreground sunna shuru karne se pehle wake
+    // service ko mic ke liye roka tha ya nahi. Sunna band hone par
+    // (ya screen band hone par) isi jhande ko dekh kar ek hi baar
+    // resume bhejte hain — resume idempotent aur bina-nuksan hai.
+    private var wakePauseSent = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val background = Executors.newSingleThreadExecutor()
 
@@ -161,6 +167,10 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        // Screen ja rahi hai aur mic wake service ko diya hua tha to
+        // wapas kar do — warna wake sunna 45 s wale safety timer tak
+        // ruka rahega.
+        resumeWakeService()
         unregisterUpdateReceiver()
         engine?.destroy()
         engine = null
@@ -215,6 +225,10 @@ class MainActivity : Activity() {
             listening = isListening
             if (isListening) {
                 engineStartedOk = true
+            } else {
+                // Foreground sunna band — mic wake service ko wapas
+                // do (agar is session ke liye use roka tha to hi).
+                resumeWakeService()
             }
             micButton.text = if (isListening) {
                 "🛑 Sun raha hoon... (band karne ke liye tap kijiye)"
@@ -273,8 +287,43 @@ class MainActivity : Activity() {
     private fun startListening() {
         // Don't let Jarvis hear its own voice.
         speaker.stop()
+        // Mic-sharing (v1.3): wake service mic pakde ho to pehle use
+        // roko — do recorder ek saath chal hi nahi sakte, aur Google
+        // recognizer turant "cannot record now" error de deta hai.
+        pauseWakeServiceForMic()
         engineStartedOk = false
         engine?.startListening()
+    }
+
+    /**
+     * Wake service zinda ho to use mic chhodne ko kaho. Service na
+     * ho to kuch mat karo — use sirf rokne ke liye start karna
+     * galat hoga (isliye pehle prefs wala jhanda dekho).
+     */
+    private fun pauseWakeServiceForMic() {
+        if (!prefs.wakeServiceRunning) return
+        try {
+            startService(JarvisWakeService.pauseIntent(this))
+            wakePauseSent = true
+        } catch (e: Exception) {
+            // Service nahi mila — foreground sunna phir bhi try karo.
+        }
+    }
+
+    /**
+     * Roka hua wake service phir chalu karne ko kaho. Ek hi baar
+     * bhejta hai; session kabhi shuru hi na hua ho to bina kuch
+     * kiye laut jata hai.
+     */
+    private fun resumeWakeService() {
+        if (!wakePauseSent) return
+        wakePauseSent = false
+        if (!prefs.wakeServiceRunning) return
+        try {
+            startService(JarvisWakeService.resumeIntent(this))
+        } catch (e: Exception) {
+            // Service band ho chuka hai — kuch nahi karna.
+        }
     }
 
     override fun onRequestPermissionsResult(
