@@ -110,6 +110,16 @@ Jarvis does it on your phone and speaks the reply back to you.
   "chala diya" nahi banta: PARTIAL report aati hai ki
   results khul gaye hain, tap nahi hua (har koshish ki
   report "last_youtube_tap" me band hoti hai)
+- **Battery aur network ki asal haalat (v27):** agent ke
+  paas do naye sirf-padhne wale auzaar — get_battery aur
+  get_network. "Battery koto ache?" / "net cholche,
+  Wi-Fi na data?" jaise sawalon ka jawab Maya ab andaze
+  se nahi, phone ki asal haalat padhkar deti hai:
+  battery kitne percent hai, charging ho rahi hai ya
+  nahi (ho rahi ho to AC/USB bhi), aur is pal
+  connection Wi-Fi / mobile data / hai hi nahi —
+  internet uplabdh hai ya nahi, uske saath. Koi nayi
+  permission nahi lagi
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
