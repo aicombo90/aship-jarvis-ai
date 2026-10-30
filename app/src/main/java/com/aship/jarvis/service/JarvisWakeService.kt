@@ -23,6 +23,8 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.aship.jarvis.MainActivity
+import com.aship.jarvis.chat.AddaAction
+import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.prefs.AppPrefs
@@ -88,6 +90,13 @@ import java.util.concurrent.Executors
  * "Jarvis" bolne ki zaroorat nahi. Dusri baar bhi na samjhe to
  * purana vyavhaar: kholne ki koshish par CANT_DO_REPLY, warna
  * chup, aur wapas wake sunne par.
+ *
+ * v13 offline adda: Maya naam ki persona ke saath halki, saaf-suthri
+ * multi-turn baatchit. Adda chalu ho to har command-session wala
+ * utterance pehle AddaEngine ko jata hai; jawab ke baad TTS khatm
+ * hote hi agla command session bina wake word ke khul jata hai.
+ * Adda ke andar v12 retry nahi lagta — Maya ke apne nudge/goodbye
+ * wale raaste hain. Wake naam "Jarvis" ke saath "Maya" bhi hai.
  */
 class JarvisWakeService : Service() {
 
@@ -99,6 +108,7 @@ class JarvisWakeService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var speaker: TtsSpeaker
     private lateinit var commandEngine: CommandEngine
+    private lateinit var addaEngine: AddaEngine
     private lateinit var prefs: AppPrefs
     private lateinit var orbOverlay: OrbOverlay
 
@@ -143,6 +153,12 @@ class JarvisWakeService : Service() {
     @Volatile
     private var commandRetryUsed = false
 
+    // v13: adda ke dauraan bina awaaz wala ek session maaf hai;
+    // dusra lagatar khaali session adda ko chup-chaap band kar deta
+    // hai. Koi asli utterance aate hi ye ginati reset ho jati hai.
+    @Volatile
+    private var addaNoSpeechCount = 0
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -156,6 +172,7 @@ class JarvisWakeService : Service() {
         // Background flag: app launches cross the overlay bridge and
         // report a missing overlay permission honestly (Bug-1 fix).
         commandEngine = CommandEngine(applicationContext, fromBackgroundService = true)
+        addaEngine = AddaEngine()
         prefs = AppPrefs(this)
         orbOverlay = OrbOverlay()
     }
@@ -377,6 +394,11 @@ class JarvisWakeService : Service() {
                     // tod kar wake sunna saaf phir se shuru karo.
                     disarmAckFallback()
                     stopCommandSession()
+                    // v13: phas gaya flow tod rahe hain — adda ka
+                    // state bhi saath saaf karo, warna agle wake ke
+                    // baad bhi purani baatchit chipki rahegi.
+                    addaEngine.endSession()
+                    addaNoSpeechCount = 0
                     orbOverlay.hideNow()
                     wakePaused = false
                     disarmAutoResume()
@@ -470,6 +492,10 @@ class JarvisWakeService : Service() {
         wakeErrorCount = 0
         // v12: har naye wake ke saath command ko ek taaza retry mile.
         commandRetryUsed = false
+        // v13: naya wake hamesha taaza interaction hai — koi atka
+        // hua purana adda state saath nahi ghisdega.
+        addaEngine.endSession()
+        addaNoSpeechCount = 0
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
@@ -492,10 +518,19 @@ class JarvisWakeService : Service() {
                 }
                 State.REPLY -> {
                     disarmReplyFallback()
-                    // v1.5: jawab khatm — gola 1.5 s aur dikh kar
-                    // dheere se gayab ho jayega.
-                    orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
-                    startWakeSession()
+                    if (addaEngine.isActive) {
+                        // v13: adda abhi chal raha hai — gola bana
+                        // rahega aur agla turn bina "Jarvis" bole
+                        // seedha command session se shuru hoga.
+                        setStatus("Adda chal raha hai — Maya sun rahi hai")
+                        updateNotification("Maya adda sun rahi hai — boliye...")
+                        startCommandSession()
+                    } else {
+                        // v1.5: jawab khatm — gola 1.5 s aur dikh kar
+                        // dheere se gayab ho jayega.
+                        orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
+                        startWakeSession()
+                    }
                 }
                 else -> {
                     // Speech finished in some other state: nothing waits on it.
@@ -600,6 +635,14 @@ class JarvisWakeService : Service() {
         // callback fired by stop() is ignored.
         state = State.REPLY
         stopCommandSession()
+        addaNoSpeechCount = 0
+        // v13: adda trigger ya chalu adda ho to utterance pehle
+        // Maya ke AddaEngine ko jata hai — CommandEngine use beech
+        // me nigal nahi sakta. Adda ke andar v12 retry nahi lagta.
+        if (addaEngine.shouldHandle(text)) {
+            handleAddaHeard(text)
+            return
+        }
         val rawResult = commandEngine.handle(text)
         // v12: "handled" ka faisla RAW result par hota hai — neeche
         // wale v1.10 CANT_DO conversion se PEHLE. Isliye galat-suna
@@ -641,6 +684,43 @@ class JarvisWakeService : Service() {
     }
 
     /**
+     * v13 adda turn: state pehle hi REPLY hai aur command session
+     * band ho chuka hai. Maya ka jawab bolo; uske baad wala raasta
+     * onTtsFinished / reply fallback dekh lega — adda chalu ho to
+     * agla command session, warna wapas wake.
+     *
+     * YouTube wala action koi shortcut se nahi hota: wahi purana
+     * CommandEngine ("youtube kholo") background overlay bridge se
+     * kholti hai. Uska jawab safal wala pakka jawab na ho to Maya ki
+     * bani-banaai line ki jagah wahi sachha jawab bolo aur adda band
+     * kar do — jhootha "khol diya" kabhi nahi.
+     */
+    private fun handleAddaHeard(text: String) {
+        val step = addaEngine.respond(text)
+        val spokenText = if (step.action == AddaAction.OPEN_YOUTUBE) {
+            val launchResult = commandEngine.handle("youtube kholo")
+            if (launchResult.responseText == "YouTube khol diya hai.") {
+                step.text
+            } else {
+                addaEngine.endSession()
+                launchResult.responseText
+            }
+        } else {
+            step.text
+        }
+        if (addaEngine.isActive) {
+            setStatus("Adda chal raha hai — Maya sun rahi hai")
+            updateNotification("Maya adda me hai — boliye...")
+        } else {
+            setStatus("Adda khatm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+        }
+        speaker.speak(spokenText)
+        armReplyFallback(spokenText)
+        orbOverlay.setReply(spokenText)
+    }
+
+    /**
      * v12 retry-once: "Phir se boliye" bolkar ACK wale raaste se
      * ek aur command session kholo (TTS khatm hone par, ya ack
      * fallback par). Gola dikhta rehta hai — dobara "Jarvis"
@@ -666,6 +746,23 @@ class JarvisWakeService : Service() {
     private fun handleCommandMiss() {
         if (destroyed) return
         stopCommandSession()
+        if (addaEngine.isActive) {
+            // v13: adda me "Phir se boliye" wala v12 retry nahi
+            // chalega. Pehla khaali/error session chup-chaap ek aur
+            // mauka; dusra lagatar khaali session adda band karke
+            // wapas wake par. Asli utterance aate hi ginati reset
+            // ho jati hai (onCommandHeard).
+            if (addaNoSpeechCount == 0) {
+                addaNoSpeechCount = 1
+                startCommandSession()
+            } else {
+                addaEngine.endSession()
+                addaNoSpeechCount = 0
+                orbOverlay.hideNow()
+                startWakeSession()
+            }
+            return
+        }
         if (!commandRetryUsed) {
             startCommandRetry()
         } else {
@@ -756,8 +853,14 @@ class JarvisWakeService : Service() {
     private val replyFallbackRunnable = Runnable {
         executor.execute {
             if (!destroyed && state == State.REPLY) {
-                orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
-                startWakeSession()
+                if (addaEngine.isActive) {
+                    // v13: TTS completion callback kabhi kho jaye to
+                    // bhi adda wahi se aage badhe, wake par na gire.
+                    startCommandSession()
+                } else {
+                    orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
+                    startWakeSession()
+                }
             }
         }
     }
@@ -768,6 +871,7 @@ class JarvisWakeService : Service() {
             .coerceAtMost(REPLY_FALLBACK_MAX_MS)
         mainHandler.postDelayed(replyFallbackRunnable, delay)
     }
+
 
     private fun disarmReplyFallback() {
         mainHandler.removeCallbacks(replyFallbackRunnable)
@@ -1075,7 +1179,31 @@ class JarvisWakeService : Service() {
                 }
             }
         }
-        return false
+        return containsMayaCall(text)
+    }
+
+    /**
+     * v13: dusra wake naam "Maya". Jarvis wala purana substring
+     * raasta is par lagu NAHI hai — naam hamesha ek alag shabd
+     * (token) ki tarah mile tabhi wake hoga, taaki "মায়াবী" /
+     * "mayabi" jaise lambe shabd galti se na jaga dein. Latin roop
+     * par wahi distance-1 wali fuzzy chhoot hai; script roop
+     * squash ke baad chhote ho jate hain, isliye unpar pakka token
+     * match hi kaafi hai.
+     */
+    private fun containsMayaCall(text: String): Boolean {
+        val variants = MAYA_WAKE_WORDS.map { squashWakeText(it) }.toSet()
+        val tokens = text.split(Regex("\\s+"))
+            .flatMap { it.split('-') }
+            .map { squashWakeText(it) }
+            .filter { it.isNotEmpty() }
+        return tokens.any { token ->
+            token in variants ||
+                (token.length >= 4 && variants.any { variant ->
+                    variant.all { ch -> ch.code < 128 } &&
+                        levenshteinDistance(token, variant) <= 1
+                })
+        }
     }
 
     private fun squashWakeText(text: String): String {
@@ -1155,6 +1283,16 @@ class JarvisWakeService : Service() {
             "जार्भिस", "जार्बीस", "जारवीस", "जारिस", "जाविस",
             "জার্ভিস", "জারবিস", "জারভিস", "জার্বিস", "জার্ভীস",
             "jarvis", "jarbis", "jarwis", "jarvish"
+        )
+
+        /**
+         * v13: dusre wake naam "Maya" ke roop. Ye WAKE_WORDS me
+         * jaan-boojh kar nahi milaye gaye — unpar token-level wala
+         * alag match lagta hai (containsMayaCall dekho).
+         */
+        private val MAYA_WAKE_WORDS = listOf(
+            "माया", "মায়া", "মাযা", "মাইয়া",
+            "maya", "maaya", "maiya"
         )
 
         /** True while the wake service is alive (same process as the UI). */
