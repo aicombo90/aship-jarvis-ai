@@ -36,8 +36,8 @@ android {
         applicationId 'com.aship.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 16
-        versionName '1.15'
+        versionCode 17
+        versionName '1.16'
     }
 
     signingConfigs {
@@ -68,6 +68,18 @@ android {
             if (ciKeystoreFile != null) {
                 signingConfig signingConfigs.ci
             }
+        }
+    }
+
+    // v17: APK file ke naam me hi version — taaki phone ki Downloads
+    // list me dikhe ki kaun sa version download ho raha hai / pada hai
+    // (har release ka ek hi "app-debug.apk" naam hone se purani aur
+    // nayi file me uljhan hoti thi). Workflow ka release step *.apk
+    // glob se uthata hai, isliye Release asset ka naam bhi yahi
+    // hoga: aship-jarvis-v<versionCode>.apk
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            output.outputFileName = "aship-jarvis-v${defaultConfig.versionCode}.apk"
         }
     }
 
