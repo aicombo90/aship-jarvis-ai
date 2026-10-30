@@ -71,18 +71,6 @@ android {
         }
     }
 
-    // v17: APK file ke naam me hi version — taaki phone ki Downloads
-    // list me dikhe ki kaun sa version download ho raha hai / pada hai
-    // (har release ka ek hi "app-debug.apk" naam hone se purani aur
-    // nayi file me uljhan hoti thi). Workflow ka release step *.apk
-    // glob se uthata hai, isliye Release asset ka naam bhi yahi
-    // hoga: aship-jarvis-v<versionCode>.apk
-    applicationVariants.all { variant ->
-        variant.outputs.all { output ->
-            output.outputFileName = "aship-jarvis-v${variant.versionCode}.apk"
-        }
-    }
-
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
