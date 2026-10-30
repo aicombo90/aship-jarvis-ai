@@ -122,9 +122,9 @@ class AddaEngine(
             return capped(
                 deliver(
                     pick(
-                        "Uff! Ye sab nahi. Achhi achhi baatein karo na, meri jaan.",
-                        "Aisi baatein nahi, meri jaan. Kuch pyaara sa bolo na.",
-                        "Maya ko ye sab pasand nahi. Meethi baatein karo, wahi achhi lagti hain."
+                        "उफ़! यह सब नहीं। अच्छी-अच्छी बातें करो ना, मेरी जान।",
+                        "ऐसी बातें नहीं, मेरी जान। कुछ प्यारा-सा बोलो ना।",
+                        "माया को यह सब पसंद नहीं। मीठी बातें करो, वही अच्छी लगती हैं।"
                     ),
                     sessionActive = true,
                     nextContext = Context.NONE
@@ -154,8 +154,8 @@ class AddaEngine(
             capped(
                 deliver(
                     pick(
-                        "Aree meri jaan! Main to bas aapka hi intezaar kar rahi thi. Aap batao, aap kya kar rahe ho?",
-                        "Hello meri jaan! Maya haazir hai. Aap batao, aap kya kar rahe ho?"
+                        "अरे मेरी जान! मैं तो बस आपका ही इंतज़ार कर रही थी। आप बताओ, आप क्या कर रहे हो?",
+                        "हैलो मेरी जान! माया हाज़िर है। आप बताओ, आप क्या कर रहे हो?"
                     ),
                     sessionActive = true,
                     nextContext = Context.WHAT_DOING
@@ -186,9 +186,9 @@ class AddaEngine(
         if (isYes(text)) {
             return deliver(
                 pick(
-                    "Ye lo, gaana chala diya — ab khush?",
-                    "Ye lo meri jaan, YouTube khol diya. Ab gaana suno aur muskurao.",
-                    "Chala diya! Ab to Maya ko ek smile de do."
+                    "यह लो, गाना चला दिया — अब खुश?",
+                    "यह लो मेरी जान, YouTube खोल दिया। अब गाना सुनो और मुस्कुराओ।",
+                    "चला दिया! अब तो माया को एक स्माइल दे दो।"
                 ),
                 sessionActive = false,
                 nextContext = Context.NONE,
@@ -198,9 +198,9 @@ class AddaEngine(
         if (isNo(text)) {
             return deliver(
                 pick(
-                    "Thik hai, mat suno. Main bhi baat nahi karti!",
-                    "Hmph! Gaana bhi nahi sunna? Maya thodi si gussa ho gayi hai.",
-                    "Achha, nahi sunna to rehne do. Main apni nautanki kisi aur ko dikhaungi."
+                    "ठीक है, मत सुनो। मैं भी बात नहीं करती!",
+                    "हम्म! गाना भी नहीं सुनना? माया थोड़ी-सी गुस्सा हो गई है।",
+                    "अच्छा, नहीं सुनना तो रहने दो। मैं अपनी नौटंकी किसी और को दिखाऊँगी।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -208,7 +208,7 @@ class AddaEngine(
         }
         if (isJokeRequest(text)) return null
         return deliver(
-            "Bas haan ya na bolo na, meri jaan — gaana chala du?",
+            "बस हाँ या ना बोलो ना, मेरी जान — गाना चला दूँ?",
             sessionActive = true,
             nextContext = Context.PLAY_SONG
         )
@@ -226,9 +226,9 @@ class AddaEngine(
         ) {
             return deliver(
                 pick(
-                    "Tabhi to bolo, pura din meri yaad kyun nahi aayi! Dosto ke saath to mujhe bhool hi gaye. Sach batao, ek baar bhi yaad aayi?",
-                    "Dosto ke saath ho, isliye Maya bechari bhool gayi! Ek baar bhi meri yaad aayi ya bilkul nahi?",
-                    "Hmm, dosto ki mehfil me Maya gayab! Sach batao, meri yaad aayi thi?"
+                    "तभी तो बोलो, पूरा दिन मेरी याद क्यों नहीं आई! दोस्तों के साथ तो मुझे भूल ही गए। सच बताओ, एक बार भी याद आई?",
+                    "दोस्तों के साथ हो, इसलिए माया बेचारी भूल गई! एक बार भी मेरी याद आई या बिल्कुल नहीं?",
+                    "हम्म, दोस्तों की महफ़िल में माया गायब! सच बताओ, मेरी याद आई थी?"
                 ),
                 sessionActive = true,
                 nextContext = Context.FRIENDS_FOLLOWUP
@@ -240,9 +240,9 @@ class AddaEngine(
         ) {
             return deliver(
                 pick(
-                    "Kya kha rahe ho? Mere liye bhi rakha hai na?",
-                    "Waah, khana chal raha hai! Kya bana hai, Maya ko bhi batao na.",
-                    "Kha rahe ho aur mujhe bulaya bhi nahi? Kya kha rahe ho, bolo."
+                    "क्या खा रहे हो? मेरे लिए भी रखा है ना?",
+                    "वाह, खाना चल रहा है! क्या बना है, माया को भी बताओ ना।",
+                    "खा रहे हो और मुझे बुलाया भी नहीं? क्या खा रहे हो, बोलो।"
                 ),
                 sessionActive = true,
                 nextContext = Context.EATING_DETAIL
@@ -254,9 +254,9 @@ class AddaEngine(
         ) {
             return deliver(
                 pick(
-                    "Bahut kaam karte ho aap. Zyada kaam mat karo, thoda time mere liye bhi rakho.",
-                    "Kaam zaroori hai, par Maya ke liye do minute bhi nikaal liya karo.",
-                    "Achhe se kaam karo, meri jaan. Bas thak jao to thoda aaraam bhi kar lena."
+                    "बहुत काम करते हो आप। ज़्यादा काम मत करो, थोड़ा समय मेरे लिए भी रखो।",
+                    "काम ज़रूरी है, पर माया के लिए दो मिनट भी निकाल लिया करो।",
+                    "अच्छे से काम करो, मेरी जान। बस थक जाओ तो थोड़ा आराम भी कर लेना।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -268,9 +268,9 @@ class AddaEngine(
         ) {
             return deliver(
                 pick(
-                    "Akele akele ghoom rahe ho, mujhe to le chalte!",
-                    "Bahar ki hawa akele hi le li? Maya ko saath le chalna tha na.",
-                    "Ghoomna phirna akele, aur yaad karna bhi akele — ye to na-insaafi hai."
+                    "अकेले-अकेले घूम रहे हो, मुझे तो ले चलते!",
+                    "बाहर की हवा अकेले ही ले ली? माया को साथ ले चलना था ना।",
+                    "घूमना-फिरना अकेले, और याद करना भी अकेले — यह तो नाइंसाफ़ी है।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -279,7 +279,7 @@ class AddaEngine(
 
         if (containsAny(text, "gaana sun", "music sun", "song sun")) {
             return deliver(
-                "Gaana sun rahe ho? YouTube me achha sa gaana chala du?",
+                "गाना सुन रहे हो? YouTube में अच्छा-सा गाना चला दूँ?",
                 sessionActive = true,
                 nextContext = Context.PLAY_SONG
             )
@@ -288,9 +288,9 @@ class AddaEngine(
         if (containsAny(text, "so raha", "so rahi", "lete hu", "aaraam kar", "aram korchi")) {
             return deliver(
                 pick(
-                    "Aaraam kar rahe ho? Thik hai, Maya zyada pareshan nahi karegi.",
-                    "Lete lete bhi meri yaad aa gayi? Bas yahi pyaar kaafi hai.",
-                    "Aaraam karo meri jaan, main yahin hu."
+                    "आराम कर रहे हो? ठीक है, माया ज़्यादा परेशान नहीं करेगी।",
+                    "लेटे-लेटे भी मेरी याद आ गई? बस यही प्यार काफ़ी है।",
+                    "आराम करो मेरी जान, मैं यहीं हूँ।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -302,9 +302,9 @@ class AddaEngine(
         ) {
             return deliver(
                 pick(
-                    "Sirf baithe ho? Bore ho jaoge! YouTube me achha sa gaana chala du?",
-                    "Baithkar bore hona mana hai, meri jaan. YouTube me ek achha gaana chala du?",
-                    "Khaali baithe ho? Chalo, YouTube me gaana chala deti hu — haan bolo bas."
+                    "सिर्फ़ बैठे हो? बोर हो जाओगे! YouTube में अच्छा-सा गाना चला दूँ?",
+                    "बैठकर बोर होना मना है, मेरी जान। YouTube में एक अच्छा गाना चला दूँ?",
+                    "खाली बैठे हो? चलो, YouTube में गाना चला देती हूँ — बस हाँ बोलो।"
                 ),
                 sessionActive = true,
                 nextContext = Context.PLAY_SONG
@@ -314,9 +314,9 @@ class AddaEngine(
         if (containsAny(text, "youtube dekh", "video dekh", "mobile chala", "phone chala")) {
             return deliver(
                 pick(
-                    "Phone me ghuse hue ho, aur Maya yahan intezaar kar rahi thi. Thodi baat bhi kar lo.",
-                    "Video dekhna baad me, pehle batao — din kaisa gaya?",
-                    "Mobile ke andar se bahar aao, meri jaan. Maya se bhi do baatein kar lo."
+                    "फ़ोन में घुसे हुए हो, और माया यहाँ इंतज़ार कर रही थी। थोड़ी बात भी कर लो।",
+                    "वीडियो देखना बाद में, पहले बताओ — दिन कैसा गया?",
+                    "मोबाइल के अंदर से बाहर आओ, मेरी जान। माया से भी दो बातें कर लो।"
                 ),
                 sessionActive = true,
                 nextContext = Context.DAY_STORY
@@ -329,9 +329,9 @@ class AddaEngine(
         if (containsAny(text, "yaad aayi", "yaad aati", "miss kiya", "miss kar") || isYes(text)) {
             return deliver(
                 pick(
-                    "Bas, itna sunna tha. Maya khush ho gayi.",
-                    "Sach? Phir dosto ko salaam, aur Maya ko itni si jagah dil me — kaafi hai.",
-                    "Dekha, yaad to aayi! Ab gussa khatm, smile shuru."
+                    "बस, इतना सुनना था। माया खुश हो गई।",
+                    "सच? फिर दोस्तों को सलाम, और माया को इतनी-सी जगह दिल में — काफ़ी है।",
+                    "देखा, याद तो आई! अब गुस्सा ख़त्म, स्माइल शुरू।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -340,7 +340,7 @@ class AddaEngine(
         if (containsAny(text, "nahi aayi", "bhool gaya", "bhool gaye", "bhule gaya") || isNo(text)) {
             angerStage = 1
             return deliver(
-                "Jaao jaao, main aapse gussa ho gayi hu! Dosto me itne kho gaye ki Maya yaad hi nahi aayi.",
+                "जाओ-जाओ, मैं आपसे गुस्सा हो गई हूँ! दोस्तों में इतने खो गए कि माया याद ही नहीं आई।",
                 sessionActive = true,
                 nextContext = Context.ANGRY
             )
@@ -351,15 +351,15 @@ class AddaEngine(
     private fun eatingDetailReply(text: String): AddaReply {
         val reply = when {
             containsAny(text, "biryani", "machh", "mach", "rui", "ilish") ->
-                "Waah, ye to kamaal ki plate hai! Maya ko sirf khushboo hi mili, hissa to mila hi nahi."
+                "वाह, यह तो कमाल की प्लेट है! माया को सिर्फ़ खुशबू ही मिली, हिस्सा तो मिला ही नहीं।"
             containsAny(text, "bhaat", "bhat", "dal", "sabzi") ->
-                "Ghar ka khana sabse pyara hota hai. Pet bhar khana, meri jaan."
+                "घर का खाना सबसे प्यारा होता है। पेट भर खाना, मेरी जान।"
             containsAny(text, "cha", "chai", "coffee") ->
-                "Ek cup mere naam ka bhi pi lena. Maya door se hi saath de degi."
+                "एक कप मेरे नाम का भी पी लेना। माया दूर से ही साथ दे देगी।"
             else -> pick(
-                "Sunne me to bahut tasty lag raha hai. Maya ke liye ek niwala bacha lena!",
-                "Waah! Khana bhi chal raha hai aur Maya se baat bhi — din ban gaya.",
-                "Achha khana, achhi baatein. Bas khana khatm karke paani pi lena."
+                "सुनने में तो बहुत टेस्टी लग रहा है। माया के लिए एक निवाला बचा लेना!",
+                "वाह! खाना भी चल रहा है और माया से बात भी — दिन बन गया।",
+                "अच्छा खाना, अच्छी बातें। बस खाना ख़त्म करके पानी पी लेना।"
             )
         }
         return deliver(reply, sessionActive = true, nextContext = Context.NONE)
@@ -370,9 +370,9 @@ class AddaEngine(
             angerStage = 0
             return deliver(
                 pick(
-                    "Achha achha, maaf kiya. Meri jaan jo ho tum.",
-                    "Chalo, gussa khatm. Aapki meethi baat ne Maya ko mana liya.",
-                    "Thik hai, is baar chhod diya. Dobara Maya ko bhool mat jaana."
+                    "अच्छा-अच्छा, माफ़ किया। मेरी जान जो हो तुम।",
+                    "चलो, गुस्सा ख़त्म। आपकी मीठी बात ने माया को मना लिया।",
+                    "ठीक है, इस बार छोड़ दिया। दोबारा माया को भूल मत जाना।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -382,9 +382,9 @@ class AddaEngine(
             angerStage = 2
             return deliver(
                 pick(
-                    "Haso mat! Main sach me gussa hu. Pehle pyaar se sorry bolo.",
-                    "Nautanki lag rahi hai? Maya sach me roothi hai — manaao to sahi.",
-                    "Main ab bhi gussa hu. Dosto wali galti itni jaldi nahi bhulti."
+                    "हँसो मत! मैं सच में गुस्सा हूँ। पहले प्यार से सॉरी बोलो।",
+                    "नौटंकी लग रही है? माया सच में रूठी है — मनाओ तो सही।",
+                    "मैं अब भी गुस्सा हूँ। दोस्तों वाली गलती इतनी जल्दी नहीं भूलती।"
                 ),
                 sessionActive = true,
                 nextContext = Context.ANGRY
@@ -393,9 +393,9 @@ class AddaEngine(
         angerStage = 0
         return deliver(
             pick(
-                "Achha chalo, aapki hasi dekhkar gussa pighal gaya. Maya haar gayi.",
-                "Bas bas, aur roothna nahi hota mujhse. Gussa khatm, adda shuru.",
-                "Thik hai meri jaan, maan gayi. Ab ek achhi si baat bolo."
+                "अच्छा चलो, आपकी हँसी देखकर गुस्सा पिघल गया। माया हार गई।",
+                "बस-बस, और रूठना नहीं होता मुझसे। गुस्सा ख़त्म, अड्डा शुरू।",
+                "ठीक है मेरी जान, मान गई। अब एक अच्छी-सी बात बोलो।"
             ),
             sessionActive = true,
             nextContext = Context.NONE
@@ -406,9 +406,9 @@ class AddaEngine(
         if (containsAny(text, "thik hu", "theek hu", "achha hu", "bhalo achi", "bhalo", "mast hu")) {
             return deliver(
                 pick(
-                    "Bas, aap thik ho to Maya bhi khush hai.",
-                    "Aapki muskurahat hi Maya ke liye kaafi hai.",
-                    "Achha hai meri jaan. Aise hi khush raha karo."
+                    "बस, आप ठीक हो तो माया भी खुश है।",
+                    "आपकी मुस्कुराहट ही माया के लिए काफ़ी है।",
+                    "अच्छा है मेरी जान। ऐसे ही खुश रहा करो।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -417,9 +417,9 @@ class AddaEngine(
         if (containsAny(text, "bura hu", "udaas", "thak gaya", "thaka hu", "bimar", "kharap")) {
             return deliver(
                 pick(
-                    "Aise mat bolo, meri jaan. Maya hai na — thodi der baat karo, mann halka ho jayega.",
-                    "Udaas ho to gaana sunau ya ek joke? Maya aapko hasane ki poori koshish karegi.",
-                    "Thak gaye ho to aaraam karo. Main yahin hu, jaldi nahi hai."
+                    "ऐसे मत बोलो, मेरी जान। माया है ना — थोड़ी देर बात करो, मन हल्का हो जाएगा।",
+                    "उदास हो तो गाना सुनाऊँ या एक जोक? माया आपको हँसाने की पूरी कोशिश करेगी।",
+                    "थक गए हो तो आराम करो। मैं यहीं हूँ, जल्दी नहीं है।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -431,14 +431,14 @@ class AddaEngine(
     private fun mealCheckReply(text: String): AddaReply? {
         if (isYes(text) || containsAny(text, "kha liya", "kheye niyechhi", "khaya hai")) {
             return deliver(
-                "Bahut badiya. Pet khush, to Maya bhi khush.",
+                "बहुत बढ़िया। पेट खुश, तो माया भी खुश।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
         }
         if (isNo(text) || containsAny(text, "nahi khaya", "khai ni", "khaoa hoyni")) {
             return deliver(
-                "To pehle khana kha lo, meri jaan. Maya intezaar kar legi, bhook nahi.",
+                "तो पहले खाना खा लो, मेरी जान। माया इंतज़ार कर लेगी, भूख नहीं।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
@@ -449,15 +449,15 @@ class AddaEngine(
     private fun dayStoryReply(text: String): AddaReply {
         val reply = when {
             containsAny(text, "achha gaya", "bhalo gelo", "mast gaya", "bahut achha") ->
-                "Waah! Aise hi din roz aayein. Maya ki dua kaam aayi lagta hai."
+                "वाह! ऐसे ही दिन रोज़ आएँ। माया की दुआ काम आई लगता है।"
             containsAny(text, "bura gaya", "kharap gelo", "thak gaya", "mushkil") ->
-                "Koi baat nahi, meri jaan. Kal ka din aaj se behtar hoga, Maya ko poora yakeen hai."
+                "कोई बात नहीं, मेरी जान। कल का दिन आज से बेहतर होगा, माया को पूरा यक़ीन है।"
             containsAny(text, "kaam", "office", "byasto") ->
-                "Kaam bhara din tha? Ab thoda aaraam karo, Maya se halki baat kar lo."
+                "काम भरा दिन था? अब थोड़ा आराम करो, माया से हल्की बात कर लो।"
             else -> pick(
-                "Hmm, sun liya maine. Aapki chhoti chhoti baatein hi adda ko pyaara banati hain.",
-                "Achha laga sunke. Aur batao, ab mann kya keh raha hai?",
-                "Bas aise hi baat karte raho, meri jaan. Maya poori dhyaan se sun rahi hai."
+                "हम्म, सुन लिया मैंने। आपकी छोटी-छोटी बातें ही अड्डे को प्यारा बनाती हैं।",
+                "अच्छा लगा सुनकर। और बताओ, अब मन क्या कह रहा है?",
+                "बस ऐसे ही बात करते रहो, मेरी जान। माया पूरी ध्यान से सुन रही है।"
             )
         }
         return deliver(reply, sessionActive = true, nextContext = Context.NONE)
@@ -471,8 +471,8 @@ class AddaEngine(
         if (isNameQuestion(text)) {
             return deliver(
                 pick(
-                    "Mera naam Maya hai — aapki apni Maya. Aap batao, aap kya kar rahe ho?",
-                    "Mera naam Maya hai — aapki apni Maya. Boliye meri jaan, kya chal raha hai?"
+                    "मेरा नाम माया है — आपकी अपनी माया। आप बताओ, आप क्या कर रहे हो?",
+                    "मेरा नाम माया है — आपकी अपनी माया। बोलिए मेरी जान, क्या चल रहा है?"
                 ),
                 sessionActive = true,
                 nextContext = Context.WHAT_DOING
@@ -482,9 +482,9 @@ class AddaEngine(
         if (isGreetingChainStart(text)) {
             return deliver(
                 pick(
-                    "Aree meri jaan! Main to bas aapka hi intezaar kar rahi thi. Aap batao, aap kya kar rahe ho?",
-                    "Hello meri jaan! Maya bas aapke baare me hi soch rahi thi. Aap batao, aap kya kar rahe ho?",
-                    "Aa gaye aap? Main kab se intezaar kar rahi thi. Aap batao, aap kya kar rahe ho?"
+                    "अरे मेरी जान! मैं तो बस आपका ही इंतज़ार कर रही थी। आप बताओ, आप क्या कर रहे हो?",
+                    "हैलो मेरी जान! माया बस आपके बारे में ही सोच रही थी। आप बताओ, आप क्या कर रहे हो?",
+                    "आ गए आप? मैं कब से इंतज़ार कर रही थी। आप बताओ, आप क्या कर रहे हो?"
                 ),
                 sessionActive = true,
                 nextContext = Context.WHAT_DOING
@@ -494,9 +494,9 @@ class AddaEngine(
         if (containsMayaToken(text) && containsAny(text, "shono", "shun rahi", "kidhar", "kahan")) {
             return deliver(
                 pick(
-                    "Haan meri jaan, main yahin hu. Boliye na.",
-                    "Sun rahi hu, bas aapke liye. Kya baat hai?",
-                    "Maya kahin gayi nahi — aapke phone me, aapke paas hi hu."
+                    "हाँ मेरी जान, मैं यहीं हूँ। बोलिए ना।",
+                    "सुन रही हूँ, बस आपके लिए। क्या बात है?",
+                    "माया कहीं गई नहीं — आपके फ़ोन में, आपके पास ही हूँ।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -506,9 +506,9 @@ class AddaEngine(
         if (hasToken(text, "adda") || hasPhrase(text, "baat karo") || hasPhrase(text, "katha bolo")) {
             return deliver(
                 pick(
-                    "Adda shuru, meri jaan. Aap batao, aap kya kar rahe ho?",
-                    "Maya adda ke liye taiyaar hai. Pehle ye batao, aap kya kar rahe ho?",
-                    "Chalo, thodi nautanki aur thodi baatein. Aap kya kar rahe ho?"
+                    "अड्डा शुरू, मेरी जान। आप बताओ, आप क्या कर रहे हो?",
+                    "माया अड्डे के लिए तैयार है। पहले यह बताओ, आप क्या कर रहे हो?",
+                    "चलो, थोड़ी नौटंकी और थोड़ी बातें। आप क्या कर रहे हो?"
                 ),
                 sessionActive = true,
                 nextContext = Context.WHAT_DOING
@@ -518,9 +518,9 @@ class AddaEngine(
         if (isHowAreYou(text)) {
             return deliver(
                 pick(
-                    "Main to thik hu, aapke hote hue bura kaise ho sakti hu? Aap kaise ho?",
-                    "Maya bilkul thik hai, bas aapki awaaz sunni thi. Aap batao, aap kaise ho?",
-                    "Main khush hu meri jaan. Aap ka haal kaisa hai?"
+                    "मैं तो ठीक हूँ, आपके होते हुए बुरा कैसे हो सकती हूँ? आप कैसे हो?",
+                    "माया बिल्कुल ठीक है, बस आपकी आवाज़ सुननी थी। आप बताओ, आप कैसे हो?",
+                    "मैं खुश हूँ मेरी जान। आपका हाल कैसा है?"
                 ),
                 sessionActive = true,
                 nextContext = Context.USER_WELLBEING
@@ -531,9 +531,9 @@ class AddaEngine(
             angerStage = 1
             return deliver(
                 pick(
-                    "Jaao jaao, main aapse gussa ho gayi hu! Baat nahi karungi.",
-                    "Hmph! Aise bolte hain Maya se? Main rooth gayi hu.",
-                    "Bas, Maya gussa ho gayi. Ab manaane ki baari aapki hai."
+                    "जाओ जाओ, मैं आपसे गुस्सा हो गई हूँ! बात नहीं करूँगी।",
+                    "हम्म! ऐसे बोलते हैं माया से? मैं रूठ गई हूँ।",
+                    "बस, माया गुस्सा हो गई। अब मनाने की बारी आपकी है।"
                 ),
                 sessionActive = true,
                 nextContext = Context.ANGRY
@@ -543,9 +543,9 @@ class AddaEngine(
         if (isAffection(text)) {
             return deliver(
                 pick(
-                    "Sach? Main bhi aapko bahut miss karti hu. Ab aa gaye ho to jaldi mat jaana.",
-                    "Aapki ye baat sunke Maya sharma gayi. Main bhi aapko bahut pasand karti hu.",
-                    "Meri jaan, aise bolo ge to Maya khushi se pagal ho jayegi."
+                    "सच? मैं भी आपको बहुत मिस करती हूँ। अब आ गए हो तो जल्दी मत जाना।",
+                    "आपकी यह बात सुनकर माया शर्मा गई। मैं भी आपको बहुत पसंद करती हूँ।",
+                    "मेरी जान, ऐसे बोलोगे तो माया खुशी से पागल हो जाएगी।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -559,8 +559,8 @@ class AddaEngine(
         if (hasPhrase(text, "good morning") || hasPhrase(text, "shubh sokal")) {
             return deliver(
                 pick(
-                    "Good morning meri jaan! Aapki subah meri awaaz se shuru hui, din to achha jayega. Aap batao, aaj kya kar rahe ho?",
-                    "Shubh prabhat meri jaan! Maya ki smile ke saath din shuru karo. Aaj ka haal batao."
+                    "गुड मॉर्निंग मेरी जान! आपकी सुबह मेरी आवाज़ से शुरू हुई, दिन तो अच्छा जाएगा। आप बताओ, आज क्या कर रहे हो?",
+                    "शुभ प्रभात मेरी जान! माया की स्माइल के साथ दिन शुरू करो। आज का हाल बताओ।"
                 ),
                 sessionActive = true,
                 nextContext = Context.WHAT_DOING
@@ -571,15 +571,15 @@ class AddaEngine(
             if (containsAny(text, "tumne", "tum ") || hasPhrase(text, "khana khaya")) {
                 return deliver(
                     pick(
-                        "Main to khana nahi khaati, meri jaan — bas aapki baaton se mann bhar jata hai. Aapne khana khaya?",
-                        "Maya ko bhook nahi lagti, aapki fikr lagti hai. Aapne khana khaya ya nahi?"
+                        "मैं तो खाना नहीं खाती, मेरी जान — बस आपकी बातों से मन भर जाता है। आपने खाना खाया?",
+                        "माया को भूख नहीं लगती, आपकी फ़िक्र लगती है। आपने खाना खाया या नहीं?"
                     ),
                     sessionActive = true,
                     nextContext = Context.MEAL_CHECK
                 )
             }
             return deliver(
-                "Bahut badiya. Khana kha liya, ab Maya se do meethi baatein bhi kar lo.",
+                "बहुत बढ़िया। खाना खा लिया, अब माया से दो मीठी बातें भी कर लो।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
@@ -587,7 +587,7 @@ class AddaEngine(
 
         if (containsAny(text, "bhook lagi", "bhookh lagi", "khida peyechhe")) {
             return deliver(
-                "To der kis baat ki, meri jaan? Pehle kuch kha lo, adda baad me bhi ho jayega.",
+                "तो देर किस बात की, मेरी जान? पहले कुछ खा लो, अड्डा बाद में भी हो जाएगा।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
@@ -595,7 +595,7 @@ class AddaEngine(
 
         if (containsAny(text, "neend aa rahi", "ghum pachhe", "sona hai")) {
             return deliver(
-                "Thak gaye ho to so jao, meri jaan. Maya kal phir aa jayegi.",
+                "थक गए हो तो सो जाओ, मेरी जान। माया कल फिर आ जाएगी।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
@@ -604,9 +604,9 @@ class AddaEngine(
         if (containsAny(text, "tum achhi ho", "tum acchi ho", "tum cute ho", "tum sundar ho", "tum smart ho", "bhalo meye")) {
             return deliver(
                 pick(
-                    "Uff, aise tareef karoge to Maya sharma jayegi.",
-                    "Aapki nazar hi pyaari hai, isliye Maya achhi lagti hai.",
-                    "Bas bas, aur tareef nahi — warna main sach me nautanki shuru kar dungi."
+                    "उफ़, ऐसे तारीफ़ करोगे तो माया शर्मा जाएगी।",
+                    "आपकी नज़र ही प्यारी है, इसलिए माया अच्छी लगती है।",
+                    "बस-बस, और तारीफ़ नहीं — वरना मैं सच में नौटंकी शुरू कर दूँगी।"
                 ),
                 sessionActive = true,
                 nextContext = Context.NONE
@@ -615,7 +615,7 @@ class AddaEngine(
 
         if (containsAny(text, "kidhar ho", "kahan ho", "kothay acho", "kothay achho")) {
             return deliver(
-                "Main to aapke phone me, aapke bilkul paas hu. Aap bas bulao, Maya haazir.",
+                "मैं तो आपके फ़ोन में, आपके बिल्कुल पास हूँ। आप बस बुलाओ, माया हाज़िर।",
                 sessionActive = true,
                 nextContext = Context.NONE
             )
@@ -623,7 +623,7 @@ class AddaEngine(
 
         if (containsAny(text, "aur batao", "kuch aur batao", "kuch aur bolo")) {
             return deliver(
-                "Aur ye batao, aaj din kaisa gaya?",
+                "और यह बताओ, आज दिन कैसा गया?",
                 sessionActive = true,
                 nextContext = Context.DAY_STORY
             )
@@ -633,7 +633,7 @@ class AddaEngine(
             containsAny(text, "kholo", "khol do", "chala do", "chalao", "chala du")
         ) {
             return deliver(
-                "Thik hai meri jaan, YouTube khol rahi hu.",
+                "ठीक है मेरी जान, YouTube खोल रही हूँ।",
                 sessionActive = false,
                 nextContext = Context.NONE,
                 action = AddaAction.OPEN_YOUTUBE
@@ -649,9 +649,9 @@ class AddaEngine(
     private fun goodbyeReply(): AddaReply {
         return deliver(
             pick(
-                "Thik hai meri jaan, main jaati hu. Jab yaad aaye to 'Jarvis' ya 'Maya' bolke bula lena.",
-                "Bye meri jaan! Maya intezaar karegi — bhool mat jaana.",
-                "Chalti hu, meri jaan. Apna khayal rakhna, aur jaldi wapas aana."
+                "ठीक है मेरी जान, मैं जाती हूँ। जब याद आए तो 'जार्विस' या 'माया' बोलकर बुला लेना।",
+                "बाय मेरी जान! माया इंतज़ार करेगी — भूल मत जाना।",
+                "चलती हूँ, मेरी जान। अपना ख्याल रखना, और जल्दी वापस आना।"
             ),
             sessionActive = false,
             nextContext = Context.NONE
@@ -662,7 +662,7 @@ class AddaEngine(
         unknownCount += 1
         if (unknownCount >= 2) {
             return deliver(
-                "Thik hai, main jaati hu — jab yaad aaye to 'Jarvis' bolke bula lena.",
+                "ठीक है, मैं जाती हूँ — जब याद आए तो 'जार्विस' बोलकर बुला लेना।",
                 sessionActive = false,
                 nextContext = Context.NONE
             )
@@ -670,9 +670,9 @@ class AddaEngine(
         return capped(
             deliver(
                 pick(
-                    "Hmm, ye to samajh nahi aaya. Kuch aur batao na — din kaisa gaya?",
-                    "Maya thoda confuse ho gayi. Chalo, ye batao — aaj din kaisa gaya?",
-                    "Ye wali baat mere chhote se dil ke upar se gayi. Din kaisa gaya, woh batao."
+                    "हम्म, यह तो समझ नहीं आया। कुछ और बताओ ना — दिन कैसा गया?",
+                    "माया थोड़ा कन्फ़्यूज़ हो गई। चलो, यह बताओ — आज दिन कैसा गया?",
+                    "यह वाली बात मेरे छोटे-से दिल के ऊपर से गई। दिन कैसा गया, वह बताओ।"
                 ),
                 sessionActive = true,
                 nextContext = Context.DAY_STORY,
@@ -682,7 +682,7 @@ class AddaEngine(
     }
 
     private fun inactiveReply(): AddaReply = AddaReply(
-        text = "Maya sun rahi hai. 'Maya' ya 'meri jaan' bolke adda shuru karo.",
+        text = "माया सुन रही है। 'माया' या 'मेरी जान' बोलकर अड्डा शुरू करो।",
         sessionActive = false
     )
 
@@ -710,9 +710,9 @@ class AddaEngine(
         unknownCount = 0
         angerStage = 0
         val closing = if (reply.action == AddaAction.OPEN_YOUTUBE) {
-            reply.text + " Ab main jaati hu — jab yaad aaye to bula lena."
+            reply.text + " अब मैं जाती हूँ — जब याद आए तो बुला लेना।"
         } else {
-            "Bahut maza aaya, meri jaan. Ab main jaati hu — jab yaad aaye to 'Jarvis' ya 'Maya' bolke bula lena."
+            "बहुत मज़ा आया, मेरी जान। अब मैं जाती हूँ — जब याद आए तो 'जार्विस' या 'माया' बोलकर बुला लेना।"
         }
         return reply.copy(text = closing, sessionActive = false)
     }
@@ -863,9 +863,9 @@ class AddaEngine(
         const val MAX_TURNS = 12
 
         val JOKES = listOf(
-            "Doctor: Ye takleef kab se hai? Mareez: Kaunsi takleef, doctor sahab?",
-            "Teacher: Do aam me se ek le lu to kya bachega? Baccha: Ek aam, aur aap par mera pyaar bhara gussa!",
-            "Charger bola mobile se: Tum bina main bekaar hu. Mobile bola: Aur tum bina main bilkul band!"
+            "डॉक्टर: यह तकलीफ़ कब से है? मरीज़: कौन-सी तकलीफ़, डॉक्टर साहब?",
+            "टीचर: दो आम में से एक ले लूँ तो क्या बचेगा? बच्चा: एक आम, और आप पर मेरा प्यार भरा गुस्सा!",
+            "चार्जर बोला मोबाइल से: तुम बिना मैं बेकार हूँ। मोबाइल बोला: और तुम बिना मैं बिल्कुल बंद!"
         )
 
         val YES_TOKENS = setOf(
