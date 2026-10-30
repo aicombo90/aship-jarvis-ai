@@ -26,6 +26,8 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.aship.jarvis.MainActivity
+import com.aship.jarvis.ai.AgentBrain
+import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
@@ -119,6 +121,16 @@ import java.util.concurrent.Executors
  * ho — tabhi Maya Gemini se jawab lati hai (GeminiBrain).
  * Offline command hamesha pehle jeet-ta hai; key na ho to ye
  * raasta band hi rehta hai aur purana vyavhaar nahi badalta.
+ *
+ * v25 sanyojit mastishk (combined brain): kram ab ulta hai —
+ * online brain uplabdh ho (wahi v21 wala gate) to har baat
+ * sabse pehle AGENT ko jati hai (AgentBrain): Gemini poori
+ * baat samajhta hai, online kadam khud leta hai aur phone
+ * wale kadam offline auzaaron se karwata hai, jab tak poora
+ * kaam khatm na ho jaye. Agent ko round 1 par koi model hi
+ * na mile to purana raasta (adda -> engine -> retry) bilkul
+ * pehle jaisa chalega; gate band ho to agent ka naam bhi
+ * nahi liya jata.
  */
 class JarvisWakeService : Service() {
 
@@ -725,6 +737,19 @@ class JarvisWakeService : Service() {
         state = State.REPLY
         stopCommandSession()
         addaNoSpeechCount = 0
+        // v25: online brain uplabdh ho to sabse pehle AGENT —
+        // app ke andar EK hi mastishk (user ka pakka design):
+        // Gemini poori baat samajhta hai, online kadam khud
+        // leta hai aur phone wale kadam offline auzaaron se
+        // karwata hai, jab tak poora kaam khatm na ho jaye.
+        // Adda tab hi pehle aayega jab agent uplabdh NA ho
+        // (Offline mode / key nahi / net nahi) — ya agent ko
+        // round 1 par koi model hi na mile (onAgentBrainAnswer
+        // wala purana raasta, retry ke saath).
+        if (geminiBrainAllowed()) {
+            askAgentBrain(text)
+            return
+        }
         // v13: adda trigger ya chalu adda ho to utterance pehle
         // Maya ke AddaEngine ko jata hai — CommandEngine use beech
         // me nigal nahi sakta. Adda ke andar v12 retry nahi lagta.
@@ -733,26 +758,15 @@ class JarvisWakeService : Service() {
             return
         }
         val rawResult = commandEngine.handle(text)
-        // v21 Phase 3: offline engine miss kare aur online brain
-        // uplabdh ho (mode Offline na ho, key set ho, net chalu
-        // ho) to usi miss par pehle Gemini ko ek mauka — jawab
-        // mile to wahi bola jayega. Na mile (ya gate band ho) to
-        // finishCommandResult wala purana raasta bilkul pehle
-        // jaisa chalega. Engine ka HANDLED jawab kabhi Gemini
-        // tak jata hi nahi — offline command ki pehchan pehle.
-        if (!rawResult.handled && geminiBrainAllowed()) {
-            askGeminiBrain(text, rawResult)
-            return
-        }
         finishCommandResult(text, rawResult)
     }
 
     /**
      * Engine ke result ka aakhiri faisla — v21 se pehle ye saara
      * kaam onCommandHeard ke andar hota tha; ab wahi code yahan
-     * hai taaki Gemini ke null jawab par bhi bilkul waisa hi
-     * vyavhaar mile. Sirf executor thread se bulao; state REPLY
-     * ho aur command session band ho chuka ho.
+     * hai taaki agent/Gemini ke null jawab par bhi bilkul waisa
+     * hi vyavhaar mile. Sirf executor thread se bulao; state
+     * REPLY ho aur command session band ho chuka ho.
      */
     private fun finishCommandResult(text: String, rawResult: CommandResult) {
         // v12: "handled" ka faisla RAW result par hota hai — neeche
@@ -825,38 +839,52 @@ class JarvisWakeService : Service() {
     }
 
     /**
-     * v21 Phase 3: Gemini se jawab maango. State pehle se REPLY
-     * hai aur command session band ho chuka hai; net wala jawab
-     * aane tak koi timer is flow ko nahi chhedta — reply fallback
-     * sirf kuch BOLNE par arm hota hai, auto-resume sirf
-     * wakePaused par chalta hai. Jawab GeminiBrain ke thread se
-     * wapas executor par aata hai (onGeminiBrainAnswer).
+     * v25: sanyojit agent chalao. Auzaar background wale
+     * CommandEngine se bandhe hain (overlay bridge wala
+     * raasta) — agent ke phone-kadam bilkul waise hi
+     * chalte hain jaise seedhe bole hue command chalte
+     * the. State pehle se REPLY hai aur command session
+     * band ho chuka hai; agent ki daud (net round + auzaar)
+     * AgentBrain ke apne thread par chalti hai — is flow
+     * ko koi timer nahi chhedta: reply fallback sirf kuch
+     * BOLNE par arm hota hai, auto-resume sirf wakePaused
+     * par chalta hai. Aakhiri jawab AgentBrain ke thread
+     * se wapas executor par aata hai (onAgentBrainAnswer).
+     * (v21 wala askGeminiBrain/chat raasta ab nahi hai —
+     * agent uski jagah le chuka hai.)
      */
-    private fun askGeminiBrain(text: String, rawResult: CommandResult) {
-        setStatus("Maya online soch rahi hai...")
-        updateNotification("Maya online soch rahi hai...")
-        GeminiBrain.chat(applicationContext, geminiHistory.toList(), text) { reply ->
-            executor.execute { onGeminiBrainAnswer(text, rawResult, reply) }
+    private fun askAgentBrain(text: String) {
+        setStatus("Maya soch rahi hai — kaam kar rahi hai...")
+        updateNotification("Maya soch rahi hai — kaam kar rahi hai...")
+        val tools = AgentTools(
+            applicationContext, commandEngine, fromBackgroundService = true
+        )
+        AgentBrain.run(
+            applicationContext, geminiHistory.toList(), text, tools::execute
+        ) { reply ->
+            executor.execute { onAgentBrainAnswer(text, reply) }
         }
     }
 
     /**
-     * Gemini ka jawab (ya uski anupasthiti). Jawab mila to use
-     * ek aam handled jawab ki tarah bolo — gola bubble, reply
-     * fallback, sab waisa hi; aur baatchit yaad me jud jati hai.
-     * Jawab na mila to engine ke miss wala purana raasta
-     * (finishCommandResult) — retry ab bhi waisa hi bacha hai.
+     * Agent ka aakhiri jawab (ya uski anupasthiti). Jawab
+     * mila to use ek aam handled jawab ki tarah bolo —
+     * gola bubble, reply fallback, sab waisa hi; aur
+     * baatchit yaad me jud jati hai. Jawab null ho (round
+     * 1 par koi model hi nahi mila) to purana offline
+     * raasta bilkul pehle jaisa: adda, phir engine, phir
+     * finishCommandResult — retry ab bhi waisa hi bacha hai.
      */
-    private fun onGeminiBrainAnswer(
-        text: String,
-        rawResult: CommandResult,
-        reply: String?
-    ) {
+    private fun onAgentBrainAnswer(text: String, reply: String?) {
         // Beech me service band ho gayi ho ya flow aage badh
         // gaya ho to der se aaya jawab chup-chaap chhod do.
         if (destroyed || state != State.REPLY) return
         if (reply == null) {
-            finishCommandResult(text, rawResult)
+            if (addaEngine.shouldHandle(text)) {
+                handleAddaHeard(text)
+                return
+            }
+            finishCommandResult(text, commandEngine.handle(text))
             return
         }
         // Baatchit ki yaad: aakhiri 10 turn rakho, jodi todna mat.
