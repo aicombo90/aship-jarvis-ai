@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Downloading the offline Vosk model; later also online AI -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- v21 Phase 3: Gemini ko bulane se pehle net chalu hai ya
+         nahi, ye ConnectivityManager se jaanchna hai — usi jaanch
+         ke liye ye aam (normal) permission chahiye. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Opening / pre-filling the alarm screen -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- Phase 2: background wake-word listening runs as a foreground
