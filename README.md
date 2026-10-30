@@ -24,6 +24,17 @@ Jarvis does it on your phone and speaks the reply back to you.
   roothna-manaana, joke aur roz ki baatein, hamesha saaf-suthri
 - **Clear spoken replies (v15):** all spoken replies are now written
   in Devanagari script, so the Hindi TTS voice pronounces them clearly
+- **Screen wakes + lock respect (v16):** wake word sunte hi screen
+  ki roshni jal jati hai (screen band ho tab bhi), aur phone lock
+  ho to koi app nahi khulta — Maya pehle unlock karne ko kehti hai
+- **Versioned APK name + Accessibility mobile data (v17):** APK
+  file ka naam ab `aship-jarvis-v<versionCode>.apk` hai — phone
+  ki Downloads list me hi dikhega kaun sa version hai. Aur app
+  me **Accessibility** wala bandobosto (battery wale button jaisa
+  hi ek button): Settings se service ON karne par "মোবাইল ডাটা
+  অন করো" / "डेटा बंद करो" bolne se Maya quick-settings ka data
+  tile dabakar mobile data on/off kar deti hai — lock ho tab bhi
+  koshish hoti hai, tile na mile to saaf bol deti hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
@@ -55,7 +66,8 @@ Studio ki zaroorat nahi — phone se hi ho jayega.
 3. Sabse upar wali **Build APK** run kholo (uske saamne green ✓ hona chahiye).
 4. Page ke neeche **Artifacts** section me **aship-jarvis-debug-apk** milega —
    us par tap karke download karo. Ye ek **.zip** file hogi.
-5. Zip ko kholo (extract karo) — andar **app-debug.apk** milegi.
+5. Zip ko kholo (extract karo) — andar **aship-jarvis-v<versionCode>.apk**
+   milegi (v17 se pehle uska naam **app-debug.apk** tha).
 6. APK file par tap karo → **Install**.
 
 > Artifact 14 din tak rehta hai. Uske baad chahiye to Actions tab me
@@ -79,7 +91,8 @@ Play Store wali key nahi). Isliye:
 
 Har feature build GitHub par ek **Release** ke roop me bhi publish
 hota hai (tag `v<versionCode>` — jaise `v2` — aur APK asset ka naam
-hamesha `app-debug.apk`). App khud hi update bata deta hai:
+v17 se `aship-jarvis-v<versionCode>.apk`, usse pehle `app-debug.apk`
+tha). App khud hi update bata deta hai:
 
 1. App khulne par chup-chaap latest release check hota hai. Naya
    version ho to pop-up aayega: **"Naya version aa gaya hai!"**
@@ -124,9 +137,10 @@ ko milti hai jahan se aap APK khol rahe ho.
 | **Display over other apps (SYSTEM_ALERT_WINDOW)** (Phase 2 fix, Settings se diya jata hai) | Android 10+ background service se app kholna (`startActivity`) chup-chaap rok deta hai — isiliye Jarvis "YouTube khol diya" bol deta tha par YouTube khulta nahi tha. Is permission ke saath wake service launch ke pal bhar (~0.6 second) ke liye ek 1x1 pixel ka **adrishya** overlay window dikhata hai, app kholta hai, aur overlay hata deta hai. Screen par koi popup/ad kabhi nahi dikhta. Permission na ho to Jarvis jhooth nahi bolega — saaf kahega ki permission chahiye. |
 | **Install packages (REQUEST_INSTALL_PACKAGES)** (in-app update) | GitHub Release se download hue naye APK ko install karne ke liye. Pehli baar Android "Install unknown apps" me is app ko Allow maangega — bina Allow ke update download shuru hi nahi hota. Sirf is app ke apne update ke liye istemal hota hai, koi dusri app install nahi hoti. |
 
-Abhi bhi **koi Accessibility Service nahi hai** aur koi API key code me
-nahi hai. Jo permission lagegi, Android khud poochega — bina aapke haan
-kiye kuch nahi hota.
+v17 se ek **Accessibility Service** hai, par woh sirf mobile-data
+wala tile dabane ke liye hai (upar wala v17 note dekho) — koi screen
+automation nahi hota, aur koi API key code me nahi hai. Jo permission
+lagegi, Android khud poochega — bina aapke haan kiye kuch nahi hota.
 
 ## Background sunna (Phase 2) — kaise kaam karta hai
 
