@@ -328,10 +328,15 @@ class CommandEngine(
         }
 
         // --- Identity -------------------------------------------------------
+        // v13: persona ka naam Maya hai (app/brand naam ASHIP JARVIS
+        // AI hi rehta hai). Script wale naam-wale sawaal bhi yahin
+        // pakdo — normalize unhe Latin me nahi badalta.
         if (text.contains("tum kaun ho") || text.contains("who are you") ||
-            text.contains("tumhara naam") || text.contains("your name")
+            text.contains("tumhara naam") || text.contains("your name") ||
+            text.contains("तुम कौन हो") || text.contains("तुम्हारा नाम") ||
+            text.contains("তুমি কে") || text.contains("তোমার নাম")
         ) {
-            return CommandResult("Main Aship Jarvis hoon, aapka personal voice assistant.", true)
+            return CommandResult("Mera naam Maya hai — aapki apni Maya.", true)
         }
 
         // --- Small talk -----------------------------------------------------
