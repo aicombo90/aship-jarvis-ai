@@ -50,6 +50,12 @@ import java.util.concurrent.Executors
  * report-niyam yahan aur sakht hai: yaad ka text
  * report me KABHI nahi aata (stepLabel par dekho).
  *
+ * v32: ek aur auzaar — get_weather (AgentTools me):
+ * mastishk shahar ka naam aur aaj/kal ka sanket
+ * bhejta hai, auzaar Open-Meteo se asal sankhyaen
+ * lata hai — mastishk mausam ka andaza khud NAHI
+ * lagata. stepLabel me uska shahar bhi dikhta hai.
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -262,6 +268,7 @@ object AgentBrain {
                     ""
                 }
             "call_person", "whatsapp_message" -> args.optString("name")
+            "get_weather" -> args.optString("city")
             // v31 PRIVACY: yaad wale auzaaron ke args —
             // khud yaad rakhi baatein/match — report me
             // KABHI nahi; sirf auzaar ka naam dikhega.
@@ -401,6 +408,13 @@ object AgentBrain {
             "phrase>\"} — removes every remembered fact " +
             "containing the match. Use it when the user says " +
             "'bhool jao / ভুলে যাও' (forget that).\n" +
+            "- get_weather, args {\"city\": \"<place name>\", " +
+            "\"when\": \"today\" | \"tomorrow\"} — Open-Meteo se " +
+            "asal mausam laata hai (sabse zyada/kam taapmaan, " +
+            "barish ki sambhavna). Shahar ka naam user ne jo " +
+            "bola wahi bhejo; aaj ke liye when='today', kal ke " +
+            "liye 'tomorrow'. Mausam ka andaza khud mat lagao. " +
+            "Use it for weather questions.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
