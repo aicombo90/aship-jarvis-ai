@@ -8,11 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import com.aship.jarvis.MainActivity
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.prefs.AppPrefs
@@ -51,6 +60,24 @@ import java.util.concurrent.Executors
  * CommandEngine's background mode), unrecognized background utterances
  * are answered with silence, and a command session is hard-capped
  * (~7 s total, ~2.5 s without a word change) so noise cannot hold it.
+ *
+ * v1.3 mic sharing: the phone has ONE microphone. While this service
+ * holds it (Vosk AudioRecord), Android refuses the foreground system
+ * recognizer ("cannot record now as ASHIP JARVIS AI is recording",
+ * error 7). So MainActivity asks this service to PAUSE
+ * (ACTION_PAUSE_WAKE) before tap-to-speak: the wake session stops
+ * and releases the mic, but the service and its notification stay
+ * alive. ACTION_RESUME_WAKE — or a 45 s safety timer, in case the
+ * activity dies without resuming — restarts the wake session.
+ *
+ * v1.5 Siri orb: on a wake, a glossy floating orb (OrbView) appears
+ * at the bottom-center of the screen above other apps — breathing
+ * while it waits for the command, shimmering while the reply is
+ * spoken, with the reply text in a bubble above it so the user can
+ * also READ the answer. It fades out when the flow returns to wake
+ * listening (1.5 s after the reply). Needs the same "Display over
+ * other apps" permission as the launch bridge; without it the orb
+ * is skipped silently and the voice flow is unchanged.
  */
 class JarvisWakeService : Service() {
 
@@ -63,6 +90,7 @@ class JarvisWakeService : Service() {
     private lateinit var speaker: TtsSpeaker
     private lateinit var commandEngine: CommandEngine
     private lateinit var prefs: AppPrefs
+    private lateinit var orbOverlay: OrbOverlay
 
     private var model: Model? = null
     private var wakeSpeechService: SpeechService? = null
@@ -75,6 +103,12 @@ class JarvisWakeService : Service() {
     private var destroyed = false
 
     private var wakeErrorCount = 0
+
+    // v1.3 mic sharing: true while the foreground screen has borrowed
+    // the microphone. The wake session is stopped (mic released) but
+    // the service + notification stay alive; no error counters move.
+    @Volatile
+    private var wakePaused = false
 
     // Command-session caps (Bug-2 fix): track when the session started
     // and when the heard words last CHANGED, so steady noise partials
@@ -102,19 +136,42 @@ class JarvisWakeService : Service() {
         // report a missing overlay permission honestly (Bug-1 fix).
         commandEngine = CommandEngine(applicationContext, fromBackgroundService = true)
         prefs = AppPrefs(this)
+        orbOverlay = OrbOverlay()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            teardown()
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                teardown()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE_WAKE -> {
+                // Service chal hi nahi raha (state STOPPED) to kuch
+                // mat karo. stopSelf() yahan jaan-boojh kar NAHI hai:
+                // purana prefs-jhanda galat ho to RESUME ek sahi
+                // START se pehle line me lag sakta hai, aur stop
+                // us start ko kharab kar dega. Khaali instance na
+                // mic pakadta hai, na notice dikhata hai — agla
+                // START/STOP use sambhal lega.
+                if (state != State.STOPPED) {
+                    executor.execute { pauseWakeListening() }
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_RESUME_WAKE -> {
+                if (state != State.STOPPED) {
+                    executor.execute { resumeWakeListening() }
+                }
+                return START_NOT_STICKY
+            }
         }
         if (state != State.STOPPED) {
             // Already running: a second START changes nothing.
             return START_NOT_STICKY
         }
         isRunning = true
+        prefs.wakeServiceRunning = true
         state = State.LOADING
         setStatus("Model load ho raha hai...")
         startForegroundWith(buildNotification("Model load ho raha hai..."))
@@ -135,7 +192,14 @@ class JarvisWakeService : Service() {
         destroyed = true
         state = State.STOPPED
         isRunning = false
+        wakePaused = false
+        prefs.wakeServiceRunning = false
         setStatus("Band hai")
+        // Gola sabse pehle hatao — neeche wala removeCallbacksAndMessages
+        // uske posted kaam ko bhi uda dega.
+        if (::orbOverlay.isInitialized) {
+            orbOverlay.removeImmediately()
+        }
         mainHandler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         stopWakeSession()
@@ -186,6 +250,14 @@ class JarvisWakeService : Service() {
         stopCommandSession()
         stopWakeSession()
         state = State.WAKE
+        if (wakePaused) {
+            // Mic foreground screen ko diya hua hai: state WAKE hi
+            // rahega, par koi session mic nahi pakdega. Resume (ya
+            // 45 s wala safety timer) aane par yahi function dobara
+            // chalega aur session sach me shuru hoga.
+            setStatus("Background sunna roka hai — mic app ke paas hai")
+            return
+        }
         try {
             val recognizer = Recognizer(loadedModel, SAMPLE_RATE)
             val service = SpeechService(recognizer, SAMPLE_RATE)
@@ -219,6 +291,66 @@ class JarvisWakeService : Service() {
         wakeSpeechService = null
     }
 
+    // ------------------------------------------------------------------
+    // Mic sharing (v1.3, executor thread)
+    //
+    // Foreground tap-to-speak (Google system recognizer) aur ye
+    // service ek hi mic ke do daavedar hain — ek saath chal hi nahi
+    // sakte. Isliye activity sunna shuru karne se pehle PAUSE bhejti
+    // hai: wake session band (mic khali), service + notification
+    // chalu. Sunna khatm hone par RESUME aata hai; na aaye to 45 s
+    // ka safety timer khud resume kar deta hai. Pause na to error
+    // counter badhata hai, na service band karta hai.
+    // ------------------------------------------------------------------
+
+    private fun pauseWakeListening() {
+        if (destroyed) return
+        if (wakePaused) {
+            // Pehle se roka hai: sirf safety timer aage badhao.
+            armAutoResume()
+            return
+        }
+        wakePaused = true
+        if (state == State.WAKE) {
+            stopWakeSession()
+            setStatus("Background sunna roka hai — mic app ke paas hai")
+        }
+        // ACK/COMMAND/REPLY chal raha ho to flow ko haath mat lagao:
+        // uske ant me startWakeSession() wakePaused dekh kar khud
+        // ruka rahega.
+        armAutoResume()
+    }
+
+    private fun resumeWakeListening() {
+        if (destroyed || !wakePaused) return
+        wakePaused = false
+        disarmAutoResume()
+        // Sirf WAKE state me session dobara chalao. LOADING ho to
+        // model load ke baad wala startWakeSession() khud chalega;
+        // ACK/COMMAND/REPLY ho to flow ke ant me chalega — dono ab
+        // wakePaused ki rukawat nahi dekhenge.
+        if (state == State.WAKE) {
+            startWakeSession()
+        }
+    }
+
+    private val autoResumeRunnable = Runnable {
+        executor.execute {
+            if (!destroyed && wakePaused) {
+                resumeWakeListening()
+            }
+        }
+    }
+
+    private fun armAutoResume() {
+        mainHandler.removeCallbacks(autoResumeRunnable)
+        mainHandler.postDelayed(autoResumeRunnable, WAKE_AUTO_RESUME_MS)
+    }
+
+    private fun disarmAutoResume() {
+        mainHandler.removeCallbacks(autoResumeRunnable)
+    }
+
     private fun handleWakeError() {
         if (destroyed || state != State.WAKE) return
         stopWakeSession()
@@ -239,29 +371,33 @@ class JarvisWakeService : Service() {
     }
 
     private val wakeListener = object : RecognitionListener {
+        // wakePaused bhi dekho: pause ke liye stop() karne par Vosk
+        // ek aakhiri final result bhej sakta hai — usse "wake" nahi
+        // manna hai, aur ruke hue samay ki error error-counter me
+        // nahi judni chahiye.
         override fun onPartialResult(hypothesis: String?) {
-            if (state != State.WAKE) return
+            if (state != State.WAKE || wakePaused) return
             if (containsWakeWord(parseJsonField(hypothesis, "partial"))) {
                 executor.execute { onWakeDetected() }
             }
         }
 
         override fun onResult(hypothesis: String?) {
-            if (state != State.WAKE) return
+            if (state != State.WAKE || wakePaused) return
             if (containsWakeWord(parseJsonField(hypothesis, "text"))) {
                 executor.execute { onWakeDetected() }
             }
         }
 
         override fun onFinalResult(hypothesis: String?) {
-            if (state != State.WAKE) return
+            if (state != State.WAKE || wakePaused) return
             if (containsWakeWord(parseJsonField(hypothesis, "text"))) {
                 executor.execute { onWakeDetected() }
             }
         }
 
         override fun onError(exception: Exception?) {
-            if (state == State.WAKE) {
+            if (state == State.WAKE && !wakePaused) {
                 executor.execute { handleWakeError() }
             }
         }
@@ -276,7 +412,7 @@ class JarvisWakeService : Service() {
     // ------------------------------------------------------------------
 
     private fun onWakeDetected() {
-        if (destroyed || state != State.WAKE) return
+        if (destroyed || state != State.WAKE || wakePaused) return
         state = State.ACK
         stopWakeSession()
         // A real wake proves listening works: clear the error counter.
@@ -284,6 +420,9 @@ class JarvisWakeService : Service() {
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
+        // v1.5: Siri gola ubhar aaye — "Haan, boliye" wale pal se
+        // lekar poore command flow ke ant tak dikhega.
+        orbOverlay.show()
         // Mic is fully released before Jarvis speaks, so it cannot
         // hear its own acknowledgement.
         speaker.speak(ACK_TEXT)
@@ -300,6 +439,9 @@ class JarvisWakeService : Service() {
                 }
                 State.REPLY -> {
                     disarmReplyFallback()
+                    // v1.5: jawab khatm — gola 1.5 s aur dikh kar
+                    // dheere se gayab ho jayega.
+                    orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
                     startWakeSession()
                 }
                 else -> {
@@ -329,6 +471,7 @@ class JarvisWakeService : Service() {
             armCommandWatchdog()
         } catch (t: Throwable) {
             // Mic busy etc.: fall back to wake listening.
+            orbOverlay.hideNow()
             startWakeSession()
         }
     }
@@ -375,6 +518,7 @@ class JarvisWakeService : Service() {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
                     stopCommandSession()
+                    orbOverlay.hideNow()
                     startWakeSession()
                 }
             }
@@ -384,6 +528,7 @@ class JarvisWakeService : Service() {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
                     stopCommandSession()
+                    orbOverlay.hideNow()
                     startWakeSession()
                 }
             }
@@ -409,6 +554,7 @@ class JarvisWakeService : Service() {
             // announcing the "Phase 3" fallback to nobody.
             setStatus("Samajh nahi aaya — chup rehkar wapas 'Jarvis' sun raha hoon")
             updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
+            orbOverlay.hideNow()
             startWakeSession()
             return
         }
@@ -416,6 +562,9 @@ class JarvisWakeService : Service() {
         updateNotification("Jarvis jawab de raha hai...")
         speaker.speak(result.responseText)
         armReplyFallback(result.responseText)
+        // v1.5: jawab gole ke upar wale bubble me text me bhi dikhe,
+        // aur gola jawab ke dauraan chamak (shimmer) mode me rahe.
+        orbOverlay.setReply(result.responseText)
     }
 
     // ------------------------------------------------------------------
@@ -439,6 +588,7 @@ class JarvisWakeService : Service() {
                     silenceMs >= COMMAND_SILENCE_TIMEOUT_MS
                 ) {
                     stopCommandSession()
+                    orbOverlay.hideNow()
                     startWakeSession()
                 } else {
                     mainHandler.postDelayed(this, COMMAND_WATCHDOG_TICK_MS)
@@ -476,6 +626,7 @@ class JarvisWakeService : Service() {
     private val replyFallbackRunnable = Runnable {
         executor.execute {
             if (!destroyed && state == State.REPLY) {
+                orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
                 startWakeSession()
             }
         }
@@ -490,6 +641,185 @@ class JarvisWakeService : Service() {
 
     private fun disarmReplyFallback() {
         mainHandler.removeCallbacks(replyFallbackRunnable)
+    }
+
+    // ------------------------------------------------------------------
+    // Siri orb overlay (v1.5)
+    //
+    // Ek chhoti si floating khidki (TYPE_APPLICATION_OVERLAY):
+    // neeche beech me OrbView ka gola, uske upar ek gola-kaand
+    // (rounded) kala bubble jisme jawab text dikhta hai. Window
+    // NOT_FOCUSABLE + NOT_TOUCHABLE hai — neeche wali app ke taps
+    // kabhi nahi rukte. "Display over other apps" permission na
+    // ho to show() chup-chaap kuch nahi karta; awaaz wala flow
+    // pehle jaisa hi chalta hai. Ye khidki OverlayLauncher ki
+    // 1x1 launch-khidki se alag hai — dono saath reh sakte hain.
+    //
+    // Saare window kaam main thread par hote hain; bahari calls
+    // (executor thread se) mainHandler par post ho jate hain.
+    // ------------------------------------------------------------------
+
+    private inner class OrbOverlay {
+
+        private var windowManager: WindowManager? = null
+        private var container: LinearLayout? = null
+        private var orbView: OrbView? = null
+        private var bubble: TextView? = null
+        private var attached = false
+
+        // Har show/hide par badhta hai, taaki kisi purane fade-out
+        // ka end-action naye show ko galti se na uda de.
+        private var generation = 0
+
+        private val hideRunnable = Runnable { fadeOutOnMain() }
+
+        /** Gola dikhao — command ka intezaar (breathing) mode me. */
+        fun show() {
+            mainHandler.post { showOnMain() }
+        }
+
+        /** Jawab bubble me dikhao aur gole ko shimmer mode me dalo. */
+        fun setReply(text: String) {
+            mainHandler.post {
+                if (!attached) showOnMain()
+                if (!attached) return@post
+                bubble?.text = text
+                bubble?.visibility = View.VISIBLE
+                orbView?.setMode(OrbView.Mode.SPEAKING)
+            }
+        }
+
+        /** Kuch der baad gola hatao (jawab ke baad wala thahraav). */
+        fun hideAfter(delayMs: Long) {
+            mainHandler.removeCallbacks(hideRunnable)
+            mainHandler.postDelayed(hideRunnable, delayMs)
+        }
+
+        /** Gola abhi hatao (fade-out ke saath). */
+        fun hideNow() {
+            mainHandler.post { fadeOutOnMain() }
+        }
+
+        /** Teardown ke liye: bina fade ke, isi pal hatao. */
+        fun removeImmediately() {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                removeWindowOnMain()
+            } else {
+                mainHandler.post { removeWindowOnMain() }
+            }
+        }
+
+        private fun showOnMain() {
+            if (!Settings.canDrawOverlays(this@JarvisWakeService)) {
+                // Permission nahi: gola nahi, par kuch tootta nahi.
+                return
+            }
+            generation++
+            mainHandler.removeCallbacks(hideRunnable)
+            if (!attached) {
+                buildViews()
+                val wm = windowManager ?: return
+                val root = container ?: return
+                try {
+                    wm.addView(root, overlayLayoutParams())
+                } catch (t: Throwable) {
+                    // Permission beech me wapas li gayi ho, aadi.
+                    return
+                }
+                attached = true
+            }
+            val root = container ?: return
+            root.animate().cancel()
+            bubble?.visibility = View.GONE
+            orbView?.setMode(OrbView.Mode.LISTENING)
+            orbView?.startAnimations()
+            root.alpha = 0f
+            root.animate().alpha(1f).setDuration(ORB_FADE_IN_MS).start()
+        }
+
+        private fun fadeOutOnMain() {
+            if (!attached) return
+            val gen = ++generation
+            val root = container ?: return
+            root.animate().cancel()
+            root.animate().alpha(0f).setDuration(ORB_FADE_OUT_MS)
+                .withEndAction {
+                    if (gen == generation) removeWindowOnMain()
+                }
+                .start()
+        }
+
+        private fun removeWindowOnMain() {
+            generation++
+            mainHandler.removeCallbacks(hideRunnable)
+            container?.animate()?.cancel()
+            orbView?.stopAnimations()
+            if (attached) {
+                try {
+                    windowManager?.removeView(container)
+                } catch (t: Throwable) {
+                    // Pehle se hata hua: kuch nahi karna.
+                }
+                attached = false
+            }
+        }
+
+        private fun buildViews() {
+            if (container != null) return
+            val service = this@JarvisWakeService
+            windowManager =
+                service.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+
+            val bubbleView = TextView(service).apply {
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                maxWidth = dp(300)
+                setPadding(dp(14), dp(9), dp(14), dp(9))
+                background = GradientDrawable().apply {
+                    setColor(0xD91C1C28.toInt())
+                    cornerRadius = dp(18).toFloat()
+                    setStroke(1, 0x40FFFFFF)
+                }
+                visibility = View.GONE
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(10)
+                    gravity = Gravity.CENTER_HORIZONTAL
+                }
+            }
+
+            val orb = OrbView(service).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(104), dp(104))
+            }
+
+            container = LinearLayout(service).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(dp(10), dp(10), dp(10), dp(4))
+                addView(bubbleView)
+                addView(orb)
+            }
+            bubble = bubbleView
+            orbView = orb
+        }
+
+        private fun overlayLayoutParams(): WindowManager.LayoutParams =
+            WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = dp(48)
+            }
+
+        private fun dp(value: Int): Int =
+            (value * resources.displayMetrics.density).toInt()
     }
 
     // ------------------------------------------------------------------
@@ -581,6 +911,8 @@ class JarvisWakeService : Service() {
     companion object {
         const val ACTION_START = "com.aship.jarvis.action.WAKE_START"
         const val ACTION_STOP = "com.aship.jarvis.action.WAKE_STOP"
+        const val ACTION_PAUSE_WAKE = "com.aship.jarvis.action.WAKE_PAUSE"
+        const val ACTION_RESUME_WAKE = "com.aship.jarvis.action.WAKE_RESUME"
 
         private const val NOTIFICATION_ID = 4201
         private const val CHANNEL_ID = "jarvis_wake_channel"
@@ -596,6 +928,10 @@ class JarvisWakeService : Service() {
         private const val REPLY_FALLBACK_MAX_MS = 20_000L
         private const val WAKE_RESTART_DELAY_MS = 1_500L
         private const val MAX_WAKE_ERRORS = 5
+        private const val WAKE_AUTO_RESUME_MS = 45_000L
+        private const val ORB_REPLY_LINGER_MS = 1_500L
+        private const val ORB_FADE_IN_MS = 250L
+        private const val ORB_FADE_OUT_MS = 220L
 
         /** Wake-word spellings the Hindi model / recognizers produce. */
         private val WAKE_WORDS = listOf(
@@ -617,5 +953,11 @@ class JarvisWakeService : Service() {
 
         fun stopIntent(context: Context): Intent =
             Intent(context, JarvisWakeService::class.java).setAction(ACTION_STOP)
+
+        fun pauseIntent(context: Context): Intent =
+            Intent(context, JarvisWakeService::class.java).setAction(ACTION_PAUSE_WAKE)
+
+        fun resumeIntent(context: Context): Intent =
+            Intent(context, JarvisWakeService::class.java).setAction(ACTION_RESUME_WAKE)
     }
 }
