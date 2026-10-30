@@ -46,6 +46,11 @@ Jarvis does it on your phone and speaks the reply back to you.
   karta hai, iraade ke liye encoding-surakshit "কর" stem bhi
   milaya gaya hai, aur chhote vakya ("মোবাইল ডাটা অর" jaisi
   garble) me sirf data ka zikr hi toggle ke liye kaafi hai
+- **OriginOS data tile ki pehchan (v20):** vivo OriginOS ke
+  control center me data tile par "Mobile data" nahi, upyog
+  likha hota hai (jaise "62.25 GB") - ab tile us upyog-wale
+  label (number + GB/MB/KB) se bhi pakka (score 3) pehchana
+  jata hai; "Cellular" naam wala tile bhi score 2 par milta hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
