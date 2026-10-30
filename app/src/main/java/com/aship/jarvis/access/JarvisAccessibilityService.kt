@@ -381,11 +381,15 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (label.isEmpty()) return 0
         if (label.contains("saver") || label.contains("roaming")) return 0
         return when {
-            (label.contains("mobile") && label.contains("data")) ||
+            // v20: OriginOS jaisi skins par data tile par "Mobile data"
+                // nahi, upyog likha hota hai ("62.25 GB") - wahi pehchan hai.
+                DATA_USAGE_PATTERN.containsMatchIn(label) ||
+                (label.contains("mobile") && label.contains("data")) ||
                 label.contains("मोबाइल डेटा") ||
                 label.contains("মোবাইল ডেটা") || label.contains("মোবাইল ডাটা") -> 3
             label == "data" || label == "डेटा" ||
                 label == "ডেটা" || label == "ডাটা" -> 2
+            label.contains("cellular") -> 2
             label.contains("internet") && label.contains("data") -> 1
             else -> 0
         }
@@ -569,5 +573,6 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         private val ON_WORD = Regex("""(^|[\s,:])on([\s,:.]|$)""")
         private val OFF_WORD = Regex("""(^|[\s,:])off([\s,:.]|$)""")
+        private val DATA_USAGE_PATTERN = Regex("""\d+(\.\d+)?\s*(gb|mb|kb)\b""")
     }
 }
