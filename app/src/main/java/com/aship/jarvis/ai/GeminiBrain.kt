@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -34,6 +35,17 @@ import java.util.concurrent.Executors
  * 404/503 de ya khaali nikle to agla aazmaya jata hai; key
  * ya request wali gadbad (400/401/403) par wahin ruk jate
  * hain — woh model badalne se nahi sudhregi.
+ *
+ * v24: user ke phone ka net bahut dheema hai aur bheed ke
+ * samay Google ke jawab bhi der se aate hain — purani 20 s
+ * wali padhne ki seema par har koshish timeout banke mar
+ * jati thi aur bina kisi saboot ke offline fallback bol
+ * padta tha. Isliye chat ki seemayein badhai (30 s / 60 s)
+ * aur har chat() koshish ki report — kaun sa model, kitni
+ * der, OK/code/timeout/net — SharedPreferences
+ * "jarvis_diag" me band hoti hai, jo app ki screen par
+ * dikhti hai. Key, sawal aur jawab report me KABHI nahi
+ * aate.
  */
 object GeminiBrain {
 
@@ -118,7 +130,7 @@ object GeminiBrain {
             return
         }
         executor.execute {
-            callback(requestReply(key, history, userText))
+            callback(requestReply(context.applicationContext, key, history, userText))
         }
     }
 
@@ -129,31 +141,71 @@ object GeminiBrain {
      * agle ko ek mauka. 400/401/403 jaisi key/request wali
      * gadbad par wahin ruk jao — model badalna bekaar hai.
      * Sab khatm ho jayein to null.
+     *
+     * v24: har koshish (model, nateeja, kitni der lagi)
+     * report me judti hai aur kataar khatm hone par woh
+     * report "jarvis_diag" me band ho jati hai — screen par
+     * "Online koshish (aakhiri)" line se user khud dekh
+     * sakta hai ki online koshish me asal me hua kya tha.
      */
     private fun requestReply(
+        context: Context,
         key: String,
         history: List<Pair<String, String>>,
         userText: String
     ): String? {
         val body = buildRequestBody(history, userText).toString()
+        val attempts = mutableListOf<String>()
+        var result: String? = null
         for (model in MODELS) {
-            val (code, reply) = tryModel(key, model, body)
-            if (code == HttpURLConnection.HTTP_OK && reply != null) {
-                return reply
+            val startedAtMs = System.currentTimeMillis()
+            val attempt = tryModel(key, model, body)
+            val seconds = (System.currentTimeMillis() - startedAtMs) / 1000
+            attempts.add("$model: ${attempt.outcome} (${seconds}s)")
+            if (attempt.code == HttpURLConnection.HTTP_OK && attempt.reply != null) {
+                result = attempt.reply
+                break
             }
-            val tryNext = code == HttpURLConnection.HTTP_OK ||
-                code == HttpURLConnection.HTTP_NOT_FOUND ||
-                code == HttpURLConnection.HTTP_UNAVAILABLE ||
-                code == -1
+            val tryNext = attempt.code == HttpURLConnection.HTTP_OK ||
+                attempt.code == HttpURLConnection.HTTP_NOT_FOUND ||
+                attempt.code == HttpURLConnection.HTTP_UNAVAILABLE ||
+                attempt.code == -1
             if (!tryNext) {
-                return null
+                break
             }
         }
-        return null
+        saveLastAttempt(context, attempts.joinToString(" | "))
+        return result
     }
 
-    /** Ek model par ek koshish: (HTTP code, jawab ya null). Net gadbad par code -1. */
-    private fun tryModel(key: String, model: String, body: String): Pair<Int, String?> {
+    /**
+     * v24: aakhiri online koshish ki report SharedPreferences
+     * "jarvis_diag" me band karo. Sirf model ke naam, nateeja
+     * aur samay — key, sawal ya jawab isme KABHI nahi aata.
+     * Report likhne me gadbad ho jaye to chup-chaap chhod
+     * do — baatchit ka raasta isse kabhi nahi rukta.
+     */
+    private fun saveLastAttempt(context: Context, summary: String) {
+        try {
+            context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_LAST_GEMINI_ATTEMPT, summary)
+                .apply()
+        } catch (e: Exception) {
+            // Report bonus hai; asal jawab wala raasta isse alag hai.
+        }
+    }
+
+    /** Ek model koshish ka nateeja (v24: report ke liye outcome bhi saath). */
+    private class AttemptResult(val code: Int, val outcome: String, val reply: String?)
+
+    /**
+     * Ek model par ek koshish. Net gadbad par code -1 —
+     * outcome me "timeout" (samay khatm) aur "net" (baaki
+     * gadbad) alag rakhe gaye hain, taaki report saaf bata
+     * sake ki koshish asal me mari kis wajah se.
+     */
+    private fun tryModel(key: String, model: String, body: String): AttemptResult {
         var connection: HttpURLConnection? = null
         return try {
             connection =
@@ -178,9 +230,16 @@ object GeminiBrain {
             } else {
                 null
             }
-            code to reply
+            // Safal jawab par "OK", warna seedha HTTP code.
+            AttemptResult(
+                code,
+                if (reply != null) "OK" else code.toString(),
+                reply
+            )
+        } catch (e: SocketTimeoutException) {
+            AttemptResult(-1, "timeout", null)
         } catch (e: Exception) {
-            -1 to null
+            AttemptResult(-1, "net", null)
         } finally {
             connection?.disconnect()
         }
@@ -247,6 +306,11 @@ object GeminiBrain {
     private const val PREFS_NAME = "jarvis_ai"
     private const val KEY_GEMINI_KEY = "gemini_key"
 
+    // v24: koshish-report wali prefs file — panel-scan wali
+    // report bhi yahi file istemal karti hai.
+    private const val DIAG_PREFS_NAME = "jarvis_diag"
+    private const val KEY_LAST_GEMINI_ATTEMPT = "last_gemini_attempt"
+
     private const val GENERATE_CONTENT_BASE_URL =
         "https://generativelanguage.googleapis.com/v1beta/models/"
 
@@ -268,8 +332,11 @@ object GeminiBrain {
     private const val MODELS_URL =
         "https://generativelanguage.googleapis.com/v1beta/models"
 
-    private const val CONNECT_TIMEOUT_MS = 20_000
-    private const val READ_TIMEOUT_MS = 20_000
+    // v24: chat wali seemayein dheeme net ke liye badhai —
+    // judne ke liye 30 s, jawab padhne ke liye 60 s. (Key
+    // jaanch wali 15 s seema waisi hi rehti hai.)
+    private const val CONNECT_TIMEOUT_MS = 30_000
+    private const val READ_TIMEOUT_MS = 60_000
     private const val VALIDATE_TIMEOUT_MS = 15_000
     // v23: 320 se 512 — naye model sochne (thinking) me bhi
     // token kha jate hain; jawab ki jagah bachi rahe isliye.
