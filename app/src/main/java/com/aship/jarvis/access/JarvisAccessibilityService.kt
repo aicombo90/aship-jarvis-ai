@@ -44,9 +44,18 @@ import java.util.concurrent.Executors
  * ek baar dabakar haalat ulta kar deta hai aur dabane ke baad
  * ki haalat padhkar [DataOutcome] me sach batata hai.
  *
+ * v23: har koshish ke aakhir me ek chhoti scan report band
+ * rehti hai — panel dikha tha ya nahi, kitne ped dekhe, kaun
+ * se naam mile, sabse bada number kya tha. Report companion
+ * ke [lastScanReport] me aur SharedPreferences "jarvis_diag"
+ * me rehti hai, taaki app ki screen use dikha sake — tile na
+ * mile to aakhir pata to chale ki panel me tha kya. Khoj ka
+ * kul intezaar bhi 2.5 se badhakar 8 second kiya (vivo wala
+ * panel sajne me der lagata hai).
+ *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
- * Kul intezaar ~2.5 second se bandha hai.
+ * Kul intezaar ~8 second se bandha hai.
  */
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -92,6 +101,18 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     private val worker = Executors.newSingleThreadExecutor()
 
+    // v23: panel-scan report ki kacchi jankari — sirf worker
+    // thread hi chhoota hai. searchPanelTile har koshish me
+    // inhe saaf karke bharta hai; report ka bandha hua roop
+    // pendingScanReport me rehta hai, koshish ke aakhir me
+    // publishScanReport use hamesha ke liye rakh deta hai.
+    private val scanLabels = LinkedHashSet<String>()
+    private var scanRootsScanned = 0
+    private var scanSysuiSeen = false
+    private var scanBestScore = 0
+    private var scanTileLabel: String? = null
+    private var pendingScanReport: String? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -122,11 +143,13 @@ class JarvisAccessibilityService : AccessibilityService() {
     fun toggleMobileData(turnOn: Boolean, callback: (DataResult) -> Unit) {
         try {
             worker.execute {
+                pendingScanReport = null
                 val result = try {
                     runToggle(turnOn)
                 } catch (t: Throwable) {
                     DataResult.TILE_NOT_FOUND
                 }
+                publishScanReport()
                 try {
                     callback(result)
                 } catch (t: Throwable) {
@@ -154,11 +177,13 @@ class JarvisAccessibilityService : AccessibilityService() {
     fun flipMobileData(callback: (DataOutcome) -> Unit) {
         try {
             worker.execute {
+                pendingScanReport = null
                 val result = try {
                     runFlip()
                 } catch (t: Throwable) {
                     DataOutcome.TILE_NOT_FOUND
                 }
+                publishScanReport()
                 try {
                     callback(result)
                 } catch (t: Throwable) {
@@ -188,7 +213,11 @@ class JarvisAccessibilityService : AccessibilityService() {
      * khul hi na paye to tile null aur panelSeen false milega.
      */
     private fun searchPanelTile(): PanelSearch {
+        // v23: report ki jankari har koshish me nayi — panel
+        // khule hi na, tab bhi report bandhegi (sysui=no ...).
+        resetScanCollectors()
         if (!performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)) {
+            snapshotScanReport()
             return PanelSearch(panelSeen = false, tile = null, clickTarget = null)
         }
         val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
@@ -196,9 +225,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         var tile: AccessibilityNodeInfo? = null
         while (tile == null && SystemClock.uptimeMillis() < deadline) {
             val roots = collectRoots()
+            scanRootsScanned += roots.size
             for (root in roots) {
                 if (root.packageName?.toString() == SYSTEMUI_PACKAGE) {
                     panelSeen = true
+                    scanSysuiSeen = true
                 }
                 val found = findDataTile(root)
                 if (found != null) {
@@ -220,12 +251,56 @@ class JarvisAccessibilityService : AccessibilityService() {
                 SystemClock.sleep(POLL_INTERVAL_MS)
             }
         }
-        val foundTile = tile ?: return PanelSearch(panelSeen, null, null)
+        if (tile == null) {
+            snapshotScanReport()
+            return PanelSearch(panelSeen, null, null)
+        }
+        val foundTile = tile
+        scanTileLabel = nodeLabel(foundTile)
+        snapshotScanReport()
         return PanelSearch(
             panelSeen,
             foundTile,
             findClickableAncestor(foundTile) ?: foundTile
         )
+    }
+
+    /** v23: scan jankari saaf karo — har nayi khoj ki shuruaat. */
+    private fun resetScanCollectors() {
+        scanLabels.clear()
+        scanRootsScanned = 0
+        scanSysuiSeen = false
+        scanBestScore = 0
+        scanTileLabel = null
+    }
+
+    /** v23: ab tak ki scan jankari ko report ke ek-bandhe roop me badlo. */
+    private fun snapshotScanReport() {
+        pendingScanReport =
+            "sysui=" + (if (scanSysuiSeen) "yes" else "no") +
+                " roots=" + scanRootsScanned +
+                " best=" + scanBestScore +
+                " labels: [" + scanLabels.joinToString(" | ") + "]"
+    }
+
+    /**
+     * v23: report ko hamesha ke liye rakh do — companion ke
+     * [lastScanReport] me (isi process me turant mile) aur
+     * SharedPreferences "jarvis_diag" me (service alag process
+     * me ho to bhi app ki screen use padh sake). Report na
+     * band paye to bhi asal natija kabhi nahi rukta.
+     */
+    private fun publishScanReport() {
+        val report = pendingScanReport ?: return
+        lastScanReport = report
+        try {
+            getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(DIAG_KEY_LAST_PANEL_SCAN, report)
+                .apply()
+        } catch (t: Throwable) {
+            // Report likhna gauṇ hai: toggle ka sach isse bada hai.
+        }
     }
 
     /** Asal kaam — sirf worker thread se bulana. */
@@ -258,6 +333,11 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
             SystemClock.sleep(CLICK_SETTLE_MS)
         }
+        // v23: safal koshish ki report scan wali ki jagah legi —
+        // kaun sa tile daba aur kaun si haalat chahiye thi.
+        pendingScanReport =
+            "OK tile=" + (scanTileLabel ?: "?") +
+                " state=" + (if (turnOn) "on" else "off")
         performGlobalAction(GLOBAL_ACTION_BACK)
         return DataResult.SUCCESS
     }
@@ -289,7 +369,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         SystemClock.sleep(CLICK_SETTLE_MS)
         val afterState = rereadTileState(foundTile, clickTarget)
         performGlobalAction(GLOBAL_ACTION_BACK)
-        return when {
+        val outcome = when {
             // Dabane ke baad ki haalat padh paye — wahi sach hai.
             afterState != null ->
                 if (afterState) DataOutcome.TURNED_ON else DataOutcome.TURNED_OFF
@@ -298,6 +378,17 @@ class JarvisAccessibilityService : AccessibilityService() {
                 if (beforeState) DataOutcome.TURNED_OFF else DataOutcome.TURNED_ON
             else -> DataOutcome.TOGGLED_UNKNOWN
         }
+        // v23: safal koshish ki report scan wali ki jagah legi —
+        // kaun sa tile daba aur dabane ke baad data kis haalat
+        // me hai (pakka padh paye to wahi, warna unknown).
+        pendingScanReport =
+            "OK tile=" + (scanTileLabel ?: "?") +
+                " state=" + when (outcome) {
+                    DataOutcome.TURNED_ON -> "on"
+                    DataOutcome.TURNED_OFF -> "off"
+                    else -> "unknown"
+                }
+        return outcome
     }
 
     /**
@@ -361,6 +452,10 @@ class JarvisAccessibilityService : AccessibilityService() {
                 bestScore = score
                 best = node
             }
+            // v23: report ke liye sabse bada number yaad rakho.
+            if (score > scanBestScore) {
+                scanBestScore = score
+            }
             for (i in 0 until node.childCount) {
                 try {
                     node.getChild(i)?.let { child -> stack.addLast(child) }
@@ -372,12 +467,20 @@ class JarvisAccessibilityService : AccessibilityService() {
         return best
     }
 
+    /** Node ka dikhai dene wala naam (text + varnan), saaf kata hua roop. */
+    private fun nodeLabel(node: AccessibilityNodeInfo): String =
+        ((node.text?.toString() ?: "") + " " +
+            (node.contentDescription?.toString() ?: "")).trim()
+
     /** Node ke naam ko data-tile hone ke number do (0 = nahi hai). */
     private fun dataLabelScore(node: AccessibilityNodeInfo): Int {
-        val label = (
-            (node.text?.toString() ?: "") + " " +
-                (node.contentDescription?.toString() ?: "")
-            ).trim().lowercase(Locale.ROOT)
+        val shown = nodeLabel(node)
+        // v23: scan report ke liye mile hue naam yaad rakho —
+        // pehle 18 alag naam, har naam kata hua (40 akshar).
+        if (shown.isNotEmpty() && scanLabels.size < MAX_SCAN_LABELS) {
+            scanLabels.add(shown.take(MAX_SCAN_LABEL_CHARS))
+        }
+        val label = shown.lowercase(Locale.ROOT)
         if (label.isEmpty()) return 0
         if (label.contains("saver") || label.contains("roaming")) return 0
         return when {
@@ -485,6 +588,17 @@ class JarvisAccessibilityService : AccessibilityService() {
             private set
 
         /**
+         * v23: aakhiri panel-scan ki report — har data koshish
+         * ke aakhir me service bhar deti hai. App ki screen
+         * SharedPreferences "jarvis_diag" se padhti hai (alag
+         * process ka raasta); ye roop isi process me turant
+         * chahne walon ke liye hai.
+         */
+        @Volatile
+        var lastScanReport: String? = null
+            private set
+
+        /**
          * Service chalu hai ya nahi. Pehle chalti hui instance
          * dekho; woh na ho to AccessibilityManager ki chalu
          * services wali list me apna naam dhoondho (service
@@ -563,8 +677,15 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         private const val SYSTEMUI_PACKAGE = "com.android.systemui"
-        private const val TOTAL_BUDGET_MS = 2_500L
+        // v23: 2.5s se 8s — vivo ka panel sajne me der lagata
+        // hai; tile ped par chadhne se pehle khoj khatm ho jati
+        // thi, ye ek pakka shak hai.
+        private const val TOTAL_BUDGET_MS = 8_000L
         private const val POLL_INTERVAL_MS = 150L
+        private const val MAX_SCAN_LABELS = 18
+        private const val MAX_SCAN_LABEL_CHARS = 40
+        private const val DIAG_PREFS_NAME = "jarvis_diag"
+        private const val DIAG_KEY_LAST_PANEL_SCAN = "last_panel_scan"
         private const val CLICK_SETTLE_MS = 350L
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
