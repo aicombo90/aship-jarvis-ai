@@ -70,6 +70,11 @@ class MainActivity : Activity() {
     private lateinit var wakeStopButton: Button
     private var pendingWakeStart = false
 
+    // v29: contacts permission app khulne par zyada se
+    // zyada ek baar maangi jati hai — mana ho to baar-
+    // baar tang (nag) nahi karna.
+    private var contactsPermissionRequested = false
+
     // v17: Accessibility (mobile data) section — battery wale
     // bandobosto ki tarah hi ek status line + ek button.
     private lateinit var accessibilityStatusText: TextView
@@ -202,6 +207,12 @@ class MainActivity : Activity() {
         }
         refreshGeminiKeyUi()
         updateWakeUi()
+
+        // v29: call_person auzaar ke liye contacts
+        // permission — app khulne par ek baar maango;
+        // mana ho to app aam chalta rahega, koi nagging
+        // nahi (requestContactsPermissionIfNeeded dekho).
+        requestContactsPermissionIfNeeded()
 
         // In-app update: app khulne par ek baar chup-chaap check.
         // Fail ho to koi error nahi dikhta (silent by design).
@@ -461,6 +472,19 @@ class MainActivity : Activity() {
                 ).show()
             }
             updateWakeUi()
+        }
+        if (requestCode == REQUEST_READ_CONTACTS) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                Toast.makeText(
+                    this,
+                    "Contacts permission nahi mila — naam bolkar " +
+                        "call karne wala kaam nahi chalega; " +
+                        "baaki sab chalega.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -852,6 +876,28 @@ class MainActivity : Activity() {
         mainHandler.postDelayed({ updateWakeUi() }, 600)
     }
 
+    /**
+     * v29: contacts permission sirf call_person auzaar
+     * ke liye hai. Ek app-start par zyada se zyada ek
+     * baar maangi jati hai ([contactsPermissionRequested]
+     * wala jhanda); mana ho jaye to dobara tang nahi
+     * karte — auzaar khud imaandaar FAILED deta hai aur
+     * app ke baaki saare kaam aam chalte hain.
+     */
+    private fun requestContactsPermissionIfNeeded() {
+        if (contactsPermissionRequested) return
+        if (checkSelfPermission(Manifest.permission.READ_CONTACTS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        contactsPermissionRequested = true
+        requestPermissions(
+            arrayOf(Manifest.permission.READ_CONTACTS),
+            REQUEST_READ_CONTACTS
+        )
+    }
+
     /** Android 13+: ask for the notification permission; denial is fine. */
     private fun requestNotificationsPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -1141,6 +1187,7 @@ class MainActivity : Activity() {
         private const val REQUEST_RECORD_AUDIO = 1001
         private const val REQUEST_RECORD_AUDIO_WAKE = 1002
         private const val REQUEST_POST_NOTIFICATIONS = 1003
+        private const val REQUEST_READ_CONTACTS = 1004
         private const val WAKE_REFRESH_MS = 2_000L
 
         /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
