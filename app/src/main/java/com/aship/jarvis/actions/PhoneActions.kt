@@ -25,6 +25,13 @@ enum class LaunchOutcome {
     /** "Display over other apps" permission missing: Android blocks the launch. */
     PERMISSION_NEEDED,
 
+    /**
+     * v16: phone is locked (keyguard on). Background launches are
+     * refused on purpose — the caller asks the user to unlock first
+     * instead of opening apps over/behind the lock screen.
+     */
+    LOCKED,
+
     /** The launch was attempted but threw / was refused. */
     FAILED
 }
