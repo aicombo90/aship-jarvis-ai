@@ -45,7 +45,7 @@ import java.util.concurrent.Executors
  * recognizer continuously, scanning everything it hears for the wake
  * word ("Jarvis" in Devanagari / Bengali / Latin script). On a wake:
  *
- *   wake session STOPPED -> ack spoken ("Haan, boliye") -> command
+ *   wake session STOPPED -> ack spoken ("हाँ, बोलिए") -> command
  *   session listens for ONE utterance -> CommandEngine runs it ->
  *   reply spoken -> wake session resumes.
  *
@@ -499,7 +499,7 @@ class JarvisWakeService : Service() {
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
-        // v1.5: Siri gola ubhar aaye — "Haan, boliye" wale pal se
+        // v1.5: Siri gola ubhar aaye — "हाँ, बोलिए" wale pal se
         // lekar poore command flow ke ant tak dikhega.
         orbOverlay.show()
         // Mic is fully released before Jarvis speaks, so it cannot
@@ -699,7 +699,7 @@ class JarvisWakeService : Service() {
         val step = addaEngine.respond(text)
         val spokenText = if (step.action == AddaAction.OPEN_YOUTUBE) {
             val launchResult = commandEngine.handle("youtube kholo")
-            if (launchResult.responseText == "YouTube khol diya hai.") {
+            if (launchResult.responseText == "YouTube खोल दिया है।") {
                 step.text
             } else {
                 addaEngine.endSession()
@@ -721,7 +721,7 @@ class JarvisWakeService : Service() {
     }
 
     /**
-     * v12 retry-once: "Phir se boliye" bolkar ACK wale raaste se
+     * v12 retry-once: "फिर से बोलिए" bolkar ACK wale raaste se
      * ek aur command session kholo (TTS khatm hone par, ya ack
      * fallback par). Gola dikhta rehta hai — dobara "Jarvis"
      * bolne ki zaroorat nahi. Sirf executor thread se bulao;
@@ -747,7 +747,7 @@ class JarvisWakeService : Service() {
         if (destroyed) return
         stopCommandSession()
         if (addaEngine.isActive) {
-            // v13: adda me "Phir se boliye" wala v12 retry nahi
+            // v13: adda me "फिर से बोलिए" wala v12 retry nahi
             // chalega. Pehla khaali/error session chup-chaap ek aur
             // mauka; dusra lagatar khaali session adda band karke
             // wapas wake par. Asli utterance aate hi ginati reset
@@ -1255,13 +1255,13 @@ class JarvisWakeService : Service() {
         private const val CHANNEL_ID = "jarvis_wake_channel"
         private const val SAMPLE_RATE = 16000.0f
 
-        private const val ACK_TEXT = "Haan, boliye"
+        private const val ACK_TEXT = "हाँ, बोलिए"
 
         /** v12: command na samajhne par ek baar dobara mauka dene ka prompt. */
-        private const val RETRY_PROMPT_TEXT = "Phir se boliye"
+        private const val RETRY_PROMPT_TEXT = "फिर से बोलिए"
 
         /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
-        const val CANT_DO_REPLY = "Maaf kijiye, abhi main yeh kaam nahi kar sakta hu."
+        const val CANT_DO_REPLY = "माफ़ कीजिए, अभी मैं यह काम नहीं कर सकता हूँ।"
         private const val COMMAND_SILENCE_TIMEOUT_MS = 2_500L
         private const val COMMAND_HARD_CAP_MS = 7_000L
         private const val COMMAND_WATCHDOG_TICK_MS = 400L
