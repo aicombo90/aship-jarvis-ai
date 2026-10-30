@@ -39,6 +39,11 @@ import java.util.concurrent.Executors
  * mile ya panel na khule to [DataResult] me sach batate hain —
  * jhoothi safalta kabhi nahi.
  *
+ * v18: disha wala shabd sunai na de ("মোবাইল ডাটা করো" — Vosk
+ * chhota "on" aksar kha jata hai) to [flipMobileData] tile ko
+ * ek baar dabakar haalat ulta kar deta hai aur dabane ke baad
+ * ki haalat padhkar [DataOutcome] me sach batata hai.
+ *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
  * Kul intezaar ~2.5 second se bandha hai.
@@ -49,6 +54,31 @@ class JarvisAccessibilityService : AccessibilityService() {
     enum class DataResult {
         /** Tile mila aur dab gaya (ya pehle se waisi hi haalat thi). */
         SUCCESS,
+
+        /** Panel khula, par data wala tile nahi mila / dab nahi paya. */
+        TILE_NOT_FOUND,
+
+        /** Quick-settings panel khula hi nahi. */
+        PANEL_NOT_OPENED,
+
+        /** Service band hai (ya beech me band ho gayi). */
+        SERVICE_OFF
+    }
+
+    /**
+     * v18: bina disha wala toggle ("মোবাইল ডাটা করো" — on/off
+     * shabd sunai hi nahi diya) ka natija, dabane ke BAAD ki
+     * asal haalat ke saath.
+     */
+    enum class DataOutcome {
+        /** Dabane ke baad data ON hai. */
+        TURNED_ON,
+
+        /** Dabane ke baad data OFF hai. */
+        TURNED_OFF,
+
+        /** Tile dab to gaya, par baad ki haalat padh nahi paye. */
+        TOGGLED_UNKNOWN,
 
         /** Panel khula, par data wala tile nahi mila / dab nahi paya. */
         TILE_NOT_FOUND,
@@ -114,10 +144,52 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Asal kaam — sirf worker thread se bulana. */
-    private fun runToggle(turnOn: Boolean): DataResult {
+    /**
+     * v18: bina disha ka toggle — tile ko ek baar dabakar
+     * haalat ulta kar do (on hai to off, off hai to on), phir
+     * dabane ke baad ki haalat padhkar batao. Turant laut aata
+     * hai; asal kaam background thread par hota hai aur natija
+     * [callback] se (usi thread par) milta hai.
+     */
+    fun flipMobileData(callback: (DataOutcome) -> Unit) {
+        try {
+            worker.execute {
+                val result = try {
+                    runFlip()
+                } catch (t: Throwable) {
+                    DataOutcome.TILE_NOT_FOUND
+                }
+                try {
+                    callback(result)
+                } catch (t: Throwable) {
+                    // Bulane wala ja chuka hai: natija chhod do.
+                }
+            }
+        } catch (t: Throwable) {
+            // Service band ho rahi hai aur worker band ho chuka:
+            // kaam nahi ho payega — sach bata do.
+            try {
+                callback(DataOutcome.SERVICE_OFF)
+            } catch (t2: Throwable) {
+                // Bulane wala ja chuka hai: natija chhod do.
+            }
+        }
+    }
+
+    /** Panel khoj ka natija: panel dikha tha ya nahi, tile, aur dabane wala node. */
+    private class PanelSearch(
+        val panelSeen: Boolean,
+        val tile: AccessibilityNodeInfo?,
+        val clickTarget: AccessibilityNodeInfo?
+    )
+
+    /**
+     * Quick-settings panel kholkar data tile dhoondho. Panel
+     * khul hi na paye to tile null aur panelSeen false milega.
+     */
+    private fun searchPanelTile(): PanelSearch {
         if (!performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)) {
-            return DataResult.PANEL_NOT_OPENED
+            return PanelSearch(panelSeen = false, tile = null, clickTarget = null)
         }
         val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
         var panelSeen = false
@@ -148,19 +220,29 @@ class JarvisAccessibilityService : AccessibilityService() {
                 SystemClock.sleep(POLL_INTERVAL_MS)
             }
         }
+        val foundTile = tile ?: return PanelSearch(panelSeen, null, null)
+        return PanelSearch(
+            panelSeen,
+            foundTile,
+            findClickableAncestor(foundTile) ?: foundTile
+        )
+    }
 
-        val foundTile = tile ?: run {
+    /** Asal kaam — sirf worker thread se bulana. */
+    private fun runToggle(turnOn: Boolean): DataResult {
+        val search = searchPanelTile()
+        val foundTile = search.tile ?: run {
             // Panel khula tha par tile nahi mila to panel band
             // karke batao; panel khula hi nahi to BACK mat bhejo —
             // woh neeche wali app ko peeche dhakel dega.
-            if (panelSeen) {
+            if (search.panelSeen) {
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 return DataResult.TILE_NOT_FOUND
             }
             return DataResult.PANEL_NOT_OPENED
         }
 
-        val clickTarget = findClickableAncestor(foundTile) ?: foundTile
+        val clickTarget = search.clickTarget ?: foundTile
         // Haal padh sakte hain aur pehle se waisi hi hai to
         // dabane ki zaroorat hi nahi — ulta ho jayega.
         val currentState = readTileState(clickTarget) ?: readTileState(foundTile)
@@ -178,6 +260,83 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
         return DataResult.SUCCESS
+    }
+
+    /** v18: asal ulta-karne wala kaam — sirf worker thread se bulana. */
+    private fun runFlip(): DataOutcome {
+        val search = searchPanelTile()
+        val foundTile = search.tile ?: run {
+            if (search.panelSeen) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                return DataOutcome.TILE_NOT_FOUND
+            }
+            return DataOutcome.PANEL_NOT_OPENED
+        }
+
+        val clickTarget = search.clickTarget ?: foundTile
+        val beforeState = readTileState(clickTarget) ?: readTileState(foundTile)
+        // Toggle me dabana hamesha hai — haalat jo bhi ho, ek
+        // dabav use ulta hi karega.
+        val clicked = try {
+            clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (t: Throwable) {
+            false
+        }
+        if (!clicked) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return DataOutcome.TILE_NOT_FOUND
+        }
+        SystemClock.sleep(CLICK_SETTLE_MS)
+        val afterState = rereadTileState(foundTile, clickTarget)
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return when {
+            // Dabane ke baad ki haalat padh paye — wahi sach hai.
+            afterState != null ->
+                if (afterState) DataOutcome.TURNED_ON else DataOutcome.TURNED_OFF
+            // Baad ki na mili, pehle ki mili thi — ulta hua hoga.
+            beforeState != null ->
+                if (beforeState) DataOutcome.TURNED_OFF else DataOutcome.TURNED_ON
+            else -> DataOutcome.TOGGLED_UNKNOWN
+        }
+    }
+
+    /**
+     * v18: tile dabane ke baad ki haalat dobara padhne ki
+     * koshish. Purana node taaza (refresh) karke dekho; woh na
+     * bane to panel ke taaza ped se tile phir dhoondhkar padho.
+     * Kuch koshishon me na mile to null.
+     */
+    private fun rereadTileState(
+        tile: AccessibilityNodeInfo,
+        clickTarget: AccessibilityNodeInfo
+    ): Boolean? {
+        var attempts = 0
+        while (attempts < REREAD_ATTEMPTS) {
+            try {
+                tile.refresh()
+            } catch (t: Throwable) {
+                // Ped badal gaya hoga: neeche taaza khoj hai.
+            }
+            try {
+                clickTarget.refresh()
+            } catch (t: Throwable) {
+                // Ped badal gaya hoga: neeche taaza khoj hai.
+            }
+            readTileState(clickTarget)?.let { return it }
+            readTileState(tile)?.let { return it }
+            val roots = collectRoots()
+            for (root in roots) {
+                val fresh = findDataTile(root) ?: continue
+                val freshTarget = findClickableAncestor(fresh) ?: fresh
+                readTileState(freshTarget)?.let { return it }
+                readTileState(fresh)?.let { return it }
+            }
+            attempts++
+            if (attempts < REREAD_ATTEMPTS) {
+                SystemClock.sleep(REREAD_INTERVAL_MS)
+            }
+        }
+        return null
     }
 
     /**
@@ -379,10 +538,32 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.toggleMobileData(turnOn, callback)
         }
 
+        /**
+         * v18: kahin se bhi bina-disha toggle ki koshish:
+         * service band ho to turant [DataOutcome.SERVICE_OFF],
+         * warna chalti hui service ko kaam saunp do (natija
+         * callback se, background thread par).
+         */
+        fun flipMobileData(
+            context: Context,
+            callback: (DataOutcome) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                // Settings me ON ho tab bhi instance abhi bandha
+                // na ho to is pal kaam nahi ho payega.
+                callback(DataOutcome.SERVICE_OFF)
+                return
+            }
+            service.flipMobileData(callback)
+        }
+
         private const val SYSTEMUI_PACKAGE = "com.android.systemui"
         private const val TOTAL_BUDGET_MS = 2_500L
         private const val POLL_INTERVAL_MS = 150L
         private const val CLICK_SETTLE_MS = 350L
+        private const val REREAD_ATTEMPTS = 3
+        private const val REREAD_INTERVAL_MS = 200L
         private const val MAX_NODES = 800
         private const val MAX_CLICK_ANCESTORS = 6
 
