@@ -19,6 +19,9 @@ Jarvis does it on your phone and speaks the reply back to you.
 - **Advanced command pack (v1.4):** kisi bhi installed app ko naam
   bolkar kholna, battery status, volume control, gaana (media)
   control, Google / YouTube search, aur timer
+- **Offline adda with Maya (v13):** "Maya" naam ki persona ke saath
+  poori offline, multi-turn halki-phulki baatchit — gaana khulwana,
+  roothna-manaana, joke aur roz ki baatein, hamesha saaf-suthri
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
@@ -162,6 +165,42 @@ aapki awaaz kahin upload nahi hoti.
   sunne ka session zyada se zyada **~7 second** chalega, aur aakhiri
   badli hui awaaz ke **~2.5 second** ki chuppi par khud band ho
   jayega — lagatar shor session ko latka nahi sakta.
+
+### Offline adda — Maya (v13)
+
+Is build se assistant ki persona ka naam **Maya** hai — app aur
+brand ka naam **ASHIP JARVIS AI** hi rehta hai. Background wake
+word "Jarvis" pehle ki tarah chalta hai, aur ab **"Maya"** bolkar
+bulane par bhi Jarvis jaagta hai: "Hello Maya", "Are Maya",
+"Maya shono", "Maya kidhar ho", "Meri Maya", ya sirf "Maya".
+Naam hamesha alag shabd ki tarah pehchana jata hai — "Mayabi"
+jaise lambe shabd wake nahi karte. Wake ke baad wala "Haan,
+boliye" wala jawab pehle jaisa hi hai.
+
+- **Shuru kaise karein:** "Hello Jarvis, meri jaan, kya kar rahi
+  ho?", "Maya, baat karo", "Adda karte hain" ya "Tum kaisi ho?"
+  bolne par adda khul jata hai — saamne wali screen par bhi aur
+  background wake word ke baad bhi.
+- **Multi-turn baatchit:** Maya sawaal poochti hai aur agla jawab
+  usi sawaal ke hisaab se samajhti hai. "Baitha hu" bolne par woh
+  YouTube me gaana chalane ko poochhegi — "haan" bolne par YouTube
+  sach me khulega (wahi purana overlay-bridge wala raasta), "na"
+  bolne par woh nakhre se rooth jayegi. "Dosto ke saath hu" par
+  meethi shikayat, kaam/khana/bahar — har haal ka apna jawab hai.
+- **Nautanki, hamesha saaf:** roothna-manaana ("Jaao jaao, main
+  aapse gussa ho gayi hu!"), sorry bolne par maan jaana, miss
+  karne ki meethi baatein, 2-3 saaf-suthre joke, good morning /
+  khana / din kaisa gaya wali roz ki baatein. Gande ya ashleel
+  shabdon ka jawab Maya hamesha pyaar se taalti hai — waisa kuch
+  kabhi nahi bolti.
+- **Adda ke dauraan:** har jawab ke baad agla turn bina "Jarvis"
+  bole shuru ho jata hai (background me). Adda apne aap band hota
+  hai: "bye" / "band karo" / "bas" / "good night" bolne par, do
+  baar lagatar samajh na aane par, ya 12 turn ke baad. Na samjhe
+  to Maya command wala fallback nahi bolti — halka sa nudge
+  dekar baat aage badhati hai.
+- **Poori offline:** adda koi internet ya API nahi maangta — saare
+  jawab phone ke andar wale niyamon (rules) se bante hain.
 
 ### Chhoti tuning (v1.2)
 
