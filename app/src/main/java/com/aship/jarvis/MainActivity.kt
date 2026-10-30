@@ -24,6 +24,8 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.access.JarvisAccessibilityService
+import com.aship.jarvis.ai.AgentBrain
+import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
@@ -468,6 +470,32 @@ class MainActivity : Activity() {
 
     private fun processCommand(text: String) {
         recognizedText.text = "Aapne kaha: $text"
+        // v25: online brain uplabdh ho (mode Offline na ho,
+        // key set ho, net chalu ho) to pehle AGENT — app ke
+        // andar EK hi mastishk (user ka pakka design):
+        // Gemini poori baat samajhta hai, online kadam khud
+        // leta hai aur phone wale kadam offline auzaaron se
+        // karwata hai, jab tak poora kaam khatm na ho jaye.
+        // Round 1 par koi model hi jawab na de to callback
+        // me null aayega aur neeche wala purana offline
+        // raasta bilkul pehle jaisa chalega.
+        if (geminiBrainAllowed()) {
+            responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
+            askAgentBrain(text)
+            return
+        }
+        processCommandOffline(text)
+    }
+
+    /**
+     * Offline raasta — v25 se pehle wala hi (adda pehle,
+     * phir CommandEngine), byte-for-byte waisa hi. Mode
+     * Offline ho, key na ho, net na ho, ya agent ko round 1
+     * par koi model hi na mila ho — tab yahi chalega.
+     * (Purana beech-wala Gemini chat ab nahi hai — agent
+     * uski jagah le chuka hai; do online raaste nahi bache.)
+     */
+    private fun processCommandOffline(text: String) {
         // v13: adda trigger ya is screen par chalu adda ho to pehle
         // Maya ka AddaEngine — uski state is activity instance me
         // har tap ke beech bani rehti hai. CommandEngine baad me.
@@ -493,16 +521,10 @@ class MainActivity : Activity() {
             return
         }
         val result = commandEngine.handle(text)
-        // v21 Phase 3: offline engine miss kare aur online brain
-        // uplabdh ho to pehle Gemini ko ek mauka — uske jawab ka
-        // intezaar karo, purana fallback jawab abhi mat bolo.
-        // Gemini null de to askGeminiBrain ke andar wahi purana
-        // jawab chalega. Handled command kabhi yahan nahi aata.
-        if (!result.handled && geminiBrainAllowed()) {
-            responseText.text = "Maya online soch rahi hai..."
-            askGeminiBrain(text, result.responseText)
-            return
-        }
+        // v25: yahan koi online chat nahi bacha — online
+        // uplabdh hone par agent processCommand me pehle hi
+        // chal chuka hota hai. Engine ka jawab (handled ho
+        // ya purana fallback) yahan aakhiri shabd hai.
         responseText.text = "Jarvis: ${result.responseText}"
         speaker.speak(result.responseText)
     }
@@ -618,19 +640,24 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Gemini se jawab maango (jawab uske apne thread par aata
-     * hai; UI ka saara kaam main thread par wapas aakar hota
-     * hai). Jawab mile to dikhao + bolo aur baatchit yaad me
-     * jodo; na mile to engine wala purana fallback jawab hi
-     * dikhao + bolo — bilkul pehle jaisa.
+     * v25: sanyojit agent chalao — auzaar is screen ke
+     * CommandEngine se bandhe hain (saamne wala raasta,
+     * overlay bridge nahi). Agent ka aakhiri jawab hi
+     * Maya ka jawab hai: dikhao + bolo + baatchit yaad me
+     * jodo. Jawab null ho (round 1 par koi model hi nahi
+     * mila) to purana offline raasta (processCommandOffline)
+     * — bilkul pehle jaisa. Callback AgentBrain ke thread
+     * par aata hai; UI ka saara kaam main thread par.
+     * (v21 wala askGeminiBrain/chat raasta ab nahi hai —
+     * agent uski jagah le chuka hai.)
      */
-    private fun askGeminiBrain(text: String, fallbackReply: String) {
-        GeminiBrain.chat(this, geminiHistory.toList(), text) { reply ->
+    private fun askAgentBrain(text: String) {
+        val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+        AgentBrain.run(this, geminiHistory.toList(), text, tools::execute) { reply ->
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 if (reply == null) {
-                    responseText.text = "Jarvis: $fallbackReply"
-                    speaker.speak(fallbackReply)
+                    processCommandOffline(text)
                     return@post
                 }
                 geminiHistory.add("user" to text)
