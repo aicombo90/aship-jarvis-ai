@@ -90,6 +90,15 @@ import java.util.concurrent.TimeUnit
  * naam ke milein to Maya dial NAHI karti — ummeedwaar
  * (naam + number ke aakhiri 4 ank) mastishk ko deti
  * hai taaki woh user se poochh sake kaun sa wala.
+ *
+ * v30: ek aur kaam wala auzaar — whatsapp_message.
+ * Khoj call_person wali hi hai (saajhi [findContact]:
+ * wahi READ_CONTACTS permission, wahi teen-seedhi
+ * wala milan), number nikal kar us sampark ki
+ * WhatsApp chat khol deta hai, sandesh pehle se
+ * likha hua. Bhejna woh KHUD nahi dabata — send
+ * wala button hamesha user khud dabata hai; koi
+ * nayi permission nahi lagi.
  */
 class AgentTools(
     private val context: Context,
@@ -127,12 +136,16 @@ class AgentTools(
             args.optString("label").trim()
         )
         "call_person" -> callPerson(args.optString("name").trim())
+        "whatsapp_message" -> whatsappMessage(
+            args.optString("name").trim(),
+            args.optString("message").trim()
+        )
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
                 "get_battery, get_network, set_timer, set_alarm, " +
-                "call_person."
+                "call_person, whatsapp_message."
         )
     }
 
@@ -625,6 +638,266 @@ class AgentTools(
     }
 
     /**
+     * Contacts-khoj ka bandha hua natija — call_person
+     * aur whatsapp_message dono auzaar isi ek khoj par
+     * chalte hain (ek hi permission, ek hi milan).
+     */
+    private sealed class ContactLookup {
+        /** READ_CONTACTS permission hi nahi hai. */
+        object PermissionDenied : ContactLookup()
+
+        /** Permission thi par contacts padhe nahi ja paye. */
+        object LoadFailed : ContactLookup()
+
+        /** Naam kisi bhi seedhi par nahi mila. */
+        object NotFound : ContactLookup()
+
+        /** Sabse achhi seedhi par ek hi alag vyakti. */
+        class One(val person: ContactPerson) : ContactLookup()
+
+        /** Sabse achhi seedhi par kai alag vyakti — user se poochhna hoga. */
+        class Many(val matches: List<ContactPerson>) : ContactLookup()
+    }
+
+    /**
+     * [name] ki saajhi contacts-khoj: permission jaanch,
+     * phir saare sampark padhna, phir teen-seedhi wala
+     * milan — natija [ContactLookup] me bandha hua.
+     * (SecurityException: permission jaanch ke baad bhi
+     * system mana kar de — jaise beech me permission
+     * hati ho — to crash ki jagah PermissionDenied.)
+     */
+    private fun findContact(name: String): ContactLookup {
+        if (context.checkSelfPermission(Manifest.permission.READ_CONTACTS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return ContactLookup.PermissionDenied
+        }
+        val people = try {
+            loadContacts()
+        } catch (e: SecurityException) {
+            return ContactLookup.PermissionDenied
+        } catch (t: Throwable) {
+            return ContactLookup.LoadFailed
+        }
+        val matches = matchPeople(people, name)
+        return when {
+            matches.isEmpty() -> ContactLookup.NotFound
+            matches.size == 1 -> ContactLookup.One(matches[0])
+            else -> ContactLookup.Many(matches)
+        }
+    }
+
+    /** Contacts permission na hone par dono auzaaron ka ek-sa imaandaar jawab. */
+    private fun contactsPermissionDeniedResult(): ToolResult = ToolResult(
+        false,
+        "FAILED — contacts ki permission nahi hai; app " +
+            "kholkar ek baar permission de do, phir naam " +
+            "bolkar call kar sakti hoon."
+    )
+
+    /**
+     * Kai-umeedwaar wali pehchan-suchi ek saajha roop me:
+     * "Naam — number ke aakhiri 4 ank 1234; ..." aur
+     * chaar se zyada hon to "(aur N aur bhi hain)".
+     */
+    private fun candidateListText(matches: List<ContactPerson>): String {
+        val candidates = matches.take(4).joinToString("; ") {
+            "${it.displayName} — number ke aakhiri 4 " +
+                "ank ${lastFourDigits(it.preferredNumber())}"
+        }
+        val moreNote = if (matches.size > 4) {
+            " (aur ${matches.size - 4} aur bhi hain)"
+        } else {
+            ""
+        }
+        return candidates + moreNote
+    }
+
+    /**
+     * v30: [name] ke sampark ki WhatsApp chat kholo,
+     * [message] pehle se likha hua — bhejna woh KHUD
+     * nahi dabata: send wala button hamesha user khud
+     * dabata hai. Khoj call_person wali hi hai
+     * ([findContact] — wahi permission, wahi milan,
+     * kai log milein to wahi poochhne wala jawab).
+     */
+    private fun whatsappMessage(name: String, message: String): ToolResult {
+        if (name.isEmpty()) {
+            return ToolResult(false, "No contact name was given.")
+        }
+        if (message.isEmpty()) {
+            return ToolResult(
+                false,
+                "FAILED — WhatsApp par bhejne wala sandesh " +
+                    "khaali hai; user se poochho kya likhna hai."
+            )
+        }
+        return when (val lookup = findContact(name)) {
+            ContactLookup.PermissionDenied ->
+                contactsPermissionDeniedResult()
+            ContactLookup.LoadFailed -> ToolResult(
+                false,
+                "FAILED — contacts padhe nahi ja paye."
+            )
+            ContactLookup.NotFound -> ToolResult(
+                false,
+                "FAILED — contacts me '$name' naam ka koi " +
+                    "number nahi mila."
+            )
+            is ContactLookup.One ->
+                openWhatsAppChat(lookup.person, message)
+            is ContactLookup.Many -> ToolResult(
+                false,
+                "'$name' naam ke kai log mile — kaun sa " +
+                    "wala? ${candidateListText(lookup.matches)}. " +
+                    "User se poochho kaun sa, phir usi poore " +
+                    "naam se whatsapp_message dobara chalao; " +
+                    "abhi WhatsApp NAHI khula hai."
+            )
+        }
+    }
+
+    /**
+     * Mile hue sampark ki WhatsApp chat wa.me wale
+     * link se kholo, sandesh query me pehle se bhara
+     * hua. App phone me ho to intent seedha usi par
+     * bandha — chat app me hi khulti hai; app na ho
+     * (ya uska bandha raasta resolve na ho) to bina
+     * bandha link khulta hai — natija tab PARTIAL
+     * hota hai, kyunki chat app wale raaste se NAHI
+     * khuli. Kuch bhi resolve na ho to imaandaar
+     * FAILED — "WhatsApp is phone me nahi mila".
+     */
+    private fun openWhatsAppChat(
+        person: ContactPerson,
+        message: String
+    ): ToolResult {
+        val url = "https://wa.me/" + waMeNumber(person.preferredNumber()) +
+            "?text=" + URLEncoder.encode(message, "UTF-8")
+        val snippet = message.take(40) +
+            if (message.length > 40) "…" else ""
+        val extraNote = if (person.numbers.size > 1) {
+            " Unke kul ${person.numbers.size} number hain; " +
+                "mobile wala number chuna hai."
+        } else {
+            ""
+        }
+        if (isWhatsAppInstalled()) {
+            val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                setPackage(WHATSAPP_PACKAGE)
+            }
+            if (resolves(appIntent)) {
+                dispatchWhatsAppIntent(appIntent)?.let { return it }
+                return ToolResult(
+                    true,
+                    "WhatsApp chat khol diya — " +
+                        "${person.displayName} ke liye sandesh " +
+                        "likh diya hai ('$snippet'); bhejne ke " +
+                        "liye send wala button dabana hai." +
+                        extraNote
+                )
+            }
+            // App hai par bandha raasta resolve nahi
+            // hua — neeche bina-bandha raasta aazmaya
+            // jayega (natija PARTIAL hi rahega).
+        }
+        val genericIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (!resolves(genericIntent)) {
+            return ToolResult(
+                false,
+                "FAILED — WhatsApp is phone me nahi mila."
+            )
+        }
+        dispatchWhatsAppIntent(genericIntent)?.let { return it }
+        return ToolResult(
+            false,
+            "PARTIAL — WhatsApp chat app wale raaste se " +
+                "nahi khula; wa.me wala page khul gaya " +
+                "hai — ${person.displayName} ke liye " +
+                "sandesh ('$snippet') wahan taiyaar hai; " +
+                "bhejna wahan se hoga." + extraNote
+        )
+    }
+
+    /**
+     * WhatsApp wala intent asal me bhejo — handler ki
+     * jaanch bulane wala pehle kar chuka hai; saamne ho
+     * to seedha startActivity, background service se
+     * ho to overlay bridge (doosre kholne wale
+     * auzaaron wala hi bandobosto). Chal jaye to null;
+     * warna FAILED wala sachha natija.
+     */
+    private fun dispatchWhatsAppIntent(intent: Intent): ToolResult? {
+        if (fromBackgroundService) {
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> null
+                LaunchOutcome.PERMISSION_NEEDED -> ToolResult(
+                    false,
+                    "FAILED — WhatsApp chat nahi khul paya: " +
+                        "'Display over other apps' permission " +
+                        "chahiye."
+                )
+                LaunchOutcome.LOCKED -> ToolResult(
+                    false,
+                    "FAILED — phone locked hai, WhatsApp chat " +
+                        "nahi khul paya."
+                )
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    ToolResult(
+                        false,
+                        "FAILED — WhatsApp chat nahi khul paya."
+                    )
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            null
+        } catch (e: Exception) {
+            ToolResult(false, "FAILED — WhatsApp chat nahi khul paya.")
+        }
+    }
+
+    /** Intent ko lene wali koi activity hai bhi ya nahi. */
+    private fun resolves(intent: Intent): Boolean = try {
+        intent.resolveActivity(context.packageManager) != null
+    } catch (e: Exception) {
+        false
+    }
+
+    /** WhatsApp app phone me hai kya (uska launch raasta milta hai kya). */
+    private fun isWhatsAppInstalled(): Boolean = try {
+        context.packageManager
+            .getLaunchIntentForPackage(WHATSAPP_PACKAGE) != null
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * wa.me ke liye number ko desh-code (country code)
+     * wale ankon me saaf karo: '+' hatao; 12 ank '91'
+     * se shuru hon to waise hi; 11 ank '0' se shuru
+     * hon to '0' hatakar aage '91'; 10 ank hon to
+     * aage '91' (Bharat wala number); warna jo ank
+     * hain waise hi (pehle se antarrashtriya roop).
+     */
+    private fun waMeNumber(number: String): String {
+        val raw = number.trim()
+        val digits = raw.filter { it.isDigit() }
+        return when {
+            raw.startsWith("+") -> digits
+            digits.length == 12 && digits.startsWith("91") -> digits
+            digits.length == 11 && digits.startsWith("0") ->
+                "91" + digits.substring(1)
+            digits.length == 10 -> "91" + digits
+            else -> digits
+        }
+    }
+
+    /**
      * v29: [name] ko contacts me dhundho aur mile to
      * uske number ke saath dialer kholo (ACTION_DIAL
      * — call KHUD nahi lagta, button user dabata hai).
@@ -643,43 +916,20 @@ class AgentTools(
         if (name.isEmpty()) {
             return ToolResult(false, "No contact name was given.")
         }
-        if (context.checkSelfPermission(Manifest.permission.READ_CONTACTS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return ToolResult(
-                false,
-                "FAILED — contacts ki permission nahi hai; app " +
-                    "kholkar ek baar permission de do, phir naam " +
-                    "bolkar call kar sakti hoon."
-            )
-        }
-        val people = try {
-            loadContacts()
-        } catch (e: SecurityException) {
-            // Permission jaanch ke baad bhi system mana
-            // kar de (jaise beech me permission hati ho)
-            // — crash ki jagah wahi imaandaar jawab.
-            return ToolResult(
-                false,
-                "FAILED — contacts ki permission nahi hai; app " +
-                    "kholkar ek baar permission de do, phir naam " +
-                    "bolkar call kar sakti hoon."
-            )
-        } catch (t: Throwable) {
-            return ToolResult(
+        return when (val lookup = findContact(name)) {
+            ContactLookup.PermissionDenied ->
+                contactsPermissionDeniedResult()
+            ContactLookup.LoadFailed -> ToolResult(
                 false,
                 "FAILED — contacts padhe nahi ja paye."
             )
-        }
-        val matches = matchPeople(people, name)
-        return when {
-            matches.isEmpty() -> ToolResult(
+            ContactLookup.NotFound -> ToolResult(
                 false,
                 "FAILED — contacts me '$name' naam ka koi " +
                     "number nahi mila."
             )
-            matches.size == 1 -> {
-                val person = matches[0]
+            is ContactLookup.One -> {
+                val person = lookup.person
                 val displayNumber = person.preferredNumber()
                 val intent = Intent(Intent.ACTION_DIAL).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -702,25 +952,14 @@ class AgentTools(
                         "hai." + extraNote
                 )
             }
-            else -> {
-                val candidates = matches.take(4).joinToString("; ") {
-                    "${it.displayName} — number ke aakhiri 4 " +
-                        "ank ${lastFourDigits(it.preferredNumber())}"
-                }
-                val moreNote = if (matches.size > 4) {
-                    " (aur ${matches.size - 4} aur bhi hain)"
-                } else {
-                    ""
-                }
-                ToolResult(
-                    false,
-                    "'$name' naam ke kai log mile — kaun sa " +
-                        "wala? $candidates$moreNote. User se " +
-                        "poochho kaun sa, phir usi poore naam " +
-                        "se call_person dobara chalao; abhi " +
-                        "dialer NAHI khula hai."
-                )
-            }
+            is ContactLookup.Many -> ToolResult(
+                false,
+                "'$name' naam ke kai log mile — kaun sa " +
+                    "wala? ${candidateListText(lookup.matches)}. " +
+                    "User se poochho kaun sa, phir usi poore " +
+                    "naam se call_person dobara chalao; abhi " +
+                    "dialer NAHI khula hai."
+            )
         }
     }
 
@@ -1046,6 +1285,9 @@ class AgentTools(
 
         /** v26: YouTube app ka package naam. */
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+
+        /** v30: WhatsApp app ka package naam. */
+        const val WHATSAPP_PACKAGE = "com.whatsapp"
 
         /** v26: results khulne ke baad app ke saamne aane ki saans. */
         const val YOUTUBE_SETTLE_MS = 700L
