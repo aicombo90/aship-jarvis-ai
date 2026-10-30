@@ -58,6 +58,18 @@ Jarvis does it on your phone and speaks the reply back to you.
   code me kabhi nahi). Key na ho, mode Offline ho ya net band
   ho to ye raasta band rehta hai; offline commands hamesha
   pehle aur bina ruke chalte rehte hain
+- **Gemini key hissa upar + dabba saaf (v22):** main screen ki
+  jad pehle bina-scroll wala LinearLayout thi — lamba content
+  neeche kat jata tha aur key bharne ka hissa pahunch se bahar
+  tha. Ab poori screen ScrollView me hai, key wala hissa Mode
+  ke turant baad upar hai, aur likhne ka dabba bada, kinare
+  wala aur saaf dikhne wala hai (input_box_bg). Save dabane
+  par key pehle Gemini se jaanchi jati hai (models wali
+  halki call): sahi nikle tabhi band hoti hai — Maya bolkar
+  batati hai ki key mil gayi aur header me "Gemini taiyaar
+  hai" dikhta hai; galat key ya net band ho to kuch save
+  nahi hota, wajah status line par dikhti hai aur boli bhi
+  jati hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
