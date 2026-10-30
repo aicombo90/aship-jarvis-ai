@@ -90,6 +90,17 @@ Jarvis does it on your phone and speaks the reply back to you.
   koshish ki report ab app me "Online koshish (aakhiri)"
   line par dikhti hai: kaun sa model aazmaya, kitni der
   lagi, nateeja kya raha (OK / HTTP code / timeout / net)
+- **Sanyojit mastishk — combined brain (v25):** app ke
+  andar ab EK hi sir hai. Gemini poori baat samajhta hai,
+  kaam ko kadmon me todta hai, online kadam khud leta
+  hai (jawab, faisla, search ke shabd) aur phone wale
+  kadam offline auzaaron se karwata hai — open_app,
+  mobile_data, torch, web_search, get_time, get_date —
+  har kadam ka sachha natija wapas lekar, jab tak poora
+  kaam khatm na ho jaye; ek maang par zyada se zyada 4
+  kadam-round. Offline engine ab no-net / no-key wala
+  fallback hai; online uplabdh hone par mastishk hi
+  pehle chalta hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
