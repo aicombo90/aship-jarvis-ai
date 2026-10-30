@@ -1,13 +1,16 @@
 package com.aship.jarvis.ai
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.AlarmClock
+import android.provider.ContactsContract
 import android.telephony.TelephonyManager
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
@@ -74,6 +77,19 @@ import java.util.concurrent.TimeUnit
  * hai jab intent asal me kisi resolving activity ko
  * bheja gaya ho; ghadi wala handler hi na mile to
  * imaandaar FAILED — "clock app nahi mila".
+ *
+ * v29: ek kaam wala auzaar — call_person. Maya
+ * contacts me naam dhundhti hai (exact, phir shuru
+ * se, phir beech me — bade-chhote akshar aur khaali
+ * jagah ka hisaab saaf karke) aur mile hue number ke
+ * saath DIALER khol deti hai. Call woh khud NAHI
+ * lagati — ACTION_DIAL hai, CALL_PHONE permission
+ * li hi nahi gayi; call wala button hamesha user
+ * dabata hai. Isi ek auzaar ke liye app ki EK nayi
+ * permission hai: READ_CONTACTS. Kai alag log ek hi
+ * naam ke milein to Maya dial NAHI karti — ummeedwaar
+ * (naam + number ke aakhiri 4 ank) mastishk ko deti
+ * hai taaki woh user se poochh sake kaun sa wala.
  */
 class AgentTools(
     private val context: Context,
@@ -110,11 +126,13 @@ class AgentTools(
             args.optInt("minute", 0),
             args.optString("label").trim()
         )
+        "call_person" -> callPerson(args.optString("name").trim())
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
-                "get_battery, get_network, set_timer, set_alarm."
+                "get_battery, get_network, set_timer, set_alarm, " +
+                "call_person."
         )
     }
 
@@ -578,6 +596,283 @@ class AgentTools(
         }
     }
 
+    /**
+     * Ek sampark (vyakti) ki pehchan: contacts me
+     * dikhne wala naam aur uske number (type ke saath —
+     * mobile ko pasandeeda chunne ke liye). Ek hi
+     * vyakti ke kai number ho sakte hain.
+     */
+    private class ContactPerson(
+        val displayName: String,
+        val numbers: MutableList<Pair<String, Int>> = mutableListOf()
+    ) {
+        /**
+         * Pasandeeda number: pehla mobile number, woh
+         * na ho to pehla number. (numbers khaali kabhi
+         * nahi banti — vyakti number ke saath hi banta
+         * hai.)
+         */
+        fun preferredNumber(): String {
+            for ((number, type) in numbers) {
+                if (type ==
+                    ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE
+                ) {
+                    return number
+                }
+            }
+            return numbers[0].first
+        }
+    }
+
+    /**
+     * v29: [name] ko contacts me dhundho aur mile to
+     * uske number ke saath dialer kholo (ACTION_DIAL
+     * — call KHUD nahi lagta, button user dabata hai).
+     *
+     * Milan teen seedhiyon par: poora naam ekdum waisa
+     * (exact), phir naam se shuru hone wala, phir naam
+     * jisme mila hua (contains) — bade-chhote akshar
+     * aur khaali jagah saaf karke, jagah hatakar bhi
+     * taala jata hai. Sabse achhi seedhi par EK hi
+     * alag vyakti mile to dial; kai alag vyakti milein
+     * to dial NAHI — ummeedwaar (naam + number ke
+     * aakhiri 4 ank) lautaye jate hain taaki mastishk
+     * user se poochh sake kaun sa wala.
+     */
+    private fun callPerson(name: String): ToolResult {
+        if (name.isEmpty()) {
+            return ToolResult(false, "No contact name was given.")
+        }
+        if (context.checkSelfPermission(Manifest.permission.READ_CONTACTS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return ToolResult(
+                false,
+                "FAILED — contacts ki permission nahi hai; app " +
+                    "kholkar ek baar permission de do, phir naam " +
+                    "bolkar call kar sakti hoon."
+            )
+        }
+        val people = try {
+            loadContacts()
+        } catch (e: SecurityException) {
+            // Permission jaanch ke baad bhi system mana
+            // kar de (jaise beech me permission hati ho)
+            // — crash ki jagah wahi imaandaar jawab.
+            return ToolResult(
+                false,
+                "FAILED — contacts ki permission nahi hai; app " +
+                    "kholkar ek baar permission de do, phir naam " +
+                    "bolkar call kar sakti hoon."
+            )
+        } catch (t: Throwable) {
+            return ToolResult(
+                false,
+                "FAILED — contacts padhe nahi ja paye."
+            )
+        }
+        val matches = matchPeople(people, name)
+        return when {
+            matches.isEmpty() -> ToolResult(
+                false,
+                "FAILED — contacts me '$name' naam ka koi " +
+                    "number nahi mila."
+            )
+            matches.size == 1 -> {
+                val person = matches[0]
+                val displayNumber = person.preferredNumber()
+                val intent = Intent(Intent.ACTION_DIAL).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    data = Uri.parse(
+                        "tel:" + cleanDialNumber(displayNumber)
+                    )
+                }
+                dispatchDialIntent(intent)?.let { return it }
+                val extraNote = if (person.numbers.size > 1) {
+                    " Unke kul ${person.numbers.size} number " +
+                        "hain; mobile wala number chuna hai."
+                } else {
+                    ""
+                }
+                ToolResult(
+                    true,
+                    "Dialer khol diya — ${person.displayName} " +
+                        "($displayNumber) par call karne ke liye " +
+                        "taiyaar hai; call wala button dabana " +
+                        "hai." + extraNote
+                )
+            }
+            else -> {
+                val candidates = matches.take(4).joinToString("; ") {
+                    "${it.displayName} — number ke aakhiri 4 " +
+                        "ank ${lastFourDigits(it.preferredNumber())}"
+                }
+                val moreNote = if (matches.size > 4) {
+                    " (aur ${matches.size - 4} aur bhi hain)"
+                } else {
+                    ""
+                }
+                ToolResult(
+                    false,
+                    "'$name' naam ke kai log mile — kaun sa " +
+                        "wala? $candidates$moreNote. User se " +
+                        "poochho kaun sa, phir usi poore naam " +
+                        "se call_person dobara chalao; abhi " +
+                        "dialer NAHI khula hai."
+                )
+            }
+        }
+    }
+
+    /**
+     * Saare phone-number wale sampark padho — ek
+     * vyakti (dikhaai naam, saaf-karke pehchan) ke
+     * neeche uske saare number jama karke. Cursor
+     * hamesha band hota hai; padhne ki koi gadbad
+     * bulane wale par jaati hai (jo use imaandaar
+     * FAILED me badal deta hai).
+     */
+    private fun loadContacts(): List<ContactPerson> {
+        val byKey = LinkedHashMap<String, ContactPerson>()
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ContactsContract.CommonDataKinds.Phone.TYPE
+        )
+        val cursor = context.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            projection,
+            null,
+            null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        ) ?: return emptyList()
+        cursor.use {
+            val nameIdx = it.getColumnIndex(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+            )
+            val numberIdx = it.getColumnIndex(
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
+            val typeIdx = it.getColumnIndex(
+                ContactsContract.CommonDataKinds.Phone.TYPE
+            )
+            while (it.moveToNext()) {
+                val displayName = it.getString(nameIdx)
+                    ?.trim()
+                    ?.takeIf { n -> n.isNotEmpty() } ?: continue
+                val number = it.getString(numberIdx)
+                    ?.trim()
+                    ?.takeIf { n -> n.isNotEmpty() } ?: continue
+                val type = it.getInt(typeIdx)
+                val key = normalizeName(displayName)
+                val person = byKey.getOrPut(key) {
+                    ContactPerson(displayName)
+                }
+                if (person.numbers.none { p -> p.first == number }) {
+                    person.numbers.add(number to type)
+                }
+            }
+        }
+        return byKey.values.toList()
+    }
+
+    /**
+     * Naam-milan ki teen seedhiyan — sabse achhi
+     * seedhi par mile hue alag-alag vyakti (contacts
+     * wale kram me). Har seedhi saaf-naam par aur
+     * jagah-hate-naam par, dono par aazmayi jati hai.
+     */
+    private fun matchPeople(
+        people: List<ContactPerson>,
+        query: String
+    ): List<ContactPerson> {
+        val queryNorm = normalizeName(query)
+        val querySquash = squashName(queryNorm)
+        if (queryNorm.isEmpty()) return emptyList()
+        val tiers: List<(String, String) -> Boolean> = listOf(
+            { norm, squash ->
+                norm == queryNorm || squash == querySquash
+            },
+            { norm, squash ->
+                norm.startsWith(queryNorm) ||
+                    squash.startsWith(querySquash)
+            },
+            { norm, squash ->
+                norm.contains(queryNorm) ||
+                    squash.contains(querySquash)
+            }
+        )
+        for (tier in tiers) {
+            val matched = people.filter { person ->
+                val norm = normalizeName(person.displayName)
+                tier(norm, squashName(norm))
+            }
+            if (matched.isNotEmpty()) return matched
+        }
+        return emptyList()
+    }
+
+    /** Naam saaf karo: chhote akshar, khaali jagah ek-si, kinare kaate. */
+    private fun normalizeName(raw: String): String =
+        raw.lowercase(Locale.ROOT).trim().replace(WHITESPACE_RUN, " ")
+
+    /** Jagah-hataya naam — "Rahul Sharma" aur "RahulSharma" ek pehchan. */
+    private fun squashName(normalized: String): String =
+        normalized.replace(" ", "")
+
+    /** tel: URI ke liye saaf number — '+' aur ank rehne do, baaki hatao. */
+    private fun cleanDialNumber(number: String): String =
+        number.replace(DIAL_STRIP_CHARS, "")
+
+    /** Ummeedwaar pehchan ke liye number ke aakhiri 4 ank (sirf ank). */
+    private fun lastFourDigits(number: String): String {
+        val digits = number.filter { it.isDigit() }
+        return if (digits.length >= 4) digits.takeLast(4) else digits
+    }
+
+    /**
+     * Dialer wala intent asal me bhejo — ghadi wale
+     * intent wala hi bandobosto (dispatchClockIntent
+     * ka aaina): pehle koi lene wali activity hai bhi
+     * ya nahi, saamne ho to seedha startActivity,
+     * background service se ho to overlay bridge.
+     * Dispatch ho jaye to null; warna FAILED wala
+     * sachha natija (dialer wale shabdome).
+     */
+    private fun dispatchDialIntent(intent: Intent): ToolResult? {
+        val hasHandler = try {
+            intent.resolveActivity(context.packageManager) != null
+        } catch (e: Exception) {
+            false
+        }
+        if (!hasHandler) {
+            return ToolResult(false, "FAILED — dialer app nahi mila.")
+        }
+        if (fromBackgroundService) {
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> null
+                LaunchOutcome.PERMISSION_NEEDED -> ToolResult(
+                    false,
+                    "FAILED — dialer nahi khul paya: 'Display " +
+                        "over other apps' permission chahiye."
+                )
+                LaunchOutcome.LOCKED -> ToolResult(
+                    false,
+                    "FAILED — phone locked hai, dialer nahi " +
+                        "khul paya."
+                )
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    ToolResult(false, "FAILED — dialer nahi khul paya.")
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            null
+        } catch (e: Exception) {
+            ToolResult(false, "FAILED — dialer nahi khul paya.")
+        }
+    }
+
     /** Timer ki muddat bolne-layak shabdon me: "10 minute", "1 ghanta 30 minute". */
     private fun formatDuration(totalSeconds: Int): String {
         val hours = totalSeconds / 3600
@@ -761,5 +1056,11 @@ class AgentTools(
          * rakha hai taaki sachha natija pehle aa jaye.
          */
         const val YOUTUBE_TAP_WAIT_MS = 14_000L
+
+        /** v29: naam-saaf ke liye lagatar khaali jagah ka jhund. */
+        val WHITESPACE_RUN = Regex("\\s+")
+
+        /** v29: tel: URI se hatne wale nishan (jagah, dash, koshthak). */
+        val DIAL_STRIP_CHARS = Regex("[\\s\\-()]")
     }
 }
