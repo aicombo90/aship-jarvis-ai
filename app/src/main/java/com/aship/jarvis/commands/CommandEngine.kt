@@ -270,8 +270,8 @@ class CommandEngine(
 
         // --- Fallback ---------------------------------------------------------
         return CommandResult(
-            "Ye command abhi offline mode me available nahi hai. " +
-                "Online AI Phase 3 me aayega, phir main aise sawalon ke jawab bhi de paunga.",
+            "Ye kaam main abhi nahi kar sakta. " +
+                "Har update ke saath main naye kaam seekhta rahunga.",
             false
         )
     }
