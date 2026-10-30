@@ -51,6 +51,13 @@ Jarvis does it on your phone and speaks the reply back to you.
   likha hota hai (jaise "62.25 GB") - ab tile us upyog-wale
   label (number + GB/MB/KB) se bhi pakka (score 3) pehchana
   jata hai; "Cellular" naam wala tile bhi score 2 par milta hai
+- **Phase 3 — online buddhi, Gemini (v21):** offline engine kisi
+  baat ko na sambhale to Maya Google Gemini se jawab lati hai —
+  sirf baatchit aur sawalon ke liye. API key user app ke andar
+  khud bharta hai aur SIRF usi ke phone par rehti hai (APK ya
+  code me kabhi nahi). Key na ho, mode Offline ho ya net band
+  ho to ye raasta band rehta hai; offline commands hamesha
+  pehle aur bina ruke chalte rehte hain
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
