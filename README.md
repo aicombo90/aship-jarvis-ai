@@ -39,6 +39,13 @@ Jarvis does it on your phone and speaks the reply back to you.
   করো" bolne par bhi kaam hota hai — disha wala shabd (on/off)
   sunai na de to Maya data toggle kar deti hai (on hai to off,
   off hai to on) aur dabane ke baad ki haalat bol deti hai
+- **Data command recognizer-garble ke liye pakka (v19):**
+  recognizer Bangla "করো" ka ো kabhi bikhre do-codepoint roop
+  (ে+া) me bhejta tha, isliye exact shabd-milaaan chup-chaap
+  fail ho jata tha — ab normalize sabse pehle woh roop ek
+  karta hai, iraade ke liye encoding-surakshit "কর" stem bhi
+  milaya gaya hai, aur chhote vakya ("মোবাইল ডাটা অর" jaisi
+  garble) me sirf data ka zikr hi toggle ke liye kaafi hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
