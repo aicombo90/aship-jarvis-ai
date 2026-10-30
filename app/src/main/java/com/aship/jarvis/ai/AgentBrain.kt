@@ -218,7 +218,7 @@ object AgentBrain {
         val mainArg = when (tool) {
             "open_app" -> args.optString("app")
             "mobile_data", "torch" -> args.optString("state")
-            "web_search" -> args.optString("query").take(20)
+            "web_search", "youtube_play" -> args.optString("query").take(20)
             else -> ""
         }
         return if (mainArg.isEmpty()) tool else "$tool($mainArg)"
@@ -294,6 +294,11 @@ object AgentBrain {
             "- torch, args {\"state\": \"on\" | \"off\"} — the flashlight.\n" +
             "- web_search, args {\"query\": \"<search terms>\"} — opens a " +
             "Google search in the browser.\n" +
+            "- youtube_play, args {\"query\": \"<song or video name>\"} — " +
+            "YouTube par query search karke pehla video chalata hai. " +
+            "Use it for 'X gana/video chalao' type requests (play a " +
+            "song or video). The result says whether the video really " +
+            "started, only the search results opened, or it failed.\n" +
             "- get_time, args {} — returns the current time as text, for " +
             "you to use in your answer.\n" +
             "- get_date, args {} — returns the current date as text, for " +
