@@ -83,6 +83,13 @@ Jarvis does it on your phone and speaks the reply back to you.
   number kya tha (safal ho to kaun sa tile daba, haalat
   kya hai). Online mode wala toast bhi ab key ki haalat ke
   hisaab se sach bolta hai
+- **Dheema net + online koshish report (v24):** Gemini chat
+  ke timeout badhaye — judne ke liye 30 second, jawab ke
+  liye 60 second — taaki dheeme net aur bheed wale samay me
+  koshish samay se pehle timeout banke na mare. Har online
+  koshish ki report ab app me "Online koshish (aakhiri)"
+  line par dikhti hai: kaun sa model aazmaya, kitni der
+  lagi, nateeja kya raha (OK / HTTP code / timeout / net)
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
