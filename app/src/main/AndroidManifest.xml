@@ -14,6 +14,11 @@
     <!-- So the foreground-service notice can be shown (asked at runtime
          on Android 13+; the service runs even if it is denied). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- v16: wake word sunte hi screen ki roshni jalani hai, screen
+         band ho tab bhi. Wake service ek chhota sa SCREEN_BRIGHT
+         wake lock leti hai — ye aam (normal) permission hai, koi
+         runtime dialog nahi aata. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Phase 2: lets the user exempt Jarvis from battery optimization
          from inside the app (vivo kills background apps otherwise). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
