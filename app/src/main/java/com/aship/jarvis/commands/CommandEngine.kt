@@ -62,7 +62,83 @@ class CommandEngine(
         if (text.isEmpty()) {
             return CommandResult("Kuch sunai nahi diya, phir se boliye.", false)
         }
-        return dispatch(text)
+        val first = dispatch(text)
+        if (first.handled) return first
+        // v1.9: background Vosk aksar shabd thode galat sunta hai
+        // (Bengali lehja + chhota model) — exact match na mile to
+        // kareeb-shabd sudhar kar dobara aazmao. Sudhra hua text
+        // kisi pakke command se mile tabhi maanenge, warna pehle
+        // wala fallback hi rahega (galat app khulne ka dar nahi).
+        val corrected = fuzzyCorrect(text)
+        if (corrected != text) {
+            val second = dispatch(corrected)
+            if (second.handled) return second
+        }
+        return first
+    }
+
+    /**
+     * Har token ko jaane-pehchane command shabdon se milao; bahut
+     * kareeb (1-2 akshar ka farq) ho to sahi shabd se badal do.
+     * Alag script ke shabd aapas me kabhi kareeb nahi aate, isliye
+     * Latin/Devanagari/Bangla ek hi set me surakshit hain.
+     */
+    private fun fuzzyCorrect(text: String): String {
+        var changed = false
+        val out = text.split(Regex("""\s+""")).map { token ->
+            val clean = token.trim(',', '.', '।')
+            if (clean.length < 4 || clean in FUZZY_VOCAB) {
+                token
+            } else {
+                var best: String? = null
+                var bestDist = Int.MAX_VALUE
+                for (word in FUZZY_VOCAB) {
+                    val d = levenshtein(clean, word)
+                    if (d < bestDist) {
+                        bestDist = d
+                        best = word
+                    }
+                }
+                // Command session sirf asli wake ke baad khulta hai,
+                // isliye thoda udaar threshold theek hai — galat
+                // pakda gaya shabd bhi zyada se zyada ek chhota
+                // kaam (app kholna / time bolna) karega, koi bada
+                // nuksaan nahi.
+                val allowed = when {
+                    clean.length >= 7 -> 3
+                    clean.length >= 5 -> 2
+                    else -> 1
+                }
+                if (best != null && bestDist in 1..allowed) {
+                    changed = true
+                    token.replace(clean, best)
+                } else {
+                    token
+                }
+            }
+        }
+        return if (changed) out.joinToString(" ") else text
+    }
+
+    /** Classic edit distance (chars = UTF-16 units; heuristic ke liye kaafi). */
+    private fun levenshtein(a: String, b: String): Int {
+        if (a == b) return 0
+        var prev = IntArray(b.length + 1) { it }
+        var curr = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            curr[0] = i
+            for (j in 1..b.length) {
+                curr[j] = minOf(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1
+                )
+            }
+            val tmp = prev
+            prev = curr
+            curr = tmp
+        }
+        return prev[b.length]
     }
 
     /** Normalize (aur filler-saaf) hue text par asal command matching. */
@@ -756,6 +832,36 @@ class CommandEngine(
 
         /** v1.5: token-routing me app kholne ke liye zaroori kriya shabd. */
         val OPEN_VERB_TOKENS = setOf("kholo", "khol", "open")
+
+        /**
+         * v1.9: fuzzy sudhaar ke liye jaane-pehchane command shabd.
+         * Normalize ke baad bachne wale galat-sune roop (Latin
+         * misspelling ya Devanagari/Bangla variant) inhi se milaye
+         * jate hain — sirf bahut kareeb wale hi badle jate hain.
+         */
+        val FUZZY_VOCAB = setOf(
+            // Latin (Vosk / system recognizer ki galat spelling)
+            "youtube", "facebook", "whatsapp", "telegram", "camera",
+            "chrome", "settings", "torch", "flashlight", "battery",
+            "volume", "gaana", "music", "song", "alarm", "timer",
+            "google", "search", "dikhao", "kholo", "khol", "open",
+            "time", "samay", "baje", "baja", "date", "tarikh",
+            "play", "pause", "mute", "roko", "band", "chalao",
+            "tez", "kam", "badhao", "agla", "pichla", "next",
+            "previous", "awaaz", "full", "max",
+            // Devanagari (normalize me na hone wale galat-sune roop)
+            "यूट्यूब", "फेसबुक", "व्हाट्सएप", "टेलीग्राम", "कैमरा",
+            "क्रोम", "सेटिंग्स", "टॉर्च", "बैटरी", "वॉल्यूम",
+            "गाना", "अलार्म", "टाइमर", "गूगल", "सर्च", "दिखाओ",
+            "खोलो", "समय", "बजे", "तारीख", "चलाओ", "रोको",
+            "बंद", "अगला", "पिछला", "म्यूट", "आवाज़", "टाइम",
+            // Bangla
+            "ইউটিউব", "ফেসবুক", "হোয়াটসঅ্যাপ", "টেলিগ্রাম",
+            "ক্যামেরা", "ক্রোম", "সেটিংস", "টর্চ", "ব্যাটারি",
+            "ভলিউম", "গান", "অ্যালার্ম", "টাইমার", "গুগল",
+            "সার্চ", "দেখাও", "খোলো", "সময়", "বাজে", "তারিখ",
+            "চালাও", "থামাও", "বন্ধ", "পরের", "মিউট", "আওয়াজ"
+        )
 
         /** v1.5: app ke naam se pehle/peeche aane wale bandhe shabd. */
         val APP_NAME_STOP_TOKENS = setOf("karo", "kar", "do", "app", "ko", "yeh", "ye")

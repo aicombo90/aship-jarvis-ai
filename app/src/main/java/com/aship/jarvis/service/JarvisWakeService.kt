@@ -625,9 +625,20 @@ class JarvisWakeService : Service() {
                 if (totalMs >= COMMAND_HARD_CAP_MS ||
                     silenceMs >= COMMAND_SILENCE_TIMEOUT_MS
                 ) {
-                    stopCommandSession()
-                    orbOverlay.hideNow()
-                    startWakeSession()
+                    // v1.9: session khatm hone par aakhiri suna hua
+                    // tukda (partial) bekaar mat jane do — use bhi
+                    // command ki tarah aazmao. Na mile to
+                    // onCommandHeard khud pehle ki tarah chup
+                    // wapas wake par chala jayega; mile to kaam
+                    // hoga — dheere bolne par bhi command bachega.
+                    val lastPartial = commandLastPartial
+                    if (lastPartial.isNotBlank()) {
+                        onCommandHeard(lastPartial)
+                    } else {
+                        stopCommandSession()
+                        orbOverlay.hideNow()
+                        startWakeSession()
+                    }
                 } else {
                     mainHandler.postDelayed(this, COMMAND_WATCHDOG_TICK_MS)
                 }
