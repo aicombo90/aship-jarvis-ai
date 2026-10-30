@@ -70,6 +70,19 @@ Jarvis does it on your phone and speaks the reply back to you.
   hai" dikhta hai; galat key ya net band ho to kuch save
   nahi hota, wajah status line par dikhti hai aur boli bhi
   jati hai
+- **Model kataar + panel-scan report (v23):** naye Gemini key
+  ke liye gemini-2.5-flash band nikla (models list me dikhta
+  hai par generateContent par 404) — baatchit ab modelon ki
+  kataar se chalti hai: gemini-3-flash-preview, phir
+  gemini-flash-latest, aakhir me 2.5-flash; 404/503 ya khaali
+  jawab par agla model, key wali gadbad (400/401/403) par
+  wahin rok. Soch (thinking) ke liye token seema 320 se 512.
+  Data tile wali khoj ab 8 second tak chalti hai (pehle 2.5)
+  aur har koshish ke baad app me "Panel scan" report dikhti
+  hai — panel dikha ya nahi, kaun se naam mile, sabse bada
+  number kya tha (safal ho to kaun sa tile daba, haalat
+  kya hai). Online mode wala toast bhi ab key ki haalat ke
+  hisaab se sach bolta hai
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
