@@ -418,7 +418,7 @@ class MainActivity : Activity() {
             val step = addaEngine.respond(text)
             val spokenText = if (step.action == AddaAction.OPEN_YOUTUBE) {
                 val launchResult = commandEngine.handle("youtube kholo")
-                if (launchResult.responseText == "YouTube khol diya hai.") {
+                if (launchResult.responseText == "YouTube खोल दिया है।") {
                     step.text
                 } else {
                     addaEngine.endSession()
