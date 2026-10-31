@@ -2,6 +2,9 @@ package com.aship.jarvis.access
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.graphics.Rect
 import android.content.ComponentName
 import android.content.Context
 import android.os.Build
@@ -10,7 +13,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * v17: Jarvis ki Accessibility service — EK hi kaam ke liye.
@@ -116,6 +122,9 @@ class JarvisAccessibilityService : AccessibilityService() {
     enum class TapOutcome {
         /** Pehla video mila aur tap ho gaya — chal raha hona chahiye. */
         TAPPED,
+
+        /** v33: tap gaya, par watch page khula — yeh pakka nahi ho paya. */
+        UNVERIFIED,
 
         /** YouTube saamne aaya hi nahi, ya results me video nahi mila. */
         NOT_FOUND,
@@ -527,49 +536,163 @@ class JarvisAccessibilityService : AccessibilityService() {
     )
 
     /**
-     * v26: asal tap wali khoj — sirf worker thread se bulana.
-     * ~10 second tak sakriya khidkiyon ke ped baar-baar dekhe
-     * jate hain; kuch bhi dabta hai SIRF tab, jab saamne wala
-     * ped YouTube (package [YOUTUBE_PACKAGE]) ka ho. Pehla
-     * video-umeedwaar mila to EK baar ACTION_CLICK — safal
-     * hote hi koshish khatm. Kabhi scroll nahi hota; khoj
-     * results wali list ke andar bandhi hai, isliye like /
-     * comment / share wale hisse haath hi nahi aate.
+     * v33 (v26 ki jagah): asal tap wali khoj — sirf worker
+     * thread se bulana. ~10 second tak sakriya khidkiyon ke
+     * ped baar-baar dekhe jate hain; kuch bhi dabta hai SIRF
+     * tab, jab saamne wala ped YouTube (package
+     * [YOUTUBE_PACKAGE]) ka ho. Pehla video-umeedwaar mila
+     * to pehle ungli-jaisa GESTURE tap (v32 tak ka
+     * ACTION_CLICK YouTube asal chhoona nahi maanta tha —
+     * "TAPPED" hokar bhi video nahi khulta tha), phir
+     * ACTION_CLICK; har koshish ke baad watch page ke
+     * nishan se asal jaanch. Nishan mile tabhi TAPPED;
+     * tap gaya par nishan na mile to imaandaar UNVERIFIED.
+     * Kabhi scroll nahi hota.
      */
     private fun runYouTubeTap(): TapOutcome {
         ytLabels.clear()
         val deadline = SystemClock.uptimeMillis() + YOUTUBE_TAP_BUDGET_MS
         while (SystemClock.uptimeMillis() < deadline) {
             val roots = collectRoots()
-            var hitLabel: String? = null
-            var clicked = false
+            var hit: YouTubeHit? = null
             for (root in roots) {
                 if (root.packageName?.toString() != YOUTUBE_PACKAGE) {
                     continue
                 }
-                val hit = findFirstVideoResult(root) ?: continue
-                hitLabel = hit.label
-                clicked = try {
-                    hit.clickTarget.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
-                } catch (t: Throwable) {
-                    false
-                }
-                // Safal ho ya action nakara gaya ho — is
-                // chakkar me dusra ped nahi aazmate: safalta
-                // par rukna hai, nakare par taaza ped ke
-                // saath agla chakkar pakka hai.
-                break
+                hit = findFirstVideoResult(root)
+                if (hit != null) break
             }
-            if (clicked) {
+            if (hit == null) {
+                roots.forEach { root ->
+                    try {
+                        root.recycle()
+                    } catch (t: Throwable) {
+                        // Pehle se saaf: kuch nahi karna.
+                    }
+                }
+                SystemClock.sleep(POLL_INTERVAL_MS)
+                continue
+            }
+            // Umeedwaar mila — ped abhi zinda hai, tap abhi karo.
+            return tapAndVerify(hit)
+        }
+        saveYouTubeTapDiag(
+            "NOT_FOUND seen: [" + ytLabels.joinToString(" | ") + "]"
+        )
+        return TapOutcome.NOT_FOUND
+    }
+
+    /** Mile hue ummeedwaar par tap + asal jaanch. */
+    private fun tapAndVerify(hit: YouTubeHit): TapOutcome {
+        var method = "none"
+        var dispatched = false
+        val bounds = Rect()
+        try {
+            hit.clickTarget.getBoundsInScreen(bounds)
+        } catch (t: Throwable) {
+            // Ped badal gaya: bounds khaali rahenge, click wala
+            // raasta phir bhi aazmaya jayega.
+        }
+        if (bounds.width() > 0 && bounds.height() > 0) {
+            method = "gesture"
+            dispatched = tapAtPoint(
+                bounds.centerX().toFloat(),
+                bounds.centerY().toFloat()
+            )
+        }
+        if (dispatched && verifyWatchPage()) {
+            saveYouTubeTapDiag(
+                "TAPPED method=$method verified label=\"" +
+                    hit.label.take(MAX_SCAN_LABEL_CHARS) + "\""
+            )
+            return TapOutcome.TAPPED
+        }
+        val clicked = try {
+            hit.clickTarget.performAction(
+                AccessibilityNodeInfo.ACTION_CLICK
+            )
+        } catch (t: Throwable) {
+            false
+        }
+        if (clicked) {
+            method = if (dispatched) "gesture+click" else "click"
+            if (verifyWatchPage()) {
                 saveYouTubeTapDiag(
-                    "TAPPED label=\"" +
-                        (hitLabel ?: "?").take(MAX_SCAN_LABEL_CHARS) + "\""
+                    "TAPPED method=$method verified label=\"" +
+                        hit.label.take(MAX_SCAN_LABEL_CHARS) + "\""
                 )
                 return TapOutcome.TAPPED
             }
-            // Is chakkar ke ped saaf kar do; agle me taaza milenge.
+        }
+        saveYouTubeTapDiag(
+            "UNVERIFIED method=$method label=\"" +
+                hit.label.take(MAX_SCAN_LABEL_CHARS) + "\""
+        )
+        return TapOutcome.UNVERIFIED
+    }
+
+    /** v33: screen par (x, y) par ungli-jaisa ek tap. */
+    private fun tapAtPoint(x: Float, y: Float): Boolean {
+        return try {
+            val path = Path()
+            path.moveTo(x, y)
+            val gesture = GestureDescription.Builder()
+                .addStroke(
+                    GestureDescription.StrokeDescription(path, 0, 70)
+                )
+                .build()
+            val latch = CountDownLatch(1)
+            val accepted = AtomicBoolean(false)
+            val ok = dispatchGesture(
+                gesture,
+                object : GestureResultCallback() {
+                    override fun onCompleted(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        accepted.set(true)
+                        latch.countDown()
+                    }
+
+                    override fun onCancelled(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        latch.countDown()
+                    }
+                },
+                null
+            )
+            if (ok) {
+                latch.await(900, TimeUnit.MILLISECONDS)
+                accepted.get()
+            } else {
+                false
+            }
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v33: tap ke baad ~2.8 s tak dekho — YouTube ka watch
+     * page khula ya nahi. Nishan: player wale label ("Full
+     * screen", "Pause", "Minimize", "Watch later"...).
+     * Nishan na mile to sach UNVERIFIED rahega — jhootha
+     * TAPPED kabhi nahi.
+     */
+    private fun verifyWatchPage(): Boolean {
+        val deadline = SystemClock.uptimeMillis() + VERIFY_WAIT_MS
+        while (SystemClock.uptimeMillis() < deadline) {
+            val roots = collectRoots()
+            var watchSign = false
+            for (root in roots) {
+                if (root.packageName?.toString() != YOUTUBE_PACKAGE) {
+                    continue
+                }
+                if (treeHasWatchSign(root)) {
+                    watchSign = true
+                    break
+                }
+            }
             roots.forEach { root ->
                 try {
                     root.recycle()
@@ -577,12 +700,27 @@ class JarvisAccessibilityService : AccessibilityService() {
                     // Pehle se saaf: kuch nahi karna.
                 }
             }
-            SystemClock.sleep(POLL_INTERVAL_MS)
+            if (watchSign) return true
+            SystemClock.sleep(VERIFY_POLL_MS)
         }
-        saveYouTubeTapDiag(
-            "NOT_FOUND seen: [" + ytLabels.joinToString(" | ") + "]"
-        )
-        return TapOutcome.NOT_FOUND
+        return false
+    }
+
+    /** Ek ped me watch page ke nishan hai ya nahi. */
+    private fun treeHasWatchSign(root: AccessibilityNodeInfo): Boolean {
+        for (node in collectInDocumentOrder(root)) {
+            val label = nodeLabel(node).lowercase(Locale.ROOT)
+            if (label.contains("full screen") ||
+                label.contains("ফুল স্ক্রিন") ||
+                label == "pause" ||
+                label.contains("minimize") ||
+                label.contains("watch later") ||
+                label.contains("add to queue")
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     /**
@@ -1024,6 +1162,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         // v26: YouTube tap ke bandobosto.
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
         private const val YOUTUBE_TAP_BUDGET_MS = 10_000L
+        private const val VERIFY_WAIT_MS = 2_800L
+        private const val VERIFY_POLL_MS = 300L
         private const val MAX_YOUTUBE_LABELS = 10
         private const val MAX_DURATION_NODES = 120
         private const val DIAG_KEY_LAST_YOUTUBE_TAP = "last_youtube_tap"
