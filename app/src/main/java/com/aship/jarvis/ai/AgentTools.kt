@@ -151,6 +151,7 @@ class AgentTools(
             "Today's date is " +
                 SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US).format(Date()) + "."
         )
+        "calculate" -> calculate(args.optString("expression").trim())
         "get_battery" -> getBattery()
         "get_network" -> getNetwork()
         "set_timer" -> setTimer(args.optInt("seconds", -1))
@@ -175,7 +176,7 @@ class AgentTools(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
-                "get_battery, get_network, set_timer, set_alarm, " +
+                "calculate, get_battery, get_network, set_timer, set_alarm, " +
                 "call_person, whatsapp_message, remember_fact, " +
                 "recall_facts, forget_fact, get_weather."
         )
@@ -247,6 +248,230 @@ class AgentTools(
     }
 
     /**
+     * v33: calculate — asal hisaab phone par hi hota hai
+     * (BigDecimal wala chhota parser), mastishk ke andaze
+     * se nahi. v32 tak koi calculate auzaar tha hi nahi —
+     * Gemini dimaag me hisaab karke galtiyan karta tha.
+     * Bangla/Devanagari ank bhi seedhe ank ban jate hain;
+     * × ÷ − chinh bhi chalte hain. Zero se bhaag, kharab
+     * expression — sab par imaandaar FAILED.
+     */
+    private fun calculate(expression: String): ToolResult {
+        if (expression.isEmpty()) {
+            return ToolResult(false, "No expression was given to calculate.")
+        }
+        val normalized = normalizeMathText(expression)
+        if (normalized.length > 120) {
+            return ToolResult(false, "That calculation is too long.")
+        }
+        return try {
+            val value = MathParser(normalized).parse()
+            ToolResult(
+                true,
+                "The exact result of $normalized is " +
+                    formatMathResult(value) + "."
+            )
+        } catch (e: MathParseException) {
+            ToolResult(false, "Calculation failed: " + e.message)
+        } catch (t: Throwable) {
+            ToolResult(false, "Calculation failed.")
+        }
+    }
+
+    /** Bangla/Devanagari ank aur chinh seedhe roop me lao. */
+    private fun normalizeMathText(raw: String): String {
+        val out = StringBuilder()
+        for (ch in raw) {
+            when (ch) {
+                in '\u09E6'..'\u09EF' ->
+                    out.append('0' + (ch - '\u09E6'))
+                in '\u0966'..'\u096F' ->
+                    out.append('0' + (ch - '\u0966'))
+                '×' -> out.append('*')
+                '÷' -> out.append('/')
+                '−' -> out.append('-')
+                ',' -> Unit
+                else -> out.append(ch)
+            }
+        }
+        return out.toString().trim()
+    }
+
+    /** Hisab ka natija bolne-layak saaf roop me. */
+    private fun formatMathResult(value: java.math.BigDecimal): String {
+        return try {
+            value.stripTrailingZeros().toPlainString()
+        } catch (t: Throwable) {
+            value.toPlainString()
+        }
+    }
+
+    /** Parser ki apni galti — sandesh ke saath. */
+    private class MathParseException(message: String) : Exception(message)
+
+    /**
+     * Chhota surakshit hisaab-parser: + - * / % ^ aur
+     * koshthak (parentheses). Koi eval nahi, koi code
+     * nahi — sirf ank aur chinh.
+     */
+    private class MathParser(private val text: String) {
+        private var pos = 0
+        private val mathContext = java.math.MathContext(
+            12, java.math.RoundingMode.HALF_UP
+        )
+
+        fun parse(): java.math.BigDecimal {
+            val value = parseExpression()
+            skipSpaces()
+            if (pos != text.length) {
+                throw MathParseException("samajh na aane wala hissa reh gaya")
+            }
+            return value
+        }
+
+        private fun parseExpression(): java.math.BigDecimal {
+            var value = parseTerm()
+            while (true) {
+                skipSpaces()
+                when (peek()) {
+                    '+' -> {
+                        pos++
+                        value = value.add(parseTerm())
+                    }
+                    '-' -> {
+                        pos++
+                        value = value.subtract(parseTerm())
+                    }
+                    else -> return value
+                }
+            }
+        }
+
+        private fun parseTerm(): java.math.BigDecimal {
+            var value = parseFactor()
+            while (true) {
+                skipSpaces()
+                when (peek()) {
+                    '*' -> {
+                        pos++
+                        value = value.multiply(parseFactor())
+                    }
+                    '/' -> {
+                        pos++
+                        val divisor = parseFactor()
+                        if (divisor.compareTo(java.math.BigDecimal.ZERO) == 0) {
+                            throw MathParseException(
+                                "zero se bhaag nahi ho sakta"
+                            )
+                        }
+                        value = value.divide(divisor, mathContext)
+                    }
+                    '%' -> {
+                        pos++
+                        val divisor = parseFactor()
+                        if (divisor.compareTo(java.math.BigDecimal.ZERO) == 0) {
+                            throw MathParseException(
+                                "zero se bhaag nahi ho sakta"
+                            )
+                        }
+                        value = value.remainder(divisor)
+                    }
+                    else -> return value
+                }
+            }
+        }
+
+        private fun parseFactor(): java.math.BigDecimal {
+            skipSpaces()
+            if (peek() == '-') {
+                pos++
+                return parseFactor().negate()
+            }
+            if (peek() == '+') {
+                pos++
+                return parseFactor()
+            }
+            val base = parsePrimary()
+            skipSpaces()
+            if (peek() == '^') {
+                pos++
+                val exponent = parseFactor()
+                return power(base, exponent)
+            }
+            return base
+        }
+
+        private fun power(
+            base: java.math.BigDecimal,
+            exponent: java.math.BigDecimal
+        ): java.math.BigDecimal {
+            val expInt = try {
+                exponent.intValueExact()
+            } catch (t: Throwable) {
+                throw MathParseException("ghaat (power) poora ank hona chahiye")
+            }
+            if (expInt < -12 || expInt > 12) {
+                throw MathParseException("ghaat (power) bahut badi hai")
+            }
+            return if (expInt >= 0) {
+                base.pow(expInt)
+            } else {
+                if (base.compareTo(java.math.BigDecimal.ZERO) == 0) {
+                    throw MathParseException("zero se bhaag nahi ho sakta")
+                }
+                java.math.BigDecimal.ONE.divide(
+                    base.pow(-expInt), mathContext
+                )
+            }
+        }
+
+        private fun parsePrimary(): java.math.BigDecimal {
+            skipSpaces()
+            if (peek() == '(') {
+                pos++
+                val value = parseExpression()
+                skipSpaces()
+                if (peek() != ')') {
+                    throw MathParseException("koshthak band nahi hua")
+                }
+                pos++
+                return value
+            }
+            val start = pos
+            var seenDot = false
+            while (pos < text.length) {
+                val ch = text[pos]
+                if (ch.isDigit()) {
+                    pos++
+                } else if (ch == '.' && !seenDot) {
+                    seenDot = true
+                    pos++
+                } else {
+                    break
+                }
+            }
+            if (start == pos) {
+                throw MathParseException("ank nahi mila")
+            }
+            return try {
+                java.math.BigDecimal(text.substring(start, pos))
+            } catch (t: Throwable) {
+                throw MathParseException("ank samajh nahi aaya")
+            }
+        }
+
+        private fun peek(): Char {
+            return if (pos < text.length) text[pos] else '\u0000'
+        }
+
+        private fun skipSpaces() {
+            while (pos < text.length && text[pos] == ' ') {
+                pos++
+            }
+        }
+    }
+
+    /**
      * v26: YouTube par [query] search karke pehla video
      * chalao — user ki apni misal ("sad song chalao"):
      * mastishk query chunta hai, phone ke haath (results
@@ -308,6 +533,13 @@ class AgentTools(
                 true,
                 "YouTube par '$query' search karke pehla video " +
                     "chala diya."
+            )
+            JarvisAccessibilityService.TapOutcome.UNVERIFIED -> ToolResult(
+                false,
+                "PARTIAL — search results khul gaye hain aur pehle " +
+                    "video par tap bhi hua, par video asal me khula " +
+                    "hai — yeh pakka nahi ho paya; results screen " +
+                    "par hain."
             )
             JarvisAccessibilityService.TapOutcome.SERVICE_OFF -> ToolResult(
                 false,
