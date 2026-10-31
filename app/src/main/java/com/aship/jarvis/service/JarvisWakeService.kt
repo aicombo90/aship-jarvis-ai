@@ -191,7 +191,14 @@ class JarvisWakeService : Service() {
     // v12: is wake par command ka ek retry mil chuka hai ya nahi.
     // Har naye wake (onWakeDetected) par reset hota hai.
     @Volatile
-    private var commandRetryUsed = false
+    // v33: retry ginati — v12 ke ek-mauke ki jagah ab
+    // MAX_COMMAND_RETRIES mauke, phir vida wali line.
+    private var commandRetryCount = 0
+
+    // v33: ACK wali boli khatm hone par command session ki
+    // jagah wapas wake par jana hai (vida wali line chal
+    // rahi ho tab).
+    private var ackEndsConversation = false
 
     // v13: adda ke dauraan bina awaaz wala ek session maaf hai;
     // dusra lagatar khaali session adda ko chup-chaap band kar deta
@@ -585,7 +592,8 @@ class JarvisWakeService : Service() {
         // A real wake proves listening works: clear the error counter.
         wakeErrorCount = 0
         // v12: har naye wake ke saath command ko ek taaza retry mile.
-        commandRetryUsed = false
+        commandRetryCount = 0
+        ackEndsConversation = false
         // v13: naya wake hamesha taaza interaction hai — koi atka
         // hua purana adda state saath nahi ghisdega.
         addaEngine.endSession()
@@ -610,8 +618,7 @@ class JarvisWakeService : Service() {
             if (destroyed) return@execute
             when (state) {
                 State.ACK -> {
-                    disarmAckFallback()
-                    startCommandSession()
+                    onAckSpeechDone()
                 }
                 State.REPLY -> {
                     disarmReplyFallback()
@@ -633,6 +640,24 @@ class JarvisWakeService : Service() {
                     // Speech finished in some other state: nothing waits on it.
                 }
             }
+        }
+    }
+
+    /**
+     * v33: ACK wali boli (wake ki haan, retry prompt, ya vida
+     * wali line) khatm — aam haal me command session kholo;
+     * vida wali line chal rahi thi to gola hata kar wapas
+     * wake sunne par jao. TTS-finish aur ack-fallback dono
+     * yahi se guzarte hain.
+     */
+    private fun onAckSpeechDone() {
+        disarmAckFallback()
+        if (ackEndsConversation) {
+            ackEndsConversation = false
+            orbOverlay.hideNow()
+            startWakeSession()
+        } else {
+            startCommandSession()
         }
     }
 
@@ -775,7 +800,7 @@ class JarvisWakeService : Service() {
         // retry payega; can't-do wala bola jawab sirf tab aayega
         // jab retry wala prayas bhi kholne ka hi nikle aur asafal
         // rahe.
-        if (!rawResult.handled && !commandRetryUsed) {
+        if (!rawResult.handled && commandRetryCount < MAX_COMMAND_RETRIES) {
             startCommandRetry()
             return
         }
@@ -793,10 +818,8 @@ class JarvisWakeService : Service() {
             // is almost always room noise, TV, or someone else talking.
             // Stay silent and resume wake listening instead of
             // announcing the "Phase 3" fallback to nobody.
-            setStatus("Samajh nahi aaya — chup rehkar wapas 'Jarvis' sun raha hoon")
-            updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
-            orbOverlay.hideNow()
-            startWakeSession()
+            // v33: chup vida nahi — vida wali line bolkar jao.
+            startClosingLine()
             return
         }
         setStatus("Command mila — jawab de raha hoon")
@@ -950,13 +973,38 @@ class JarvisWakeService : Service() {
      * command session pehle hi band ho chuka ho.
      */
     private fun startCommandRetry() {
-        commandRetryUsed = true
+        commandRetryCount++
         state = State.ACK
+        ackEndsConversation = false
         setStatus("Samajh nahi aaya — phir se boliye, dobara sun raha hoon")
         updateNotification("Phir se boliye...")
         // v16: retry prompt bhi ek bola hua jawab hai — screen jala rahe.
         lightScreenOnWake()
-        speaker.speak(RETRY_PROMPT_TEXT)
+        // v33: prompt Bangla me — malik Bangla bolte hain, aur
+        // TtsSpeaker ab script dekhkar awaaz khud badalta hai.
+        speaker.speak(
+            if (commandRetryCount <= 1) {
+                RETRY_PROMPT_FIRST
+            } else {
+                RETRY_PROMPT_SECOND
+            }
+        )
+        armAckFallback()
+    }
+
+    /**
+     * v33: saari koshishon ke baad chup vida nahi — ek
+     * vinamra line bolkar wapas wake par jao (ACK wale
+     * raaste se, taaki boli khatm hone par hi mic khule).
+     * Sirf executor thread se bulao.
+     */
+    private fun startClosingLine() {
+        state = State.ACK
+        ackEndsConversation = true
+        setStatus("Samajh nahi aaya — wapas 'Jarvis' sun raha hoon")
+        updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
+        lightScreenOnWake()
+        speaker.speak(CLOSE_PROMPT_TEXT)
         armAckFallback()
     }
 
@@ -987,11 +1035,10 @@ class JarvisWakeService : Service() {
             }
             return
         }
-        if (!commandRetryUsed) {
+        if (commandRetryCount < MAX_COMMAND_RETRIES) {
             startCommandRetry()
         } else {
-            orbOverlay.hideNow()
-            startWakeSession()
+            startClosingLine()
         }
     }
 
@@ -1060,7 +1107,7 @@ class JarvisWakeService : Service() {
     private val ackFallbackRunnable = Runnable {
         executor.execute {
             if (!destroyed && state == State.ACK) {
-                startCommandSession()
+                onAckSpeechDone()
             }
         }
     }
@@ -1482,7 +1529,14 @@ class JarvisWakeService : Service() {
         private const val ACK_TEXT = "हाँ, बोलिए"
 
         /** v12: command na samajhne par ek baar dobara mauka dene ka prompt. */
-        private const val RETRY_PROMPT_TEXT = "फिर से बोलिए"
+        // v33: retry prompts Bangla me (malik ki bhasha);
+        // TtsSpeaker script dekhkar Bangla awaaz lagayega.
+        private const val RETRY_PROMPT_FIRST = "বুঝতে পারিনি — আরেকবার বলো তো।"
+        private const val RETRY_PROMPT_SECOND = "আরেকবার একটু আস্তে বলো তো — শুনছি।"
+        private const val CLOSE_PROMPT_TEXT = "ঠিক আছে — পরে আবার 'জার্ভিস' বলে ডেকো।"
+
+        /** v33: ek command ko kul itne retry milenge. */
+        private const val MAX_COMMAND_RETRIES = 2
 
         /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
         const val CANT_DO_REPLY = "माफ़ कीजिए, अभी मैं यह काम नहीं कर सकता हूँ।"
