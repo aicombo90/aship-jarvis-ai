@@ -173,6 +173,22 @@ Jarvis does it on your phone and speaks the reply back to you.
   any named place via Open-Meteo, no API key);
   jagah na mile ya net band ho to imaandaar
   FAILED — andaza lagakar sankhya kabhi nahi
+- **Fix pack (v33):** chaar marammat ek saath. (1) YouTube
+  tap ab ungli-jaisa gesture tap hai aur video khula —
+  yeh watch page ke nishan se pakka hone par hi Maya
+  "chala diya" kehti hai; warna imaandaar PARTIAL.
+  (2) Bhasha: Maya ab usi bhasha me jawab deti hai
+  jis me sawal aaya (Bangla sawal → Bangla jawab),
+  awaaz bhi script ke hisaab se khud badalti hai
+  (bn-IN/hi-IN), aur app ke mic se sunna default
+  Bangla (bn-IN) hai — "শোনার ভাষা" button se
+  badla ja sakta hai. (3) Sunne ka retry: "বুঝতে
+  পারিনি, আরেকবার বলো তো" bolkar 3 mauke, phir
+  vinamra vida — chupchaap band nahi hoti.
+  (4) Naya calculate auzaar: hisaab phone par
+  BigDecimal se pakka hota hai, mastishk ke andaze
+  se nahi. Saath me YouTube tap aur agent chaal ki
+  reporten ab app ki screen par bhi dikhti hain
 - **Phone it is built for:** vivo T4x 5G, Android 16, 8 GB RAM
   (works on any Android 8.0+ phone)
 
