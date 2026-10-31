@@ -40,7 +40,14 @@ class SystemSpeechEngine(
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+            // v33: bhasha user ki pasand se (AppPrefs) — default
+            // bn-IN, kyunki malik Bangla bolte hain; pehle ye
+            // hi-IN par atka tha, isliye Bangla baat Hindi
+            // aksharon me badal jati thi aur Maya galat samajhti thi.
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                com.aship.jarvis.prefs.AppPrefs(appContext).listenLanguage
+            )
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
             // Give the speaker time: without these, many devices end the
