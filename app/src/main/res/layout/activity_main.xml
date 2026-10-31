@@ -210,11 +210,33 @@
             android:text="Panel scan: abhi tak koi koshish nahi"
             android:textSize="12sp" />
 
+        <TextView
+            android:id="@+id/youtubeTapText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="YouTube tap (aakhiri): abhi tak koi koshish nahi"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/agentRunText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Agent chaal (aakhiri): abhi tak koi koshish nahi"
+            android:textSize="12sp" />
+
         <Button
             android:id="@+id/accessibilityButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Accessibility চালু করো" />
+
+        <Button
+            android:id="@+id/listenLangButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)" />
 
         <Button
             android:id="@+id/overlayPermissionButton"
