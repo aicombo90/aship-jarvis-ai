@@ -27,6 +27,19 @@ class AppPrefs(context: Context) {
             prefs.edit().putString(KEY_MODE, value.name).apply()
         }
 
+    /**
+     * v33: foreground (system) recognizer kis bhasha me sune —
+     * "bn-IN" (default, malik Bangla bolte hain), "hi-IN" ya
+     * "en-IN". App screen par button se badla jata hai.
+     * Background wake sunna Vosk (Hindi model) par hi rehta
+     * hai — Bangla ka offline model hai hi nahi.
+     */
+    var listenLanguage: String
+        get() = prefs.getString(KEY_LISTEN_LANGUAGE, "bn-IN") ?: "bn-IN"
+        set(value) {
+            prefs.edit().putString(KEY_LISTEN_LANGUAGE, value).apply()
+        }
+
     /** Phase 2: how many times the wake word has woken Jarvis up. */
     var wakeHitCount: Int
         get() = prefs.getInt(KEY_WAKE_HITS, 0)
@@ -78,6 +91,7 @@ class AppPrefs(context: Context) {
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
+        private const val KEY_LISTEN_LANGUAGE = "listen_language"
         private const val KEY_WAKE_HITS = "wake_hits"
         private const val KEY_WAKE_SERVICE_RUNNING = "wake_service_running"
         private const val KEY_LAST_HEARD_TEXT = "last_heard_text"
