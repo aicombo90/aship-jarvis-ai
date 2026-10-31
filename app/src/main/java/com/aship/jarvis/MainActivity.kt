@@ -84,6 +84,12 @@ class MainActivity : Activity() {
     // me report chhodti hai; yahan sirf use dikhaya jata hai.
     private lateinit var panelScanText: TextView
 
+    // v33: YouTube tap + agent chaal ki report lines, aur
+    // shune wali bhasha badalne wala button.
+    private lateinit var youtubeTapText: TextView
+    private lateinit var agentRunText: TextView
+    private lateinit var listenLangButton: Button
+
     // v21 Phase 3: Gemini (online brain) section — key sirf
     // phone par rehti hai; status line kabhi key nahi dikhati.
     private lateinit var geminiKeyStatusText: TextView
@@ -182,6 +188,18 @@ class MainActivity : Activity() {
         }
         accessibilityStatusText = findViewById(R.id.accessibilityStatusText)
         panelScanText = findViewById(R.id.panelScanText)
+        youtubeTapText = findViewById(R.id.youtubeTapText)
+        agentRunText = findViewById(R.id.agentRunText)
+        listenLangButton = findViewById(R.id.listenLangButton)
+        listenLangButton.setOnClickListener {
+            // v33: shune wali bhasha ghumao — Bangla -> Hindi -> English.
+            prefs.listenLanguage = when (prefs.listenLanguage) {
+                "bn-IN" -> "hi-IN"
+                "hi-IN" -> "en-IN"
+                else -> "bn-IN"
+            }
+            refreshListenLangButton()
+        }
         findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
             onAccessibilityButtonClicked()
         }
@@ -625,6 +643,16 @@ class MainActivity : Activity() {
      * refreshGeminiKeyUi ke saath aur updateWakeUi (onResume
      * + har 2 s) ke saath taza hoti hai.
      */
+    /** v33: "শোনার ভাষা" button ka label — AppPrefs wali pasand dikhao. */
+    private fun refreshListenLangButton() {
+        if (!::listenLangButton.isInitialized) return
+        listenLangButton.text = when (prefs.listenLanguage) {
+            "hi-IN" -> "শোনার ভাষা: हिन्दी (বদলাতে ট্যাপ করো)"
+            "en-IN" -> "শোনার ভাষা: English (বদলাতে ট্যাপ করো)"
+            else -> "শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)"
+        }
+    }
+
     private fun refreshGeminiDiag() {
         if (!::geminiDiagText.isInitialized) return
         val attempt = try {
@@ -826,6 +854,31 @@ class MainActivity : Activity() {
                 "Panel scan: $report"
             }
         }
+        // v33: YouTube tap aur agent chaal ki reporten bhi
+        // jarvis_diag se — v32 tak ye sirf file me band thi,
+        // screen par dikhti hi nahi thi.
+        try {
+            val diag = getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+            if (::youtubeTapText.isInitialized) {
+                val tap = diag.getString("last_youtube_tap", null)
+                youtubeTapText.text = if (tap.isNullOrBlank()) {
+                    "YouTube tap (aakhiri): abhi tak koi koshish nahi"
+                } else {
+                    "YouTube tap (aakhiri): $tap"
+                }
+            }
+            if (::agentRunText.isInitialized) {
+                val run = diag.getString("last_agent_run", null)
+                agentRunText.text = if (run.isNullOrBlank()) {
+                    "Agent chaal (aakhiri): abhi tak koi koshish nahi"
+                } else {
+                    "Agent chaal (aakhiri): $run"
+                }
+            }
+        } catch (t: Throwable) {
+            // Report bonus hai — asal screen isse nahi rukti.
+        }
+        refreshListenLangButton()
         // v24: online koshish ki report bhi isi ke saath taza
         // karo — ye function onResume par aur har 2 s chalta
         // hai, isliye wake service se hui koshish ki report
