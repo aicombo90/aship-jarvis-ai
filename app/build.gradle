@@ -28,6 +28,45 @@ if (ciKeystoreB64.exists()) {
     ciKeystoreFile.bytes = Base64.getMimeDecoder().decode(ciKeystoreB64.getText('UTF-8'))
 }
 
+// ---------------------------------------------------------------------
+// v41: sherpa-onnx ka official Android AAR (Bangla offline ASR).
+//
+// AAR ek ~50 MB ki binary hai — is repo me file sirf text ke
+// roop me ja sakti hai, isliye AAR repo me rakhne ke bajay
+// build ke samay yahi script use PIN ki hui official GitHub
+// release se download karke app/libs me rakhti hai, aur
+// SHA-256 milakar jaanchti hai (bandha hua hash na mile to
+// build wahin ruk jata hai — chup-chaap badla hua ya kharab
+// AAR kabhi APK me nahi jayega). Uske baad woh ek aam local
+// file dependency ki tarah judta hai (neeche dependencies me).
+// ---------------------------------------------------------------------
+def sherpaAarFile = file('libs/sherpa-onnx-1.13.8.aar')
+def sherpaAarSha256 = '633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96'
+def sherpaSha256 = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.withInputStream { input ->
+        byte[] buf = new byte[8192]
+        int n
+        while ((n = input.read(buf)) > 0) md.update(buf, 0, n)
+    }
+    md.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+if (!sherpaAarFile.exists() || sherpaSha256(sherpaAarFile) != sherpaAarSha256) {
+    sherpaAarFile.parentFile.mkdirs()
+    def sherpaTmp = new File(sherpaAarFile.parentFile, sherpaAarFile.name + '.part')
+    new URL('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar')
+        .withInputStream { input ->
+            sherpaTmp.withOutputStream { out -> out << input }
+        }
+    if (sherpaSha256(sherpaTmp) != sherpaAarSha256) {
+        sherpaTmp.delete()
+        throw new GradleException('sherpa-onnx AAR ka SHA-256 nahi mila — download kharab hai, build roka gaya')
+    }
+    java.nio.file.Files.move(
+        sherpaTmp.toPath(), sherpaAarFile.toPath(),
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+}
+
 android {
     namespace 'com.aship.jarvis'
     compileSdk 35
@@ -36,8 +75,18 @@ android {
         applicationId 'com.aship.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 40
-        versionName '1.39'
+        versionCode 41
+        versionName '1.40'
+
+        ndk {
+            // v41: sherpa-onnx AAR chaaron ABI ke .so rakhta
+            // hai (kul ~128 MB bina bandhe). Jarvis sirf ARM
+            // phone par chalta hai (vivo/Samsung) — x86 wale
+            // hisse APK se bahar rakho, warna APK bekaar me
+            // phool jayega. Vosk ke bhi sirf ARM hisse
+            // rahenge; un phones par koi badlav nahi.
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     signingConfigs {
@@ -101,6 +150,9 @@ dependencies {
     // "alphacep" org): implementation 'com.github.alphacephei:vosk-android:0.3.47'
     implementation 'com.alphacephei:vosk-android:0.3.75@aar'
     implementation 'net.java.dev.jna:jna:5.18.1@aar'
+    // v41: sherpa-onnx (Bangla offline ASR) — official AAR,
+    // upar wali script build ke samay app/libs me laati hai.
+    implementation files('libs/sherpa-onnx-1.13.8.aar')
     // FileProvider: download hue update APK ko system installer tak
     // bhejne ke liye (file:// URI Android 7+ par band hai).
     implementation 'androidx.core:core:1.15.0'
