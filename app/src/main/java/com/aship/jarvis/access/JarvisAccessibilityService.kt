@@ -6,8 +6,11 @@ import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
 import android.content.ComponentName
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
@@ -67,6 +70,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * na ho to kuch hota hi nahi. Har koshish ki report
  * "jarvis_diag" me "last_youtube_tap" par band hoti hai —
  * kaun sa video daba (ya kya-kya dikha tha).
+ *
+ * v37: teesra ghoshit kaam — screen-agent ki mashinari
+ * (agent ke screen_task auzaar ke liye): screen ka saar
+ * padhna ([captureScreen]: saamne wali app + dikhai dene
+ * wale hisse), naam ya nirdeshank se tap, scroll, focus
+ * wale khane me likhna, aur Back/Home global action.
+ * Faisle (kya dabana hai, kab rukna hai) mastishk ke
+ * hain — ye service sirf wohi kadam uthati hai jo use
+ * saaf taur par kaha jaye; send/pay/delete jaise kadmon
+ * ki pushti user se ScreenAgent leta hai, yahan nahi.
  *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
@@ -135,6 +148,29 @@ class JarvisAccessibilityService : AccessibilityService() {
         /** Ek tap-koshish pehle se chal rahi hai — dusri maang nahi li gayi. */
         BUSY
     }
+
+    /**
+     * v37: screen par dikhai dene wali ek cheez — screen
+     * agent ke saar ke liye. [text] node ka text +
+     * content-description milakar saaf kiya hua naam hai
+     * (khaali bhi ho sakta hai — bina-naam wala button);
+     * (centerX, centerY) screen par uske beech ke
+     * nirdeshank hain.
+     */
+    data class ScreenElement(
+        val text: String,
+        val className: String,
+        val clickable: Boolean,
+        val editable: Boolean,
+        val centerX: Int,
+        val centerY: Int
+    )
+
+    /** v37: ek pal ki screen ka saar — saamne wali app aur uske hisse. */
+    data class ScreenSnapshot(
+        val packageName: String,
+        val elements: List<ScreenElement>
+    )
 
     private val worker = Executors.newSingleThreadExecutor()
 
@@ -297,6 +333,353 @@ class JarvisAccessibilityService : AccessibilityService() {
             callback(outcome)
         } catch (t: Throwable) {
             // Bulane wala ja chuka hai: natija chhod do.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v37: screen-agent wali mashinari — screen padhna aur chalana
+    // ------------------------------------------------------------------
+
+    /**
+     * v37: is pal ki screen ka saar band karo — saamne wali
+     * app ka package aur uske dikhai dene wale hisse
+     * ([ScreenElement] ki kataar, zyada se zyada
+     * [MAX_SCREEN_ELEMENTS])। Turant laut aata hai; asal
+     * kaam worker thread par hota hai aur natija [callback]
+     * se (usi thread par) milta hai. Koi ped hi na mile to
+     * null.
+     */
+    fun captureScreen(callback: (ScreenSnapshot?) -> Unit) {
+        runOnWorker(callback, null) { runCaptureScreen() }
+    }
+
+    /**
+     * v37: screen par [text] naam wali cheez dabao — naam
+     * mila to ungli-jaisa gesture tap (v33 wala hi raasta),
+     * woh na chale to ACTION_CLICK। Natija: dab paya ya
+     * nahi.
+     */
+    fun tapScreenText(text: String, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runTapText(text) }
+    }
+
+    /** v37: screen par seedha (x, y) par gesture tap. */
+    fun tapScreenPoint(x: Int, y: Int, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { tapAtPoint(x.toFloat(), y.toFloat()) }
+    }
+
+    /** v37: screen ke beech me swipe — [down] par samagri upar ki or sarkegi. */
+    fun scrollScreen(down: Boolean, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runScroll(down) }
+    }
+
+    /**
+     * v37: is pal focus wale (ya pehle dikhai dene wale
+     * editable) khane me [text] likho — ACTION_SET_TEXT,
+     * woh na chale to clipboard + paste wala raasta.
+     */
+    fun typeScreenText(text: String, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runTypeText(text) }
+    }
+
+    /** v37: Back / Home jaise global action (GLOBAL_ACTION_*). */
+    fun screenGlobalAction(action: Int, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) {
+            try {
+                performGlobalAction(action)
+            } catch (t: Throwable) {
+                false
+            }
+        }
+    }
+
+    /**
+     * v37: screen wale saare kaam ek hi bandobosto se —
+     * worker thread par chalao, gadbad ho to [fallback]
+     * wala sachha natija, callback kabhi atakta nahi.
+     * (toggleMobileData wala hi purana andaaz, bas yahan
+     * paanch kaamon ke liye ek jagah bandha hai.)
+     */
+    private fun <T> runOnWorker(
+        callback: (T) -> Unit,
+        fallback: T,
+        work: () -> T
+    ) {
+        try {
+            worker.execute {
+                val result = try {
+                    work()
+                } catch (t: Throwable) {
+                    fallback
+                }
+                try {
+                    callback(result)
+                } catch (t: Throwable) {
+                    // Bulane wala ja chuka hai: natija chhod do.
+                }
+            }
+        } catch (t: Throwable) {
+            // Service band ho rahi hai aur worker band ho
+            // chuka: kaam nahi ho payega — sach bata do.
+            try {
+                callback(fallback)
+            } catch (t2: Throwable) {
+                // Bulane wala ja chuka hai: natija chhod do.
+            }
+        }
+    }
+
+    /**
+     * v37: saamne wali app ka ped — rootInActiveWindow
+     * sabse bharosemand hai; woh na mile to khidkiyon me
+     * pehla gair-SystemUI ped. Panel wale [collectRoots]
+     * se alag isliye: wahan SystemUI jaan-boojh kar aage
+     * rehta hai, yahan saamne wali asal app chahiye.
+     */
+    private fun foregroundRoot(): AccessibilityNodeInfo? {
+        try {
+            rootInActiveWindow?.let { return it }
+        } catch (t: Throwable) {
+            // Is pal koi sakriya khidki nahi: neeche wali koshish.
+        }
+        try {
+            windows?.forEach { window ->
+                try {
+                    val root = window.root ?: return@forEach
+                    if (root.packageName?.toString() != SYSTEMUI_PACKAGE) {
+                        return root
+                    }
+                } catch (t: Throwable) {
+                    // Ek khidki ka ped na mile to baaki phir bhi.
+                }
+            }
+        } catch (t: Throwable) {
+            // Khidkiyon ki list hi na mile: kuch nahi hai.
+        }
+        return null
+    }
+
+    /** v37: asal capture — sirf worker thread se bulana. */
+    private fun runCaptureScreen(): ScreenSnapshot? {
+        val root = foregroundRoot() ?: return null
+        val packageName = try {
+            root.packageName?.toString() ?: ""
+        } catch (t: Throwable) {
+            ""
+        }
+        val elements = ArrayList<ScreenElement>()
+        val bounds = Rect()
+        for (node in collectInDocumentOrder(root)) {
+            if (elements.size >= MAX_SCREEN_ELEMENTS) break
+            try {
+                if (!node.isVisibleToUser) continue
+                node.getBoundsInScreen(bounds)
+                if (bounds.width() <= 0 || bounds.height() <= 0) continue
+                val label = nodeLabel(node)
+                    .replace(WHITESPACE_RUN, " ")
+                    .trim()
+                    .take(MAX_SCREEN_LABEL_CHARS)
+                val clickable = node.isClickable
+                val editable = node.isEditable
+                if (label.isEmpty() && !clickable && !editable) continue
+                val className = node.className?.toString()
+                    ?.substringAfterLast('.') ?: "View"
+                elements.add(
+                    ScreenElement(
+                        text = label,
+                        className = className,
+                        clickable = clickable,
+                        editable = editable,
+                        centerX = bounds.centerX(),
+                        centerY = bounds.centerY()
+                    )
+                )
+            } catch (t: Throwable) {
+                // Ped beech me badal raha hai: ye node chhodo.
+            }
+        }
+        return ScreenSnapshot(packageName, elements)
+    }
+
+    /**
+     * v37: naam se dabana — sirf worker thread se.
+     * Document order me khoj: hubahu (exact) milan sabse
+     * pehle, warna naam me woh shabd rakhne wala sabse
+     * chhota label. Dabana khud node par, woh clickable
+     * na ho to uske clickable purvaj par ([findClickableAncestor]
+     * khud se shuru hota hai, isliye dono haal sambhalta hai)।
+     */
+    private fun runTapText(wantedRaw: String): Boolean {
+        val wanted = wantedRaw.trim().lowercase(Locale.ROOT)
+        if (wanted.isEmpty()) return false
+        val root = foregroundRoot() ?: return false
+        var best: AccessibilityNodeInfo? = null
+        var bestExact = false
+        var bestLabelLength = Int.MAX_VALUE
+        for (node in collectInDocumentOrder(root)) {
+            val label = try {
+                nodeLabel(node).trim()
+            } catch (t: Throwable) {
+                continue
+            }
+            if (label.isEmpty()) continue
+            val lower = label.lowercase(Locale.ROOT)
+            val exact = lower == wanted
+            if (!exact && !lower.contains(wanted)) continue
+            val target = try {
+                findClickableAncestor(node)
+            } catch (t: Throwable) {
+                null
+            } ?: continue
+            val better = when {
+                exact && !bestExact -> true
+                exact == bestExact && label.length < bestLabelLength -> true
+                else -> false
+            }
+            if (better) {
+                best = target
+                bestExact = exact
+                bestLabelLength = label.length
+            }
+        }
+        val target = best ?: return false
+        val bounds = Rect()
+        try {
+            target.getBoundsInScreen(bounds)
+        } catch (t: Throwable) {
+            // Ped badal gaya: bounds khaali rahenge, click wala
+            // raasta phir bhi aazmaya jayega.
+        }
+        if (bounds.width() > 0 && bounds.height() > 0) {
+            if (tapAtPoint(bounds.centerX().toFloat(), bounds.centerY().toFloat())) {
+                return true
+            }
+        }
+        return try {
+            target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** v37: screen ke beech me ek swipe — sirf worker thread se. */
+    private fun runScroll(down: Boolean): Boolean {
+        val metrics = resources.displayMetrics
+        val cx = metrics.widthPixels / 2f
+        val yFrom = metrics.heightPixels * if (down) 0.72f else 0.28f
+        val yTo = metrics.heightPixels * if (down) 0.28f else 0.72f
+        return dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_DURATION_MS)
+    }
+
+    /** v37: (x1, y1) se (x2, y2) tak ungli-jaisa swipe — [tapAtPoint] wala hi bandha intezaar. */
+    private fun dispatchSwipe(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        durationMs: Long
+    ): Boolean {
+        return try {
+            val path = Path()
+            path.moveTo(x1, y1)
+            path.lineTo(x2, y2)
+            val gesture = GestureDescription.Builder()
+                .addStroke(
+                    GestureDescription.StrokeDescription(path, 0, durationMs)
+                )
+                .build()
+            val latch = CountDownLatch(1)
+            val accepted = AtomicBoolean(false)
+            val ok = dispatchGesture(
+                gesture,
+                object : GestureResultCallback() {
+                    override fun onCompleted(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        accepted.set(true)
+                        latch.countDown()
+                    }
+
+                    override fun onCancelled(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        latch.countDown()
+                    }
+                },
+                null
+            )
+            if (ok) {
+                latch.await(1500, TimeUnit.MILLISECONDS)
+                accepted.get()
+            } else {
+                false
+            }
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v37: likhna — sirf worker thread se. Pehle is pal
+     * focus wala input khana (findFocus), woh na mile to
+     * saamne wali app ka pehla dikhai dene wala editable
+     * khana. ACTION_SET_TEXT asal raasta hai; woh mana
+     * kar de to clipboard par rakhkar ACTION_PASTE —
+     * dono ka natija jo sach hai wahi laut-ta hai.
+     */
+    private fun runTypeText(text: String): Boolean {
+        var target: AccessibilityNodeInfo? = null
+        for (root in collectRoots()) {
+            try {
+                root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    ?.let { target = it }
+            } catch (t: Throwable) {
+                // Is ped me focus nahi: agli khidki dekho.
+            }
+            if (target != null) break
+        }
+        if (target == null) {
+            val root = foregroundRoot()
+            if (root != null) {
+                for (node in collectInDocumentOrder(root)) {
+                    try {
+                        if (node.isEditable && node.isVisibleToUser) {
+                            target = node
+                            break
+                        }
+                    } catch (t: Throwable) {
+                        // Ped badal raha hai: aage badho.
+                    }
+                }
+            }
+        }
+        val node = target ?: return false
+        try {
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        } catch (t: Throwable) {
+            // Focus ki koshish bonus hai — set-text phir bhi chalega.
+        }
+        val setOk = try {
+            val args = Bundle()
+            args.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                text
+            )
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        } catch (t: Throwable) {
+            false
+        }
+        if (setOk) return true
+        return try {
+            val clipboard = getSystemService(
+                Context.CLIPBOARD_SERVICE
+            ) as? ClipboardManager ?: return false
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText("jarvis screen agent", text)
+            )
+            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (t: Throwable) {
+            false
         }
     }
 
@@ -1149,6 +1532,95 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.tapFirstYouTubeResult(callback)
         }
 
+        /**
+         * v37: kahin se bhi screen ka saar maango: service
+         * band ho (ya instance abhi bandha na ho) to turant
+         * null, warna chalti hui service ko kaam saunp do
+         * (natija callback se, background thread par).
+         */
+        fun captureScreen(
+            context: Context,
+            callback: (ScreenSnapshot?) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(null)
+                return
+            }
+            service.captureScreen(callback)
+        }
+
+        /** v37: kahin se bhi naam wali cheez dabao — service band ho to turant false. */
+        fun tapScreenText(
+            context: Context,
+            text: String,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.tapScreenText(text, callback)
+        }
+
+        /** v37: kahin se bhi (x, y) par tap — service band ho to turant false. */
+        fun tapScreenPoint(
+            context: Context,
+            x: Int,
+            y: Int,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.tapScreenPoint(x, y, callback)
+        }
+
+        /** v37: kahin se bhi screen scroll — service band ho to turant false. */
+        fun scrollScreen(
+            context: Context,
+            down: Boolean,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.scrollScreen(down, callback)
+        }
+
+        /** v37: kahin se bhi focus wale khane me likho — service band ho to turant false. */
+        fun typeScreenText(
+            context: Context,
+            text: String,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.typeScreenText(text, callback)
+        }
+
+        /** v37: kahin se bhi Back/Home global action — service band ho to turant false. */
+        fun screenGlobalAction(
+            context: Context,
+            action: Int,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.screenGlobalAction(action, callback)
+        }
+
         private const val SYSTEMUI_PACKAGE = "com.android.systemui"
         // v23: 2.5s se 8s — vivo ka panel sajne me der lagata
         // hai; tile ped par chadhne se pehle khoj khatm ho jati
@@ -1168,6 +1640,13 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val MAX_DURATION_NODES = 120
         private const val DIAG_KEY_LAST_YOUTUBE_TAP = "last_youtube_tap"
         private const val CLICK_SETTLE_MS = 350L
+        // v37: screen-agent wale bandobosto — saar me zyada
+        // se zyada 60 hisse, har naam 90 akshar tak kata
+        // hua; scroll wala swipe ~320 ms ka.
+        private const val MAX_SCREEN_ELEMENTS = 60
+        private const val MAX_SCREEN_LABEL_CHARS = 90
+        private const val SCROLL_DURATION_MS = 320L
+        private val WHITESPACE_RUN = Regex("""\s+""")
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
         private const val MAX_NODES = 800
