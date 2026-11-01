@@ -28,6 +28,7 @@ import android.widget.TextView
 import com.aship.jarvis.MainActivity
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
@@ -158,6 +159,32 @@ class JarvisWakeService : Service() {
     private lateinit var prefs: AppPrefs
     private lateinit var orbOverlay: OrbOverlay
 
+    /**
+     * v37: screen-agent ke sawalon ki background mezbaani
+     * ([ScreenConfirm.Host]) — sawal aane par use bolo aur
+     * gole par dikhao. Jawab wake wale raaste se aata hai:
+     * user "Jarvis" bolkar jawab bolta hai aur
+     * onCommandHeard use pul ko saunp deta hai (naya
+     * command nahi banta). Sawal service ke apne executor
+     * par chalaya jata hai — bolna/status badalna wahi se
+     * hota hai jaise baaki jawabon ka.
+     */
+    private val screenConfirmHost = ScreenConfirm.Host { question ->
+        try {
+            executor.execute {
+                if (destroyed) return@execute
+                setStatus("Screen wala kaam sawal pooch raha hai")
+                updateNotification(question)
+                orbOverlay.setReply(question)
+                speaker.speak(question)
+            }
+        } catch (t: Throwable) {
+            // Service band ho rahi hai: sawal aage nahi
+            // badhega — agent intezaar ke baad imaandaari
+            // se ruk jayega.
+        }
+    }
+
     private var model: Model? = null
     private var wakeSpeechService: SpeechService? = null
     private var commandSpeechService: SpeechService? = null
@@ -253,6 +280,9 @@ class JarvisWakeService : Service() {
         addaEngine = AddaEngine()
         prefs = AppPrefs(this)
         orbOverlay = OrbOverlay()
+        // v37: screen-agent ke sawalon ki mezbaani is
+        // service ke naam bandho (teardown me hat ti hai).
+        ScreenConfirm.registerServiceHost(screenConfirmHost)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -306,6 +336,8 @@ class JarvisWakeService : Service() {
     private fun teardown() {
         if (destroyed) return
         destroyed = true
+        // v37: screen-agent wali mezbaani sabse pehle hatao.
+        ScreenConfirm.unregisterServiceHost(screenConfirmHost)
         state = State.STOPPED
         isRunning = false
         wakePaused = false
@@ -817,6 +849,16 @@ class JarvisWakeService : Service() {
         // callback fired by stop() is ignored.
         state = State.REPLY
         stopCommandSession()
+        // v37: screen-agent ka sawal latka ho (send ki
+        // pushti / ask_user) to ye baat USI ka jawab hai —
+        // naya command nahi. Jawab pul ko saunp kar wapas
+        // wake sunne par jao; agent apni daud wahi se aage
+        // badhayega ya imaandaari se rok dega.
+        if (ScreenConfirm.deliverAnswer(text)) {
+            setStatus("Screen wale kaam ka jawab mil gaya")
+            startWakeSession()
+            return
+        }
         addaNoSpeechCount = 0
         // v36 (C): device wala hukm (torch / mobile data)
         // suna gaya ho to uska KACHHA text jarvis_diag me
