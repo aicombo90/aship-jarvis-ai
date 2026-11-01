@@ -39,6 +39,8 @@ import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
+import com.aship.jarvis.voice.BanglaModelManager
+import com.aship.jarvis.voice.BanglaZipformer
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
 import com.aship.jarvis.voice.SpeechEngineListener
@@ -164,6 +166,16 @@ import java.util.concurrent.Executors
  * niyam naya hai: ek chhota prompt ("বলুন, শুনছি") +
  * ek aur khidki, phir imaandaar vida — do-retry wala
  * jaap is raaste par nahi hai.
+ *
+ * v41 Bangla offline ASR: Bangla Zipformer model
+ * (sherpa-onnx, int8) user ne app se download kiya ho
+ * to post-wake hukm sabse pehle USI se suna jata hai —
+ * poori tarah offline, system recognizer ki bhi
+ * zaroorat nahi. Model taiyaar na ho to v38 wala kram
+ * bilkul pehle jaisa (system -> Vosk); Zipformer khaali
+ * aaye ya bigde to turn wahi kram par gir jata hai,
+ * jaise woh tha hi nahi. Wake-word spotting Vosk Hindi
+ * par hi rehta hai — Zipformer keyword-spotter nahi hai.
  */
 class JarvisWakeService : Service() {
 
@@ -292,7 +304,7 @@ class JarvisWakeService : Service() {
     // ------------------------------------------------------------------
 
     /** Is pal ke command session ka kaan kaun sa hai. */
-    private enum class CommandKind { NONE, VOSK, SYSTEM }
+    private enum class CommandKind { NONE, VOSK, SYSTEM, ZIPFORMER }
 
     /** System recognizer engine — sirf main thread par chhoota hai. */
     private var systemEngine: SystemSpeechEngine? = null
@@ -327,6 +339,36 @@ class JarvisWakeService : Service() {
     @Volatile
     private var systemEchoRestarts: Int = 0
 
+    // ------------------------------------------------------------------
+    // v41: Bangla offline ASR (Zipformer) wala raasta.
+    // Model [BanglaModelManager] se sirf taiyaari jaanchi
+    // jati hai; asal sunna/decode [BanglaZipformer] apne
+    // thread par karta hai (recording ~15 s tak ki ho
+    // sakti hai — service ka mukhya executor us dauraan
+    // band nahi reh sakta). Har session ka ek number
+    // (seq) hota hai: purane thread ka der se aaya natija
+    // naye session ko kabhi nahi chhedega.
+    // ------------------------------------------------------------------
+
+    private var banglaModelManager: BanglaModelManager? = null
+    private var banglaAsr: BanglaZipformer? = null
+
+    @Volatile
+    private var zipformerSessionSeq: Int = 0
+
+    /** Goonj wala natija aaye to bina retry kharch kiye kitni baar phir suna (system wala hi hisaab). */
+    @Volatile
+    private var zipformerEchoRestarts: Int = 0
+
+    /**
+     * Zipformer is wake-chain me bigad chuka hai (recognizer
+     * na bana / decode fail) — is chain me use phir mat
+     * aazmao; agle wake par taaza mauka milega. System wale
+     * [systemUnavailableThisChain] ki hi tarz.
+     */
+    @Volatile
+    private var zipformerBrokenThisChain: Boolean = false
+
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
     // Sirf executor thread par chhoota hai. Har naye wake par
@@ -349,6 +391,12 @@ class JarvisWakeService : Service() {
         commandEngine = CommandEngine(applicationContext, fromBackgroundService = true)
         addaEngine = AddaEngine()
         prefs = AppPrefs(this)
+        // v41: Bangla offline ASR ke do hisse — model ki
+        // taiyaari jaanchne wala aur asal sunne/decode
+        // wala. Model download na ho to dono soye rehte
+        // hain; koi laagat nahi.
+        banglaModelManager = BanglaModelManager(applicationContext)
+        banglaAsr = BanglaZipformer(applicationContext)
         orbOverlay = OrbOverlay()
         // v37: screen-agent ke sawalon ki mezbaani is
         // service ke naam bandho (teardown me hat ti hai).
@@ -422,6 +470,15 @@ class JarvisWakeService : Service() {
         executor.shutdownNow()
         stopWakeSession()
         stopCommandSession()
+        // v41: Zipformer ki chal rahi recording roko aur
+        // recognizer ka native hissa chhodo.
+        stopZipformerCommandSession()
+        try {
+            banglaAsr?.release()
+        } catch (t: Throwable) {
+            // Band karte huey gadbad — teardown nahi rukega.
+        }
+        banglaAsr = null
         // v38: system recognizer bhi band. onDestroy main
         // thread par chalta hai — engine wahi banta/chalta
         // hai, isliye yahan seedha destroy theek hai.
@@ -744,6 +801,12 @@ class JarvisWakeService : Service() {
         systemRetryUsed = false
         currentTurnViaSystem = false
         systemUnavailableThisChain = false
+        // v41: Zipformer ko bhi har nayi chain me taaza
+        // mauka — pichhli chain me bigda ho to bhi agle
+        // wake par phir aazmayenge, goonj wala hisaab
+        // bhi shuru se.
+        zipformerBrokenThisChain = false
+        zipformerEchoRestarts = 0
         // v13: naya wake hamesha taaza interaction hai — koi atka
         // hua purana adda state saath nahi ghisdega.
         addaEngine.endSession()
@@ -831,20 +894,34 @@ class JarvisWakeService : Service() {
     }
 
     /**
-     * v38: command session ki shuruaat — pehle SYSTEM
-     * recognizer (Bangla ke liye wahi ekmatra sahi kaan
-     * hai; wake ke baad Vosk ka mic pehle hi chhut chuka
-     * hota hai). Woh uplabdh na ho ya turant fail ho jaye
-     * to usi turn ke liye purana Vosk wala raasta
-     * ([startVoskCommandSession]) — Hindi background
-     * pehle ki tarah chalta rahega.
+     * Command session ki shuruaat — kaanon ka kram:
+     *  1. v41 ZIPFORMER (Bangla offline): model download
+     *     karke taiyaar ho aur is chain me bigda na ho to
+     *     sabse pehle wahi. Khaali/bigda natija aane par
+     *     turn neeche wale kram par gir jata hai.
+     *  2. v38 SYSTEM recognizer: uplabdh na ho ya turant
+     *     fail ho jaye to usi turn ke liye Vosk.
+     *  3. Vosk wala purana raasta — Hindi background
+     *     pehle ki tarah chalta rahega.
+     * Model na ho to kram bilkul v40 wala hi hai.
      */
     private fun startCommandSession() {
         if (destroyed) return
+        if (!zipformerBrokenThisChain && isBanglaModelReady()) {
+            startZipformerCommandSession()
+            return
+        }
         if (!systemUnavailableThisChain && tryStartSystemCommandSession()) {
             return
         }
         startVoskCommandSession()
+    }
+
+    /** v41: Bangla Zipformer model taiyaar hai kya (chaaron file poori). */
+    private fun isBanglaModelReady(): Boolean = try {
+        banglaModelManager?.isReady() == true
+    } catch (t: Throwable) {
+        false
     }
 
     private fun startVoskCommandSession() {
@@ -857,6 +934,7 @@ class JarvisWakeService : Service() {
         stopWakeSession()
         stopCommandSession()
         stopSystemCommandSession()
+        stopZipformerCommandSession()
         state = State.COMMAND
         commandKind = CommandKind.VOSK
         try {
@@ -929,6 +1007,7 @@ class JarvisWakeService : Service() {
         stopWakeSession()
         stopCommandSession()
         stopSystemCommandSession()
+        stopZipformerCommandSession()
         state = State.COMMAND
         commandKind = CommandKind.SYSTEM
         systemEchoRestarts = 0
@@ -1166,6 +1245,11 @@ class JarvisWakeService : Service() {
         } else {
             "vosk"
         }
+        saveBackgroundHeardDiagTag(tag, text)
+    }
+
+    /** v41: "last_background_heard" me kaan ka naam dekar band karo. */
+    private fun saveBackgroundHeardDiagTag(tag: String, text: String) {
         try {
             getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
                 .edit()
@@ -1174,6 +1258,188 @@ class JarvisWakeService : Service() {
         } catch (t: Throwable) {
             // Report bonus hai — asal hukm isse nahi rukta.
         }
+    }
+
+    /**
+     * v41: Zipformer kaan ki apni report — "jarvis_diag"
+     * ki "last_bangla_asr" par: natija + decode ka samay
+     * + suna hua text ("zipformer 840ms: ..."), ya
+     * "zipformer EMPTY" / "zipformer FAIL <kaaran>".
+     * Main screen par "Bangla ASR (aakhiri)" line me
+     * dikhti hai — agle test me bina andaze ke pata
+     * chalega ki offline kaan ne asal me kya suna aur
+     * kitni der me.
+     */
+    private fun saveBanglaAsrDiag(value: String) {
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_bangla_asr", value)
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v41: Zipformer (Bangla offline) wala command session
+    //
+    // Recording + decode [BanglaZipformer] ke apne thread
+    // par hote hain: recording ~15 s tak ja sakti hai aur
+    // service ka mukhya executor (jo TTS-finish, watchdog
+    // aur baaki saari haalat sambhalta hai) itni der band
+    // nahi reh sakta. Thread sirf natija laata hai; faisla
+    // hamesha executor par hota hai, aur session number
+    // (seq) purane thread ke der-wale natije ko naye
+    // session se alag rakhta hai.
+    //
+    // Rukawat ke niyam v38 wale system raaste jaise hi:
+    //  - suna gaya text seedha onCommandHeard ko — neeche
+    //    ka dispatch (ScreenConfirm -> OFF -> scroll ->
+    //    screenshot -> PlayIntent -> agent -> adda)
+    //    bilkul aparivartit;
+    //  - suna-par-nahi-juda text par v38 wala ek-prompt
+    //    niyam (currentTurnViaSystem = true wala raasta);
+    //  - khaali/fail natija = jaise ye kaan tha hi nahi:
+    //    turn v38 wale kram (system -> Vosk) par girta
+    //    hai, wahan ke apne miss-niyam laagu honge;
+    //  - nakami par is chain ke liye ye kaan band
+    //    (zipformerBrokenThisChain) — har wake par
+    //    ek hi kharab koshish ka jaap nahi lagega.
+    // ------------------------------------------------------------------
+
+    /** Sirf executor thread se bulao. */
+    private fun startZipformerCommandSession() {
+        if (destroyed) return
+        val asr = banglaAsr
+        if (asr == null) {
+            fallThroughToSystemOrVosk()
+            return
+        }
+        lightScreenOnWake()
+        stopWakeSession()
+        stopCommandSession()
+        stopSystemCommandSession()
+        state = State.COMMAND
+        commandKind = CommandKind.ZIPFORMER
+        setStatus("Command sun raha hoon — boliye")
+        updateNotification("Command boliye...")
+        val seq = ++zipformerSessionSeq
+        Thread {
+            // v36 wala khud-ki-awaaz wala jaal (self-hearing
+            // guard): Maya ki boli chal rahi ho ya abhi-abhi
+            // khatm hui ho to mic MAT kholo — pehle goonj
+            // wali khidki nikal jaane do, warna recording me
+            // uski apni boli hi band ho jayegi. Zyada se
+            // zyada ZIPFORMER_GUARD_WAIT_MS tak intezaar.
+            var waitedMs = 0L
+            while (!destroyed && seq == zipformerSessionSeq &&
+                selfEchoGuardActive() &&
+                waitedMs < ZIPFORMER_GUARD_WAIT_MS
+            ) {
+                try {
+                    Thread.sleep(100)
+                } catch (e: InterruptedException) {
+                    break
+                }
+                waitedMs += 100
+            }
+            if (destroyed || seq != zipformerSessionSeq) {
+                return@Thread
+            }
+            val outcome = try {
+                asr.listenAndTranscribe()
+            } catch (t: Throwable) {
+                BanglaZipformer.Outcome.Failed(
+                    t.message ?: t.javaClass.simpleName
+                )
+            }
+            executor.execute { onZipformerOutcome(seq, outcome) }
+        }.start()
+    }
+
+    /**
+     * Chal raha Zipformer session roko: session number
+     * badhakar purane thread ka natija bekaar karo aur
+     * recording chal rahi ho to use bhi roko. Har jagah
+     * se surakshit (executor/main/teardown).
+     */
+    private fun stopZipformerCommandSession() {
+        zipformerSessionSeq++
+        try {
+            banglaAsr?.cancelCapture()
+        } catch (t: Throwable) {
+            // Rokte huey gadbad — session waise bhi khatm.
+        }
+    }
+
+    /** Zipformer thread ka natija — faisla executor par. */
+    private fun onZipformerOutcome(
+        seq: Int,
+        outcome: BanglaZipformer.Outcome
+    ) {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.ZIPFORMER ||
+            seq != zipformerSessionSeq
+        ) {
+            return
+        }
+        when (outcome) {
+            is BanglaZipformer.Outcome.Heard -> {
+                saveBanglaAsrDiag(
+                    "zipformer ${outcome.decodeMs}ms: ${outcome.text}"
+                )
+                if (selfEchoGuardActive()) {
+                    // Recording ke baad bhi goonj wali
+                    // khidki band hai — natija Maya ki apni
+                    // boli ka hissa ho sakta hai. System
+                    // wale niyam ki tarah bina retry kharch
+                    // kiye ek aur khidki; baar-baar ho to
+                    // purane kram par giro.
+                    if (zipformerEchoRestarts < MAX_SYSTEM_ECHO_RESTARTS) {
+                        zipformerEchoRestarts++
+                        startZipformerCommandSession()
+                    } else {
+                        fallThroughToSystemOrVosk()
+                    }
+                    return
+                }
+                // Suna-par-nahi-juda text par v38 wala
+                // ek-prompt niyam laagu ho — isliye ye
+                // turn bhi "system wala" mana jayega.
+                currentTurnViaSystem = true
+                rememberCommandFinal(outcome.text)
+                saveBackgroundHeardDiagTag("zipformer", outcome.text)
+                commandKind = CommandKind.NONE
+                onCommandHeard(outcome.text)
+            }
+            BanglaZipformer.Outcome.Empty -> {
+                saveBanglaAsrDiag("zipformer EMPTY")
+                fallThroughToSystemOrVosk()
+            }
+            is BanglaZipformer.Outcome.Failed -> {
+                saveBanglaAsrDiag("zipformer FAIL ${outcome.reason}")
+                // Is chain me ye kaan phir nahi aazmayenge —
+                // kharab recognizer har turn par atke, ye
+                // system wale turant-fail niyam jaisa hi hai.
+                zipformerBrokenThisChain = true
+                fallThroughToSystemOrVosk()
+            }
+        }
+    }
+
+    /**
+     * Zipformer ke baad ka purana kram — system uplabdh
+     * ho to wahi, warna Vosk. Jaise v41 se pehle hota
+     * tha, bilkul waisa hi.
+     */
+    private fun fallThroughToSystemOrVosk() {
+        if (destroyed) return
+        commandKind = CommandKind.NONE
+        if (!systemUnavailableThisChain && tryStartSystemCommandSession()) {
+            return
+        }
+        startVoskCommandSession()
     }
 
     private val commandListener = object : RecognitionListener {
@@ -2199,6 +2465,9 @@ class JarvisWakeService : Service() {
 
         /** v38: system session me goonj wala final aaye to bina retry kharch kiye itni baar phir sunna. */
         private const val MAX_SYSTEM_ECHO_RESTARTS = 2
+
+        /** v41: Zipformer session mic kholne se pehle goonj wali khidki (self-hearing guard) nikalne ka zyada se zyada intezaar. */
+        private const val ZIPFORMER_GUARD_WAIT_MS = 4_000L
 
         /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
         const val CANT_DO_REPLY = "माफ़ कीजिए, अभी मैं यह काम नहीं कर सकता हूँ।"
