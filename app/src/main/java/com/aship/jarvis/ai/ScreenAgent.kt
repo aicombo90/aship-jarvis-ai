@@ -1,0 +1,847 @@
+package com.aship.jarvis.ai
+
+import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.os.SystemClock
+import com.aship.jarvis.access.JarvisAccessibilityService
+import com.aship.jarvis.commands.PlayIntent
+import org.json.JSONObject
+import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+/**
+ * v37: SCREEN-CHALANE WALA AGENT — Maya ke haath ab
+ * dusri apps ki screen tak.
+ *
+ * Ab tak auzaar bandhe hue the: app kholo, YouTube par
+ * pehla video dabao, WhatsApp chat kholo. Ye agent woh
+ * kaam karta hai jo koi bandha auzaar nahi karta —
+ * dusri app ke ANDAR kai kadam wala kaam: jaise
+ * WhatsApp me kisi ko live location bhejna, ya CapCut
+ * me gallery ka sabse naya video editor me uthana.
+ * Mastishk (Gemini) faisla karta hai, ye file sirf
+ * kadam chalati hai:
+ *
+ *   screen ka saar padho (Accessibility ped se —
+ *   package + dikhai dene wale hisse, unke naam,
+ *   clickable/editable hona aur beech ke nirdeshank;
+ *   koi screenshot NAHI, MediaProjection nahi) ->
+ *   kaam + saar + ab tak ke kadam mastishk ko bhejo ->
+ *   uska EK JSON kadam (tap_text / tap_at / scroll /
+ *   type / back / home / wait / ask_user / done /
+ *   fail) chalao -> screen thaharne ki saans (~1.2 s)
+ *   -> phir saar padho...
+ *
+ * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
+ * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
+ * khatm, kaam wahin imaandaari se rukta hai.
+ *
+ * SEND-PUSHTI (sabse sakht niyam): jis tap ka nishana
+ * send / pay / confirm / delete matlab wala ho, woh
+ * tap PEHLE NAHI padta. Maya pehle user se poochti
+ * hai ("এটা পাঠিয়ে দিই?" — kaam ki bhasha me,
+ * [ScreenConfirm] wale pul se: bolkar + screen par),
+ * aur saaf "haan" mile tabhi tap padta hai. Kuch aur
+ * suna jaye, jawab hi na mile, ya sunna uplabdh na ho
+ * — kaam wahin ruk jata hai; jo nahi bhejna tha woh
+ * kabhi apne-aap nahi jata. Ek hi nishane ki pushti
+ * ek kaam me ek hi baar maangi jati hai.
+ *
+ * Imaandari: "ho gaya" sirf tab, jab mastishk ne
+ * screen dekhkar khud "done" kaha ho. Raste me ruke
+ * kaam ka natija hamesha batata hai ki kaam KAHAN tak
+ * pahuncha tha. Bheja gaya sandesh/location tabhi
+ * "bheja" kahlayega jab pushti wala tap asal me pada
+ * ho — usse pehle kabhi nahi.
+ *
+ * Key na ho ya saare model fail ho jayein (v36 wali
+ * kataar hi chalti hai — [GeminiBrain.requestAgentRound])
+ * to imaandaar FAILED; is sanskar ka koi offline
+ * screen-agent nahi hai.
+ *
+ * Har daud ki report "jarvis_diag" me "last_screen_run"
+ * par band hoti hai: user ke apne shabdon wala kaam
+ * (kata hua), natija, aur kitne kadam chale. Model ne
+ * khanon me kya LIKHA tha woh report me kabhi nahi
+ * jata. Ye class hamesha kisi background thread se
+ * bulana (AgentBrain ka executor hi woh thread hai —
+ * kadmon ke bandhe intezaar UI ko nahi rokte).
+ */
+class ScreenAgent(private val context: Context) {
+
+    /** Daud ka kul natija: mastishk (AgentBrain) ke liye sachha varnan. */
+    data class Outcome(val ok: Boolean, val text: String)
+
+    /** Ek kaam chalao — bandha (sync) call, background thread se hi bulana. */
+    fun runTask(taskRaw: String): Outcome {
+        val task = taskRaw.trim()
+        if (task.isEmpty()) {
+            return Outcome(false, "No task text was given.")
+        }
+        if (!GeminiBrain.isConfigured(context)) {
+            saveDiag(task, "FAILED (key nahi)", 0)
+            return Outcome(
+                false,
+                "FAILED — the Gemini key is not set on this phone, and " +
+                    "the screen agent needs the online brain (there is " +
+                    "no offline screen agent). Ask the user to set the " +
+                    "key in the app first."
+            )
+        }
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveDiag(task, "FAILED (accessibility band)", 0)
+            return Outcome(
+                false,
+                "FAILED — the accessibility service is OFF, so the " +
+                    "screen agent can neither read nor touch the " +
+                    "screen. Ask the user to turn on Accessibility " +
+                    "for ASHIP JARVIS AI first."
+            )
+        }
+        val lang = PlayIntent.requestLanguage(task)
+        val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
+        val history = mutableListOf<String>()
+        val confirmedTargets = mutableSetOf<String>()
+        var stepsDone = 0
+        var invalidReplies = 0
+        var rounds = 0
+        while (rounds < MAX_ROUNDS) {
+            rounds++
+            if (SystemClock.uptimeMillis() > deadline) {
+                saveDiag(task, "FAILED (samay khatm)", stepsDone)
+                return Outcome(
+                    false,
+                    "FAILED — the screen task ran out of time after " +
+                        "$stepsDone steps. Actions taken so far: " +
+                        historySummary(history) + ". Tell the user " +
+                        "honestly that the task could not be finished."
+                )
+            }
+            val snapshot = captureSync()
+            if (snapshot == null) {
+                saveDiag(task, "FAILED (screen nahi mila)", stepsDone)
+                return Outcome(
+                    false,
+                    "FAILED — the screen could not be read (the " +
+                        "accessibility service may have stopped). " +
+                        "Actions taken so far: " +
+                        historySummary(history) + "."
+                )
+            }
+            val raw = GeminiBrain.requestAgentRound(
+                context,
+                SCREEN_INSTRUCTION,
+                listOf("user" to buildStepPrompt(task, history, snapshot))
+            )
+            if (raw == null) {
+                val quota = GeminiBrain.lastChainWasQuota(context)
+                saveDiag(
+                    task,
+                    if (quota) "FAILED (online seema khatm)" else "FAILED (koi model nahi)",
+                    stepsDone
+                )
+                return Outcome(
+                    false,
+                    if (quota) {
+                        "FAILED — the online (Gemini) limit is exhausted " +
+                            "right now, so the screen task stopped after " +
+                            "$stepsDone steps. Actions taken so far: " +
+                            historySummary(history) + ". Tell the user " +
+                            "honestly that the online limit is over and " +
+                            "to try again later."
+                    } else {
+                        "FAILED — no Gemini model answered, so the " +
+                            "screen task stopped after $stepsDone steps. " +
+                            "Actions taken so far: " +
+                            historySummary(history) + "."
+                    }
+                )
+            }
+            val action = parseAction(raw)
+            if (action == null) {
+                invalidReplies++
+                history.add(
+                    "System note: your last reply was not a valid JSON " +
+                        "action object. Reply with ONLY one JSON action."
+                )
+                if (invalidReplies >= MAX_INVALID_REPLIES) {
+                    saveDiag(task, "FAILED (model ka jawab samajh nahi)", stepsDone)
+                    return Outcome(
+                        false,
+                        "FAILED — the screen agent could not understand " +
+                            "the model's replies and stopped after " +
+                            "$stepsDone steps. Actions taken so far: " +
+                            historySummary(history) + "."
+                    )
+                }
+                continue
+            }
+            invalidReplies = 0
+            when (action) {
+                is ScreenAction.Done -> {
+                    saveDiag(task, "SUCCESS", stepsDone)
+                    return Outcome(
+                        true,
+                        "Screen task COMPLETED in $stepsDone steps. " +
+                            "The screen agent's own summary for the " +
+                            "user, already in the user's language: \"" +
+                            action.say + "\" — use this as your final " +
+                            "answer; do not add claims beyond it."
+                    )
+                }
+                is ScreenAction.Fail -> {
+                    saveDiag(task, "FAILED (model ne roka)", stepsDone)
+                    return Outcome(
+                        false,
+                        "FAILED — the screen agent stopped after " +
+                            "$stepsDone steps. Its own words for the " +
+                            "user, already in the user's language: \"" +
+                            action.say + "\" — relay this honestly; " +
+                            "the task was NOT completed."
+                    )
+                }
+                is ScreenAction.AskUser -> {
+                    val waitMs = minOf(
+                        ASK_WAIT_MS,
+                        deadline - SystemClock.uptimeMillis()
+                    )
+                    val answer = if (waitMs > 0) {
+                        ScreenConfirm.ask(action.question, waitMs)
+                    } else {
+                        null
+                    }
+                    history.add(
+                        if (answer != null) {
+                            "You asked the user: \"" + action.question +
+                                "\" — the user answered: \"" + answer + "\""
+                        } else {
+                            "You asked the user: \"" + action.question +
+                                "\" — NO answer was received (nobody " +
+                                "replied in time, or listening was not " +
+                                "available). Continue only if the task " +
+                                "can proceed safely without the answer; " +
+                                "otherwise fail honestly."
+                        }
+                    )
+                }
+                is ScreenAction.Wait -> {
+                    val ms = action.ms.coerceIn(300, MAX_WAIT_MS)
+                    sleepQuietly(ms.toLong())
+                    stepsDone++
+                    history.add("$stepsDone. wait ${ms}ms -> done")
+                }
+                is ScreenAction.Back -> {
+                    val ok = globalActionSync(AccessibilityService.GLOBAL_ACTION_BACK)
+                    stepsDone++
+                    history.add("$stepsDone. back -> " + if (ok) "OK" else "FAILED")
+                    settle(deadline)
+                }
+                is ScreenAction.Home -> {
+                    val ok = globalActionSync(AccessibilityService.GLOBAL_ACTION_HOME)
+                    stepsDone++
+                    history.add("$stepsDone. home -> " + if (ok) "OK" else "FAILED")
+                    settle(deadline)
+                }
+                is ScreenAction.Scroll -> {
+                    val ok = scrollSync(action.down)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. scroll " +
+                            (if (action.down) "down" else "up") +
+                            " -> " + if (ok) "OK" else "FAILED"
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.Type -> {
+                    // Likhna apne-aap me bhejna nahi hai — pushti
+                    // sirf bhejne/dabane wale kadam par lagti hai.
+                    val ok = typeSync(action.value)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. type (the text you specified) -> " +
+                            if (ok) "OK" else "FAILED"
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.TapText -> {
+                    val kind = sensitiveKind(action.value)
+                        ?: snapshotKindForText(snapshot, action.value)
+                    val refusal = checkConfirmation(
+                        kind, labelKey(action.value), lang, task,
+                        stepsDone, history, confirmedTargets, deadline
+                    )
+                    if (refusal != null) return refusal
+                    val ok = tapTextSync(action.value)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. tap_text \"" + action.value + "\" -> " +
+                            if (ok) "OK" else "FAILED (not found / not tappable)"
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.TapAt -> {
+                    val label = nearestLabel(snapshot, action.x, action.y)
+                    val kind = label?.let { sensitiveKind(it) }
+                    val refusal = checkConfirmation(
+                        kind,
+                        label?.let { labelKey(it) } ?: "",
+                        lang, task, stepsDone, history,
+                        confirmedTargets, deadline
+                    )
+                    if (refusal != null) return refusal
+                    val ok = tapPointSync(action.x, action.y)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. tap_at (" + action.x + ", " + action.y +
+                            ") -> " + if (ok) "OK" else "FAILED"
+                    )
+                    settle(deadline)
+                }
+            }
+        }
+        saveDiag(task, "FAILED (kadam khatm)", stepsDone)
+        return Outcome(
+            false,
+            "FAILED — the screen task used all $MAX_ROUNDS steps " +
+                "without finishing. Actions taken: " +
+                historySummary(history) + ". Tell the user honestly " +
+                "that the task could not be completed."
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Pushti (send/pay/delete/confirm) — tap se PEHLE
+    // ------------------------------------------------------------------
+
+    /**
+     * [kind] hassas (sensitive) ho aur is nishane ki pushti
+     * is kaam me pehle na hui ho, to user se poochho. Saaf
+     * "haan" mile to nishana yaad karke null lautao (tap
+     * chalega); warna kaam wahin rokkar [Outcome] lautao —
+     * woh tap kabhi nahi padega.
+     */
+    private fun checkConfirmation(
+        kind: SensitiveKind?,
+        targetKey: String,
+        lang: PlayIntent.SpokenLang,
+        task: String,
+        stepsDone: Int,
+        history: MutableList<String>,
+        confirmedTargets: MutableSet<String>,
+        deadline: Long
+    ): Outcome? {
+        if (kind == null) return null
+        if (targetKey.isNotEmpty() && targetKey in confirmedTargets) {
+            return null
+        }
+        val waitMs = minOf(
+            ASK_WAIT_MS,
+            deadline - SystemClock.uptimeMillis()
+        )
+        val answer = if (waitMs > 0) {
+            ScreenConfirm.ask(confirmQuestion(lang, kind), waitMs)
+        } else {
+            null
+        }
+        if (!isYes(answer)) {
+            saveDiag(task, "STOPPED (pushti nahi mili: $kind)", stepsDone)
+            return Outcome(
+                false,
+                "STOPPED — the screen agent reached a " +
+                    kind.name.lowercase(Locale.ROOT) + " button after " +
+                    "$stepsDone steps and asked the user for " +
+                    "confirmation, but no clear YES was received, so " +
+                    "the tap was NOT made. " +
+                    when (kind) {
+                        SensitiveKind.SEND ->
+                            "Nothing was sent. Tell the user honestly " +
+                                "that the message/location was NOT sent " +
+                                "because they did not confirm."
+                        SensitiveKind.PAY ->
+                            "No payment was made. Tell the user " +
+                                "honestly that nothing was paid because " +
+                                "they did not confirm."
+                        SensitiveKind.DELETE ->
+                            "Nothing was deleted. Tell the user " +
+                                "honestly that nothing was deleted " +
+                                "because they did not confirm."
+                        SensitiveKind.CONFIRM ->
+                            "Nothing was confirmed. Tell the user " +
+                                "honestly that the step was not " +
+                                "confirmed because they did not say yes."
+                    }
+            )
+        }
+        if (targetKey.isNotEmpty()) {
+            confirmedTargets.add(targetKey)
+        }
+        history.add(
+            "System note: the user CONFIRMED the " +
+                kind.name.lowercase(Locale.ROOT) +
+                " tap — you may proceed with it."
+        )
+        return null
+    }
+
+    /** Hassas matlab wale naam ki shreni, ya null (aam tap). */
+    private fun sensitiveKind(label: String): SensitiveKind? {
+        val lower = label.lowercase(Locale.ROOT).trim()
+        if (lower.isEmpty()) return null
+        return when {
+            DELETE_WORDS.any { lower.contains(it) } -> SensitiveKind.DELETE
+            PAY_WORDS.any { lower.contains(it) } ||
+                PAY_WORD.containsMatchIn(lower) -> SensitiveKind.PAY
+            SEND_WORDS.any { lower.contains(it) } -> SensitiveKind.SEND
+            CONFIRM_WORDS.any { lower.contains(it) } -> SensitiveKind.CONFIRM
+            else -> null
+        }
+    }
+
+    /**
+     * tap_text ke liye: saar me woh hissa jiska naam model
+     * ke mange hue naam se milta ho — uske asal naam se
+     * shreni dekho (model ka manga naam khud saaf ho par
+     * asal button hassas ho sakta hai).
+     */
+    private fun snapshotKindForText(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        wanted: String
+    ): SensitiveKind? {
+        val needle = wanted.trim().lowercase(Locale.ROOT)
+        if (needle.isEmpty()) return null
+        for (element in snapshot.elements) {
+            val label = element.text.lowercase(Locale.ROOT)
+            if (label.isEmpty()) continue
+            if (label.contains(needle) || needle.contains(label)) {
+                sensitiveKind(element.text)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** (x, y) ke sabse paas wale hisse ka naam — pushti ki jaanch ke liye. */
+    private fun nearestLabel(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        x: Int,
+        y: Int
+    ): String? {
+        var best: String? = null
+        var bestDistance = Long.MAX_VALUE
+        for (element in snapshot.elements) {
+            val dx = (element.centerX - x).toLong()
+            val dy = (element.centerY - y).toLong()
+            val distance = dx * dx + dy * dy
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = element.text
+            }
+        }
+        // Bahut door ka hissa is tap ka nishana nahi mana jayega.
+        return if (bestDistance <= MAX_NEAREST_DISTANCE_PX.toLong() *
+            MAX_NEAREST_DISTANCE_PX
+        ) {
+            best
+        } else {
+            null
+        }
+    }
+
+    /** Pushti ke nishane ki pehchan — ek kaam me ek baar hi pushti. */
+    private fun labelKey(label: String): String =
+        label.trim().lowercase(Locale.ROOT)
+
+    /** Pushti wala sawal — kaam ki bhasha me, shreni ke hisaab se. */
+    private fun confirmQuestion(
+        lang: PlayIntent.SpokenLang,
+        kind: SensitiveKind
+    ): String = when (kind) {
+        SensitiveKind.SEND -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "এটা পাঠিয়ে দিই?"
+            PlayIntent.SpokenLang.HINDI -> "क्या मैं इसे भेज दूँ?"
+            PlayIntent.SpokenLang.ENGLISH -> "Shall I send this?"
+        }
+        SensitiveKind.DELETE -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "এটা মুছে দিই?"
+            PlayIntent.SpokenLang.HINDI -> "क्या मैं इसे मिटा दूँ?"
+            PlayIntent.SpokenLang.ENGLISH -> "Shall I delete this?"
+        }
+        SensitiveKind.PAY -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "টাকাটা পাঠিয়ে দিই?"
+            PlayIntent.SpokenLang.HINDI -> "क्या मैं पैसे भेज दूँ?"
+            PlayIntent.SpokenLang.ENGLISH -> "Shall I pay now?"
+        }
+        SensitiveKind.CONFIRM -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "এটা নিশ্চিত করে দিই?"
+            PlayIntent.SpokenLang.HINDI -> "क्या मैं इसे कन्फ़र्म कर दूँ?"
+            PlayIntent.SpokenLang.ENGLISH -> "Shall I confirm this?"
+        }
+    }
+
+    /**
+     * Jawab saaf "haan" hai kya. Niyam suraksha ki or
+     * jhuka hai: mana wale tukde pehle dekhe jate hain
+     * ("করো না" me "করো" hone se woh haan nahi banta),
+     * aur haan ke liye pakka shabd chahiye — chuppi,
+     * samay-khatm aur dhundhla jawab sab "nahi" hai.
+     */
+    private fun isYes(answerRaw: String?): Boolean {
+        val answer = answerRaw?.trim()?.lowercase(Locale.ROOT)
+            ?: return false
+        if (answer.isEmpty()) return false
+        if (NO_PHRASES.any { answer.contains(it) }) return false
+        if (answer in NO_EXACT) return false
+        return YES_WORDS.any { answer.contains(it) }
+    }
+
+    // ------------------------------------------------------------------
+    // Model ke kadam — protocol
+    // ------------------------------------------------------------------
+
+    private sealed class ScreenAction {
+        class TapText(val value: String) : ScreenAction()
+        class TapAt(val x: Int, val y: Int) : ScreenAction()
+        class Scroll(val down: Boolean) : ScreenAction()
+        class Type(val value: String) : ScreenAction()
+        object Back : ScreenAction()
+        object Home : ScreenAction()
+        class Wait(val ms: Int) : ScreenAction()
+        class AskUser(val question: String) : ScreenAction()
+        class Done(val say: String) : ScreenAction()
+        class Fail(val say: String) : ScreenAction()
+    }
+
+    private enum class SensitiveKind { SEND, PAY, DELETE, CONFIRM }
+
+    /**
+     * Model ke kacche jawab se ek kadam nikalo —
+     * [AgentBrain] wala hi andaaz: pehle '{' se aakhiri
+     * '}' tak ka JSON. Na bane / anjaan action ho to
+     * null (bulane wala use kharab jawab gin lega).
+     */
+    private fun parseAction(raw: String): ScreenAction? {
+        val text = raw.trim()
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) return null
+        val obj = try {
+            JSONObject(text.substring(start, end + 1))
+        } catch (t: Throwable) {
+            return null
+        }
+        return when (obj.optString("action").trim().lowercase(Locale.ROOT)) {
+            "tap_text" -> obj.optString("value").trim()
+                .takeIf { it.isNotEmpty() }
+                ?.let { ScreenAction.TapText(it) }
+            "tap_at" -> {
+                val x = obj.optInt("x", -1)
+                val y = obj.optInt("y", -1)
+                if (x >= 0 && y >= 0) ScreenAction.TapAt(x, y) else null
+            }
+            "scroll" -> ScreenAction.Scroll(
+                !obj.optString("direction").trim()
+                    .equals("up", ignoreCase = true)
+            )
+            "type" -> obj.optString("value")
+                .takeIf { it.isNotEmpty() }
+                ?.let { ScreenAction.Type(it) }
+            "back" -> ScreenAction.Back
+            "home" -> ScreenAction.Home
+            "wait" -> ScreenAction.Wait(obj.optInt("ms", 1000))
+            "ask_user" -> obj.optString("question").trim()
+                .takeIf { it.isNotEmpty() }
+                ?.let { ScreenAction.AskUser(it) }
+            "done" -> ScreenAction.Done(obj.optString("say").trim())
+            "fail" -> ScreenAction.Fail(obj.optString("say").trim())
+            else -> null
+        }
+    }
+
+    /** Ek kadam ke liye mastishk ko bheja jaane wala poora sandesh. */
+    private fun buildStepPrompt(
+        task: String,
+        history: List<String>,
+        snapshot: JarvisAccessibilityService.ScreenSnapshot
+    ): String {
+        val out = StringBuilder()
+        out.append("Task (in the user's own words): ").append(task).append("\n\n")
+        out.append("Actions already taken:\n")
+        if (history.isEmpty()) {
+            out.append("(none yet)\n")
+        } else {
+            for (line in history) {
+                out.append("- ").append(line).append("\n")
+            }
+        }
+        out.append("\nCurrent screen:\n")
+        out.append("App package: ")
+            .append(snapshot.packageName.ifEmpty { "(unknown)" })
+            .append("\n")
+        if (snapshot.elements.isEmpty()) {
+            out.append("Visible elements: (none readable)\n")
+        } else {
+            out.append("Visible elements:\n")
+            snapshot.elements.forEachIndexed { index, element ->
+                out.append(index + 1).append(". \"")
+                    .append(element.text.ifEmpty { "(no label)" })
+                    .append("\" | ").append(element.className)
+                if (element.clickable) out.append(" | clickable")
+                if (element.editable) out.append(" | editable")
+                out.append(" @ (")
+                    .append(element.centerX).append(", ")
+                    .append(element.centerY).append(")\n")
+            }
+        }
+        out.append(
+            "\nReply with ONLY one JSON action object for the NEXT step."
+        )
+        return out.toString()
+    }
+
+    /** Kadmon ka chhota saar — natije ke imaandaar varnan ke liye. */
+    private fun historySummary(history: List<String>): String {
+        val actions = history.filter { line ->
+            line.firstOrNull()?.isDigit() == true
+        }
+        return if (actions.isEmpty()) {
+            "no actions were taken"
+        } else {
+            actions.joinToString("; ")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Service wale bandhe (sync) raaste — youtube_play wala hi latch
+    // ------------------------------------------------------------------
+
+    private fun captureSync(): JarvisAccessibilityService.ScreenSnapshot? {
+        val latch = CountDownLatch(1)
+        var snapshot: JarvisAccessibilityService.ScreenSnapshot? = null
+        var delivered = false
+        try {
+            JarvisAccessibilityService.captureScreen(context) { result ->
+                snapshot = result
+                delivered = true
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        awaitLatch(latch)
+        return if (delivered) snapshot else null
+    }
+
+    private fun tapTextSync(text: String): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.tapScreenText(context, text, callback)
+        }
+
+    private fun tapPointSync(x: Int, y: Int): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.tapScreenPoint(context, x, y, callback)
+        }
+
+    private fun scrollSync(down: Boolean): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.scrollScreen(context, down, callback)
+        }
+
+    private fun typeSync(text: String): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.typeScreenText(context, text, callback)
+        }
+
+    private fun globalActionSync(action: Int): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.screenGlobalAction(context, action, callback)
+        }
+
+    /** Ek Boolean wale service-kaam ka bandha intezaar. */
+    private fun opSync(
+        start: ((Boolean) -> Unit) -> Unit
+    ): Boolean {
+        val latch = CountDownLatch(1)
+        var result = false
+        var delivered = false
+        try {
+            start { value ->
+                result = value
+                delivered = true
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        awaitLatch(latch)
+        return delivered && result
+    }
+
+    private fun awaitLatch(latch: CountDownLatch) {
+        try {
+            latch.await(OP_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Kata hua intezaar — natija "nahi aaya" hi rahega.
+        }
+    }
+
+    /** Kadam ke baad screen thaharne ki saans (kul seema ke andar hi). */
+    private fun settle(deadline: Long) {
+        val remaining = deadline - SystemClock.uptimeMillis()
+        if (remaining <= 0) return
+        sleepQuietly(minOf(SETTLE_MS, remaining))
+    }
+
+    private fun sleepQuietly(ms: Long) {
+        if (ms <= 0) return
+        try {
+            Thread.sleep(ms)
+        } catch (e: InterruptedException) {
+            // Neend kati — kaam aage badhega.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Report
+    // ------------------------------------------------------------------
+
+    /**
+     * Daud ki report "jarvis_diag" me "last_screen_run"
+     * par band karo — AgentBrain wali report wala hi
+     * andaaz: <kaam (kata hua)> — <natija> (<n> steps)।
+     * Likhe hue sandeshon ka text isme kabhi nahi aata.
+     */
+    private fun saveDiag(task: String, outcome: String, steps: Int) {
+        try {
+            val value = task.take(MAX_DIAG_TASK_CHARS) +
+                " — " + outcome + " (" + steps + " steps)"
+            context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_LAST_SCREEN_RUN, value)
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai; asal kaam isse nahi rukta.
+        }
+    }
+
+    companion object {
+        /** Ek kaam ke liye zyada se zyada itne kadam-faisle. */
+        private const val MAX_ROUNDS = 15
+
+        /** Ek kaam ki kul samay-seema (~150 s). */
+        private const val TOTAL_BUDGET_MS = 150_000L
+
+        /** Kadam ke baad screen thaharne ki saans. */
+        private const val SETTLE_MS = 1_200L
+
+        /** Service ke ek kaam ke natije ka adhiktam intezaar. */
+        private const val OP_WAIT_MS = 6_000L
+
+        /** User ke jawab ka adhiktam intezaar (pushti / ask_user). */
+        private const val ASK_WAIT_MS = 60_000L
+
+        /** Model ke ek wait kadam ki adhiktam muddat. */
+        private const val MAX_WAIT_MS = 5_000
+
+        /** Lagatar itne kharab jawabon par daud rukti hai. */
+        private const val MAX_INVALID_REPLIES = 3
+
+        /** tap_at ki pushti ke liye nishane ki adhiktam doori (px). */
+        private const val MAX_NEAREST_DISTANCE_PX = 90
+
+        private const val DIAG_PREFS_NAME = "jarvis_diag"
+        private const val KEY_LAST_SCREEN_RUN = "last_screen_run"
+        private const val MAX_DIAG_TASK_CHARS = 40
+
+        private val SEND_WORDS = listOf(
+            "send", "সেন্ড", "পাঠাও", "পাঠান", "পাঠিয়ে",
+            "भेजें", "भेजो", "भेज"
+        )
+        private val DELETE_WORDS = listOf(
+            "delete", "মুছুন", "মুছে", "ডিলিট",
+            "हटाएं", "मिटाएं", "मिटा"
+        )
+        private val PAY_WORDS = listOf("পেমেন্ট", "भुगतान", "पे करें")
+        private val PAY_WORD = Regex("""(^|[^a-z])pay([^a-z]|$)""")
+        private val CONFIRM_WORDS = listOf(
+            "confirm", "কনফার্ম", "নিশ্চিত", "पुष्टि", "कन्फ़र्म"
+        )
+
+        private val NO_PHRASES = listOf(
+            "করো না", "দিও না", "দেবে না", "পাঠিও না", "পাঠাবে না",
+            "না পাঠ", "পাঠাতে হবে না", "বাদ দাও", "থাম",
+            "don't", "do not", "stop", "cancel",
+            "मत कर", "मत भेज", "नहीं", "रुको"
+        )
+        private val NO_EXACT = setOf("না", "নো", "no", "nah", "न")
+        private val YES_WORDS = listOf(
+            "হ্যাঁ", "হুম", "হাঁ", "পাঠাও", "পাঠিয়ে", "আচ্ছা",
+            "ঠিক আছে", "করে দাও", "করো",
+            "yes", "yeah", "ok", "okay",
+            "हाँ", "हां", "भेज", "करो"
+        )
+
+        /**
+         * Screen wale mastishk ke liye nirdesh — wahi
+         * Gemini kataar, par is kaam ke liye alag prompt:
+         * har jawab SIRF ek JSON kadam, screen par jo
+         * asal me dikh raha hai usi par chalo, aur "done"
+         * tabhi jab kaam screen par sach me poora dikhe.
+         */
+        private const val SCREEN_INSTRUCTION =
+            "You are the screen-driving agent inside the Android app " +
+                "ASHIP JARVIS AI. The user has given you a task to " +
+                "complete INSIDE another app by driving its screen. " +
+                "At each step you receive: the task in the user's own " +
+                "words, the actions already taken, and a compact list " +
+                "of the elements currently visible on screen (label, " +
+                "type, clickable/editable, center coordinates). You " +
+                "cannot see screenshots — only this element list.\n" +
+                "\n" +
+                "Reply with ONLY a JSON object, no other text, no " +
+                "markdown. Exactly one of these shapes:\n" +
+                "{\"action\":\"tap_text\",\"value\":\"<visible label " +
+                "of the element to tap>\"}\n" +
+                "{\"action\":\"tap_at\",\"x\":<int>,\"y\":<int>}\n" +
+                "{\"action\":\"scroll\",\"direction\":\"down\"|\"up\"}\n" +
+                "{\"action\":\"type\",\"value\":\"<text to type into " +
+                "the focused input field>\"}\n" +
+                "{\"action\":\"back\"}\n" +
+                "{\"action\":\"home\"}\n" +
+                "{\"action\":\"wait\",\"ms\":<milliseconds up to 5000>}\n" +
+                "{\"action\":\"ask_user\",\"question\":\"<one short " +
+                "question in the user's language>\"}\n" +
+                "{\"action\":\"done\",\"say\":\"<short line in the " +
+                "user's language confirming what was actually " +
+                "completed>\"}\n" +
+                "{\"action\":\"fail\",\"say\":\"<short honest line in " +
+                "the user's language saying the task could not be " +
+                "completed and why>\"}\n" +
+                "\n" +
+                "RULES:\n" +
+                "- Prefer tap_text with the element's exact visible " +
+                "label; use tap_at only when the element has no usable " +
+                "label (use its listed center coordinates).\n" +
+                "- Work ONLY from what the screen list actually shows. " +
+                "If the target is not visible, scroll to look for it. " +
+                "Never invent elements, labels or results.\n" +
+                "- If the needed app is not open yet, use home and tap " +
+                "the app's name on the home screen; if you cannot get " +
+                "into the app, fail honestly.\n" +
+                "- Taps on Send / Pay / Confirm / Delete are NOT " +
+                "executed immediately: the app first asks the user " +
+                "for confirmation, and the task stops if the user " +
+                "does not clearly say yes. Choose such a tap only " +
+                "when the task is truly ready for it.\n" +
+                "- Use ask_user only when a real choice belongs to " +
+                "the user (e.g. several matching contacts). If no " +
+                "answer comes back, do not guess — fail honestly.\n" +
+                "- Say \"done\" ONLY when the screen shows the task " +
+                "is truly complete (e.g. the message appears in the " +
+                "chat, the video is loaded in the editor). If you are " +
+                "stuck after trying, say \"fail\" honestly.\n" +
+                "- Reply in the user's language in \"say\" and " +
+                "\"question\" (Bengali task -> Bengali in Bengali " +
+                "script; Hindi -> Devanagari; English -> English). " +
+                "Keep them to one short spoken sentence."
+    }
+}
