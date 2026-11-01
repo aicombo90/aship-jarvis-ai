@@ -71,11 +71,33 @@
             android:layout_height="wrap_content"
             android:text="Accessibility চালু করো" />
 
+        <!-- v35: Restricted Settings madad — "App was denied
+             access" aane par ki karte hain, dhap-dar-dhap. -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Accessibility চালু করতে গিয়ে ‘App was denied access’ লেখা এলে: ১) নিচের বোতামে App info খুলুন, ২) উপরে ডানদিকের ⋮ মেনু চাপুন, ৩) ‘Allow restricted settings’ চালু করুন, ৪) তারপর ফিরে এসে Accessibility ON করুন।"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/appInfoButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="App info খুলুন" />
+
         <Button
             android:id="@+id/overlayPermissionButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
+
+        <Button
+            android:id="@+id/otherBrandButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="অন্য ফোনের সেটিং দেখুন" />
 
     </LinearLayout>
 
