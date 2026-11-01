@@ -1059,6 +1059,117 @@ class CommandEngine(
     }
 
     /**
+     * v38: pakka scroll hukm — "স্ক্রল ডাউন করো" / "নিচে
+     * নামাও" / "স্ক্রল আপ" / "ऊपर करो" / "scroll down"
+     * jaise seedhe hukm agent ke paas kabhi nahi jayenge:
+     * [deterministicOffCommand] ki tarah pakke offline
+     * raaste se Accessibility service screen ke beech me
+     * ~60% unchai ka swipe karti hai. Pehchan KACHHE
+     * (raw) text par hai — teeno scripton ke pakke sanket
+     * companion wali suchiyon me hain. Disha ke sanket
+     * dono taraf ke mil jayein to uljha hua hukm hai —
+     * null, aam raasta faisla karega. Scroll ka koi
+     * sanket hi na ho to bhi null. Service band ho to
+     * imaandaar jawab user ki bhasha me — jhootha "ho
+     * gaya" kabhi nahi. Natija sync chahiye, isliye
+     * mobile data wala hi bandha latch intezaar.
+     */
+    fun deterministicScrollCommand(rawText: String): CommandResult? {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return null
+        val up = SCROLL_UP_MARKERS.any { raw.contains(it) }
+        val down = SCROLL_DOWN_MARKERS.any { raw.contains(it) }
+        val scrollDown: Boolean = when {
+            up && down -> return null
+            up -> false
+            down -> true
+            else -> {
+                // Nanga scroll shabd ("স্ক্রল করো" /
+                // "scroll karo") — chhota hukm-jaisa vakya
+                // ho ya "karo/করো" wali kriya saath ho to
+                // disha NEECHE (aam iraada wahi hota hai).
+                // Lamba vakya bina kriya ke scroll par
+                // sawaal/baatchit ho sakta hai — aam
+                // raaste par chhod do.
+                if (!SCROLL_WORD_MARKERS.any { raw.contains(it) }) return null
+                val tokenCount = raw.split(Regex("""\s+""")).size
+                val hasDoVerb = SCROLL_DO_VERBS.any { raw.contains(it) }
+                if (tokenCount > 4 && !hasDoVerb) return null
+                true
+            }
+        }
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(scrollNeedsAccessibilityReply(lang), true)
+        }
+        val latch = CountDownLatch(1)
+        var swiped = false
+        try {
+            JarvisAccessibilityService.scrollCommand(context, scrollDown) { done ->
+                swiped = done
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            saveScrollDiag(rawText, scrollDown, false)
+            return CommandResult(scrollFailedReply(lang), true)
+        }
+        val completed = try {
+            latch.await(SCROLL_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        val done = completed && swiped
+        saveScrollDiag(rawText, scrollDown, done)
+        return if (done) {
+            CommandResult(scrollDoneReply(lang), true)
+        } else {
+            CommandResult(scrollFailedReply(lang), true)
+        }
+    }
+
+    /** v38: scroll ho jane ki chhoti si pushti — user ki bhasha me. */
+    private fun scrollDoneReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "স্ক্রল করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "स्क्रॉल कर दिया।"
+        PlayIntent.SpokenLang.ENGLISH -> "Scrolled."
+    }
+
+    /** v38: swipe na ho paye to sachha jawab — user ki bhasha me. */
+    private fun scrollFailedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "স্ক্রল করতে পারলাম না।"
+        PlayIntent.SpokenLang.HINDI -> "स्क्रॉल नहीं हो पाया।"
+        PlayIntent.SpokenLang.ENGLISH -> "Couldn't scroll."
+    }
+
+    /** v38: Accessibility band ho to wahi bolo — user ki bhasha me. */
+    private fun scrollNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রল করতে Accessibility লাগবে — অ্যাপ খুলে চালু করে নাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रॉल करने के लिए पहले ऐप खोलकर Accessibility ऑन कर लो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Scrolling needs Accessibility — please open the app and turn it on."
+        }
+
+    /** v38: scroll koshish ki report jarvis_diag me — suna hua hukm, disha, natija. */
+    private fun saveScrollDiag(rawText: String, down: Boolean, ok: Boolean) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_scroll_command",
+                    (if (down) "down" else "up") + ": " +
+                        rawText.trim().take(40) +
+                        " -> " + (if (ok) "OK" else "FAIL")
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
      * v25: agent ke auzaar (AgentTools) ke liye seedha
      * app-kholna. Raasta wahi pakka hai jo "kholo" command
      * leta hai — pehle fixed list, phir launcher ke labels
@@ -1246,6 +1357,35 @@ class CommandEngine(
 
         /** v17: Accessibility toggle ke natije ka adhiktam intezaar. */
         const val DATA_COMMAND_WAIT_MS = 4_000L
+
+        /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). */
+        const val SCROLL_COMMAND_WAIT_MS = 2_500L
+
+        /** v38: scroll-down ke pakke sanket — kachhe text par contains milaane ke liye. */
+        val SCROLL_DOWN_MARKERS = listOf(
+            "scroll down", "স্ক্রল ডাউন", "স্ক্রোল ডাউন", "স্ক্রল ডাউন",
+            "स्क्रॉल डाउन", "स्क्रोल डाउन",
+            "নিচে নামাও", "নিচে নামা", "নিচে যাও", "নিচে করো", "নিচে কর",
+            "नीचे करो", "नीचे कर", "neeche karo", "neeche kar", "niche karo"
+        )
+
+        /** v38: scroll-up ke pakke sanket. */
+        val SCROLL_UP_MARKERS = listOf(
+            "scroll up", "স্ক্রল আপ", "স্ক্রোল আপ", "স্ক্রল আপ",
+            "स्क्रॉल अप", "स्क्रोल अप",
+            "উপরে তোলো", "উপরে তোল", "উপরে ওঠো", "উপরে ওঠ", "উপরে করো",
+            "ऊपर करो", "ऊपर कर", "upar karo", "upore tolo"
+        )
+
+        /** v38: nanga scroll shabd — disha ka sanket na mile to neeche wala iraada. */
+        val SCROLL_WORD_MARKERS = listOf(
+            "scroll", "স্ক্রল", "স্ক্রোল", "স্ক্রল", "स्क्रॉल", "स्क्रोल"
+        )
+
+        /** v38: nange scroll shabd ke saath hukm wali kriya hai kya. */
+        val SCROLL_DO_VERBS = listOf(
+            "করো", "কর", "करो", "कर", "karo", "koro", "do"
+        )
 
         /**
          * v1.5: casual boli ke bhare shabd (sirf poore token ki
