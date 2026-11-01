@@ -30,6 +30,7 @@ import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
+import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.update.UpdateChecker
@@ -707,6 +708,19 @@ class MainActivity : Activity() {
             speaker.speak(scrollResult.responseText)
             return
         }
+        // v40: pakka SCREENSHOT hukm bhi agent se pehle
+        // pakke offline raaste se (scroll wala hi niyam).
+        // Capture ka bandha intezaar MAIN thread par NAHI
+        // ho sakta — tasveer ka jawab service ke
+        // main-executor se aata hai, main thread usi
+        // latch par atka to jawab milega hi nahi. Isliye
+        // koshish background executor par chalti hai
+        // (runDirectScreenshot dekho), natija mainHandler
+        // se wapas aakar bola/dikhaya jata hai.
+        if (commandEngine.isScreenshotCommand(text)) {
+            runDirectScreenshot(text)
+            return
+        }
         // v36: play-iraade wala sanyojit hukm sabse pehle —
         // "ইউটিউব খুলে কিশোর কুমারের গান চালাও" ko offline
         // app-list sirf "youtube" dekhkar nigal jati thi
@@ -1049,6 +1063,33 @@ class MainActivity : Activity() {
                 politeFailureSpokenThisTurn = false
                 responseText.text = "Maya: $line"
                 speaker.speak(line)
+            }
+        }
+    }
+
+    /**
+     * v40: bina mastishk ke seedha screenshot — hukm
+     * CommandEngine.runScreenshotCommand se, apne
+     * background executor par (capture ka latch UI ko
+     * nahi rokta; woh raasta main thread par waise bhi
+     * chalna hi nahi chahiye — jawab service ke
+     * main-executor se aata hai). Natija hukm ki bhasha
+     * me aur hamesha sachha — gallery me bach gaya /
+     * screen surakshit / service band.
+     */
+    private fun runDirectScreenshot(text: String) {
+        responseText.text = "Maya: screenshot le rahi hoon..."
+        background.execute {
+            val result = try {
+                commandEngine.runScreenshotCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("স্ক্রিনশট নিতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: ${result.responseText}"
+                speaker.speak(result.responseText)
             }
         }
     }
