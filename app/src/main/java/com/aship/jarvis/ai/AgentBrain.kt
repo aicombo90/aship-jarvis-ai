@@ -64,6 +64,16 @@ import java.util.concurrent.Executors
  * (poora / pushti par ruka / fail, kahaan tak
  * pahuncha) auzaar ke text se hi aati hai.
  *
+ * v40: ek aur auzaar — share_screenshot (asal chal
+ * [AgentTools] me): is pal ki screen tasveer pakadkar
+ * target app (default WhatsApp) ki share screen
+ * kholna — tasveer chipki hui, par bhejna user ke
+ * haath me rehta hai; instruction me ye imaandari
+ * saaf likhi hai. Gallery-trash khaali karne wale
+ * kaam ke liye bhi niyam juda hai: hamesha
+ * screen_task, user ke apne shabdon me (app apna
+ * suraksha playbook khud jodta hai).
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -281,6 +291,9 @@ object AgentBrain {
             // v37: screen_task ka kaam user ke apne shabd
             // hain — report me kata hua roop kaafi hai.
             "screen_task" -> args.optString("task").take(20)
+            // v40: share_screenshot ka nishana app — report
+            // me sirf app ka naam (koi sampark/tasveer nahi).
+            "share_screenshot" -> args.optString("app")
             // v31 PRIVACY: yaad wale auzaaron ke args —
             // khud yaad rakhi baatein/match — report me
             // KABHI nahi; sirf auzaar ka naam dikhega.
@@ -458,8 +471,25 @@ object AgentBrain {
             "summary, relay that as your final answer. NEVER " +
             "claim a message or location was sent unless the " +
             "result says the task COMPLETED.\n" +
+            "- share_screenshot, args {\"app\": \"<optional target " +
+            "app name — WhatsApp by default>\"} — captures the " +
+            "CURRENT screen and opens that app's share screen " +
+            "with the screenshot attached. The user still picks " +
+            "the contact/chat and taps Send themselves — the " +
+            "image is NEVER sent by itself; never say it was " +
+            "sent. Use it when the user asks to send/share a " +
+            "screenshot (e.g. 'screenshot ta amar WhatsApp e " +
+            "pathao'): first reach the requested page or state " +
+            "(open_app / screen_task as needed), THEN call " +
+            "share_screenshot as the last step, with the final " +
+            "screen visible.\n" +
             "\n" +
             "RULES:\n" +
+            "- Emptying a gallery Trash / Recently deleted folder: " +
+            "ALWAYS route it to screen_task with the task in the " +
+            "user's own words — the app attaches its own " +
+            "permanent-deletion safety playbook to such tasks " +
+            "itself; never try to do it with other tools.\n" +
             "- A question that needs no phone action: answer it directly " +
             "with one final reply.\n" +
             "- A task needing phone actions: request the tools step by " +
