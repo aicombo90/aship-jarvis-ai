@@ -55,6 +55,17 @@ import java.util.concurrent.TimeUnit
  * aur imaandaari se kehta hai ki ye screen surakshit
  * hai, dikh nahi raha — uske khilaaf zor nahi chalta.
  *
+ * v40: PLAYBOOK jud sakta hai — kuchh kaamon ke
+ * liye bandhi hidayat (is samay gallery-trash khaali
+ * karna, [TrashPlaybook]) jo har kadam ke sandesh me
+ * kaam ke neeche rehti hai. Uski ginati-pushti alag
+ * pehchani jati hai: playbook wala ask_user sawal
+ * pakapaki chetaavni ke chinh rakhe aur user saaf
+ * haan kahe, to wohi is daud ki delete-pushti hai —
+ * delete wale tap par dwaar dobara nahi khulta.
+ * Bina us pushti ke pushti-dwaar bilkul pehle jaisa
+ * hi sakht hai.
+ *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
  * khatm, kaam wahin imaandaari se rukta hai.
@@ -104,8 +115,29 @@ class ScreenAgent(private val context: Context) {
      */
     private var visionUsed = 0
 
-    /** Ek kaam chalao — bandha (sync) call, background thread se hi bulana. */
-    fun runTask(taskRaw: String): Outcome {
+    /**
+     * v40: is daud ke saath juda bandha playbook (is
+     * samay sirf gallery-trash wala, [TrashPlaybook]) —
+     * ho to har kadam ke sandesh me judta hai. Aur
+     * [deletePreConfirmed]: user ne playbook wali
+     * ginati-pushti (ask_user) me pakapaki chetaavni
+     * sunkar SAAF haan kahi ho to is daud ke delete
+     * wale tap par [checkConfirmation] dobara nahi
+     * poochti — wohi pushti is kaam ki delete-pushti
+     * hai. Dono khet daud-bhar ke hain (ScreenAgent
+     * ek kaam = ek object); [runTask] shuru me saaf
+     * karta hai.
+     */
+    private var playbookText: String? = null
+    private var deletePreConfirmed = false
+
+    /**
+     * Ek kaam chalao — bandha (sync) call, background
+     * thread se hi bulana. [playbook] ho to uski
+     * bandhi hidayat har kadam ke sandesh me judti
+     * hai; kaam ka apna text bilkul nahi badalta.
+     */
+    fun runTask(taskRaw: String, playbook: String? = null): Outcome {
         val task = taskRaw.trim()
         if (task.isEmpty()) {
             return Outcome(false, "No task text was given.")
@@ -139,6 +171,9 @@ class ScreenAgent(private val context: Context) {
         var rounds = 0
         // v39: tasveer-kadam ki ginati is daud ke liye saaf.
         visionUsed = 0
+        // v40: playbook + uski delete-pushti bhi is daud ke liye saaf.
+        playbookText = playbook?.trim()?.takeIf { it.isNotEmpty() }
+        deletePreConfirmed = false
         var visionExhaustedNoted = false
         while (rounds < MAX_ROUNDS) {
             rounds++
@@ -341,6 +376,33 @@ class ScreenAgent(private val context: Context) {
                                 "otherwise fail honestly."
                         }
                     )
+                    // v40: playbook wali delete-pushti ki
+                    // pehchan — sawal me pakapaki chetaavni
+                    // ke pakke chinh hon, playbook chalu
+                    // ho, aur jawab SAAF haan ho, to wohi
+                    // jawab is daud ki delete-pushti hai:
+                    // aage ke delete wale tap par
+                    // checkConfirmation dobara nahi
+                    // poochegi. Chinh-bina sawal ki haan
+                    // is khaas chhoot ko NAHI deti — tab
+                    // aam pushti-dwaar hi chalega.
+                    if (answer != null && !deletePreConfirmed &&
+                        playbookText != null && isYes(answer) &&
+                        PERMANENCE_MARKERS.any {
+                            action.question.lowercase(Locale.ROOT).contains(it)
+                        }
+                    ) {
+                        deletePreConfirmed = true
+                        history.add(
+                            "System note: the user has CONFIRMED " +
+                                "permanent deletion after hearing " +
+                                "the item count and the permanence " +
+                                "warning (the playbook confirmation). " +
+                                "Delete taps in this task are " +
+                                "pre-confirmed — do NOT ask again; " +
+                                "proceed with the deletion."
+                        )
+                    }
                 }
                 is ScreenAction.Wait -> {
                     val ms = action.ms.coerceIn(300, MAX_WAIT_MS)
@@ -512,6 +574,13 @@ class ScreenAgent(private val context: Context) {
         deadline: Long
     ): Outcome? {
         if (kind == null) return null
+        // v40: playbook wali ginati-pushti pehle hi mil
+        // chuki ho to DELETE tap par dobara mat poochho —
+        // wohi pushti is kaam ki delete-pushti thi
+        // (ginati + pakapaki chetaavni ke saath li gayi).
+        // Pushti na mili ho to ye raasta band rehta hai
+        // aur neeche wala aam dwaar hi chalega.
+        if (kind == SensitiveKind.DELETE && deletePreConfirmed) return null
         if (targetKey.isNotEmpty() && targetKey in confirmedTargets) {
             return null
         }
@@ -757,13 +826,28 @@ class ScreenAgent(private val context: Context) {
     }
 
     /** Ek kadam ke liye mastishk ko bheja jaane wala poora sandesh. */
+    /**
+     * v40: is daud ka playbook ho to use kadam wale
+     * sandesh me kaam ke theek neeche jodo — mastishk
+     * use har kadam par dobara padhta hai, isliye
+     * suraksha wali chaal (ginati, chetaavni, pushti)
+     * lambe kaam me beech me nahi ghulti.
+     */
+    private fun appendPlaybook(out: StringBuilder) {
+        val text = playbookText ?: return
+        out.append("\nPLAYBOOK for this task (follow it exactly):\n")
+        out.append(text).append("\n")
+    }
+
     private fun buildStepPrompt(
         task: String,
         history: List<String>,
         snapshot: JarvisAccessibilityService.ScreenSnapshot
     ): String {
         val out = StringBuilder()
-        out.append("Task (in the user's own words): ").append(task).append("\n\n")
+        out.append("Task (in the user's own words): ").append(task).append("\n")
+        appendPlaybook(out)
+        out.append("\n")
         out.append("Actions already taken:\n")
         if (history.isEmpty()) {
             out.append("(none yet)\n")
@@ -833,7 +917,9 @@ class ScreenAgent(private val context: Context) {
         marked: List<JarvisAccessibilityService.ScreenElement>
     ): String {
         val out = StringBuilder()
-        out.append("Task (in the user's own words): ").append(task).append("\n\n")
+        out.append("Task (in the user's own words): ").append(task).append("\n")
+        appendPlaybook(out)
+        out.append("\n")
         out.append("Actions already taken:\n")
         if (history.isEmpty()) {
             out.append("(none yet)\n")
@@ -1100,6 +1186,20 @@ class ScreenAgent(private val context: Context) {
         private val PAY_WORD = Regex("""(^|[^a-z])pay([^a-z]|$)""")
         private val CONFIRM_WORDS = listOf(
             "confirm", "কনফার্ম", "নিশ্চিত", "पुष्टि", "कन्फ़र्म"
+        )
+
+        /**
+         * v40: pakapaki (permanent) chetaavni ke pakke
+         * chinh — playbook wala ask_user sawal inme se
+         * koi chinh rakhe aur jawab saaf haan ho, tabhi
+         * woh jawab is daud ki delete-pushti mani jati
+         * hai. [TrashPlaybook] apne sawal ke shabdon me
+         * yehi chinh rakhne ko kehta hai.
+         */
+        private val PERMANENCE_MARKERS = listOf(
+            "পাকাপাকি", "ফেরানো যাবে না",
+            "permanent",
+            "हमेशा के लिए"
         )
 
         private val NO_PHRASES = listOf(
