@@ -25,6 +25,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
@@ -103,6 +104,54 @@ class MainActivity : Activity() {
     private lateinit var youtubeTapText: TextView
     private lateinit var agentRunText: TextView
     private lateinit var listenLangButton: Button
+
+    // v37: screen-agent (screen_task) ki report line —
+    // "jarvis_diag" ki last_screen_run report yahan dikhti hai.
+    private lateinit var screenRunText: TextView
+
+    // v37: ye screen is pal saamne hai kya — screen-agent
+    // ke sawal par khud sunna shuru karna ho to yahi jhanda
+    // faisla karta hai (peeche gayi screen mic nahi pakdegi).
+    private var activityInForeground: Boolean = false
+
+    /**
+     * v37: screen-agent ke sawalon ki is screen ki
+     * mezbaani ([ScreenConfirm.Host]) — sawal aane par
+     * use dikhao + bolo; screen saamne ho aur mic ki
+     * ijazat ho to boli khatm hote hi sunna khud shuru
+     * kar do (jawab processCommand se hokar pul tak
+     * jayega). Peeche gayi screen par sirf boli/screen
+     * wala hissa chalega — jawab wahan se wake service
+     * ya likhkar bhi aa sakta hai.
+     */
+    private val screenConfirmHost = ScreenConfirm.Host { question ->
+        mainHandler.post {
+            if (isFinishing || isDestroyed) return@post
+            responseText.text = "Maya: $question"
+            speaker.speak(question)
+            if (activityInForeground && !listening &&
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                // Sunna boli khatm hone ke BAAD shuru ho —
+                // warna startListening wala speaker.stop()
+                // sawal ki boli hi kaat dega. Ek-baar wala
+                // callback hai: purana (is screen par aam
+                // taur par null) khatm hote hi wapas laga do.
+                val previous = speaker.onUtteranceFinished
+                speaker.onUtteranceFinished = {
+                    speaker.onUtteranceFinished = previous
+                    mainHandler.post {
+                        if (!isFinishing && !isDestroyed &&
+                            ScreenConfirm.hasPending() && !listening
+                        ) {
+                            startListening()
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // v35: shune wali bhasha ki chhoti si label (button ke
     // upar) — galat setting ek nazar me dikh jaye.
@@ -227,6 +276,7 @@ class MainActivity : Activity() {
         panelScanText = findViewById(R.id.panelScanText)
         youtubeTapText = findViewById(R.id.youtubeTapText)
         agentRunText = findViewById(R.id.agentRunText)
+        screenRunText = findViewById(R.id.screenRunText)
         listenLangLabel = findViewById(R.id.listenLangLabel)
         listenLangButton = findViewById(R.id.listenLangButton)
         listenLangButton.setOnClickListener {
@@ -255,6 +305,9 @@ class MainActivity : Activity() {
             updateStatus()
             Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
         }
+        // v37: screen-agent ke sawalon ki mezbaani is
+        // screen ke naam bandho (onDestroy me hat ti hai).
+        ScreenConfirm.registerActivityHost(screenConfirmHost)
         refreshGeminiKeyUi()
         refreshDiagLines()
 
@@ -271,6 +324,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // v37: screen saamne hai — screen-agent ke sawal
+        // par khud sunna shuru karne ka jhanda.
+        activityInForeground = true
         refreshDiagLines()
         // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
@@ -278,6 +334,8 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        // v37: screen peeche gayi — khud sunna shuru nahi hoga.
+        activityInForeground = false
         mainHandler.removeCallbacks(wakeRefreshRunnable)
         // Screen peeche ja rahi hai: mic wake service ka tha, to
         // wapas kar do — user dusri app me jaakar 'Jarvis' bolega
@@ -299,6 +357,8 @@ class MainActivity : Activity() {
         // ruka rahega.
         resumeWakeService()
         unregisterUpdateReceiver()
+        // v37: screen-agent wali mezbaani bhi hatao.
+        ScreenConfirm.unregisterActivityHost(screenConfirmHost)
         engine?.destroy()
         engine = null
         speaker.shutdown()
@@ -622,6 +682,19 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     private fun processCommand(text: String) {
+        // v37: screen-agent ka sawal latka ho (send ki
+        // pushti / ask_user) to ye baat USI ka jawab hai —
+        // naya command nahi. Jawab pul ko saunp do; agent
+        // apni daud wahi se aage badhayega ya imaandaari
+        // se rok dega. (Likhkar bheja gaya jawab bhi yahi
+        // se aata hai — send button bhi processCommand hi
+        // bulata hai.)
+        if (ScreenConfirm.deliverAnswer(text)) {
+            recognizedText.text = "Aapne kaha: $text"
+            responseText.text =
+                "Maya: jawab mil gaya — screen wala kaam aage badh raha hai..."
+            return
+        }
         recognizedText.text = "Aapne kaha: $text"
         // v36: play-iraade wala sanyojit hukm sabse pehle —
         // "ইউটিউব খুলে কিশোর কুমারের গান চালাও" ko offline
@@ -1060,8 +1133,37 @@ class MainActivity : Activity() {
                     "Agent chaal (aakhiri): $run"
                 }
             }
+            // v37: screen-agent ki report bhi yahin se —
+            // ScreenAgent "last_screen_run" bandhta hai
+            // (<kaam> — <natija> (<n> steps) wale roop me).
+            if (::screenRunText.isInitialized) {
+                val screen = diag.getString("last_screen_run", null)
+                screenRunText.text = if (screen.isNullOrBlank()) {
+                    "Screen chaal (aakhiri): abhi tak koi koshish nahi"
+                } else {
+                    "Screen chaal (aakhiri): $screen"
+                }
+            }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
+        }
+        // v37: screen-agent ka sawal latka ho to use is
+        // screen par rakho — user dusri app se wapas aakar
+        // jawab yahin bolkar ya likhkar de sakta hai (dono
+        // processCommand se hokar pul tak jate hain).
+        try {
+            if (::responseText.isInitialized) {
+                val question = ScreenConfirm.pendingQuestion()
+                if (question != null &&
+                    !responseText.text.toString().contains(question)
+                ) {
+                    responseText.text = "Maya: $question\n" +
+                        "(jawab yahin boliye ya likhiye — screen wala " +
+                        "kaam intezaar kar raha hai)"
+                }
+            }
+        } catch (t: Throwable) {
+            // Sawal dikhana bonus hai — asal kaam isse nahi rukta.
         }
         refreshListenLangButton()
         // v24: online koshish ki report bhi isi ke saath taza
