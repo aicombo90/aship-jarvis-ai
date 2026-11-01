@@ -123,6 +123,14 @@ import java.util.concurrent.TimeUnit
  * jagah na mile, jawab kharab aaye — har haal me
  * imaandaar FAILED; andaza lagakar sankhya kabhi
  * nahi banti.
+ *
+ * v37: ek bada auzaar — screen_task. Dusri app ke
+ * andar kai kadam wala kaam (WhatsApp me live
+ * location bhejna, CapCut me gallery video uthana)
+ * [ScreenAgent] chalata hai — screen padhna, tap /
+ * scroll / type karna aur send jaise kadam par user
+ * ki pushti lena usi ke andar hai. Natija yahan bas
+ * jyon-ka-tyon mastishk ko saunpa jata hai.
  */
 class AgentTools(
     private val context: Context,
@@ -172,14 +180,35 @@ class AgentTools(
             args.optString("city").trim(),
             args.optString("when").trim().lowercase(Locale.ROOT)
         )
+        "screen_task" -> screenTask(args.optString("task").trim())
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
                 "calculate, get_battery, get_network, set_timer, set_alarm, " +
                 "call_person, whatsapp_message, remember_fact, " +
-                "recall_facts, forget_fact, get_weather."
+                "recall_facts, forget_fact, get_weather, screen_task."
         )
+    }
+
+    /**
+     * v37: screen wala auzaar — dusri app ke andar kai
+     * kadam wala kaam [ScreenAgent] chalata hai: screen
+     * padhkar mastishk ke faisle par tap/scroll/type,
+     * send jaise kadam par user ki pushti ke saath.
+     * Natija hamesha sachha hai — poora hua, pushti na
+     * milne par ruka, ya fail (kahaan tak pahuncha,
+     * uske saath). Ye auzaar bandha (sync) hai aur
+     * ScreenAgent ki apni kul seema (~150 s) tak chal
+     * sakta hai — bulana hamesha background thread se
+     * hi hota hai (AgentBrain ka executor).
+     */
+    private fun screenTask(task: String): ToolResult {
+        if (task.isEmpty()) {
+            return ToolResult(false, "No task text was given.")
+        }
+        val outcome = ScreenAgent(context).runTask(task)
+        return ToolResult(outcome.ok, outcome.text)
     }
 
     /**
