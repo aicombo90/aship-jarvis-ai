@@ -61,10 +61,13 @@ class SamsungSetupActivity : WakeSetupActivity() {
      * Dhap 2: battery wali mukhya screen kholo — wahan se
      * Background usage limits → Never sleeping apps tak jaana
      * hai. Kuch One UI par ye seedha na khule to aam Settings.
+     * (Note: is screen ka action Settings class me public
+     * constant nahi hai — isliye seedha action string;
+     * na mile to catch me aam Settings khulega.)
      */
     private fun openPowerUsageSummary() {
         try {
-            startActivity(Intent(Settings.ACTION_POWER_USAGE_SUMMARY))
+            startActivity(Intent("android.settings.POWER_USAGE_SUMMARY"))
         } catch (e: Exception) {
             try {
                 startActivity(Intent(Settings.ACTION_SETTINGS))
