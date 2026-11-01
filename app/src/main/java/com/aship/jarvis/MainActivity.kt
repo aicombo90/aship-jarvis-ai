@@ -29,6 +29,7 @@ import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
+import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.update.UpdateChecker
 import com.aship.jarvis.update.UpdateDownloader
@@ -44,6 +45,7 @@ import com.aship.jarvis.voice.SystemSpeechEngine
 import com.aship.jarvis.voice.VoskSpeechEngine
 import java.util.Locale
 import java.util.concurrent.Executors
+import org.json.JSONObject
 
 /**
  * ASHIP JARVIS AI — main screen (Phase 1 + Phase 2).
@@ -63,6 +65,13 @@ import java.util.concurrent.Executors
  * hi kharab ho to Vosk par girta hai, aur offline engine
  * jo baat na samjhe woh Gemini agent ke paas jati hai —
  * "samajh nahi aaya" par rukna band.
+ *
+ * v36: play-iraade wala sanyojit hukm ("YouTube khulo
+ * aur gaana chalao") routing ki sabse pehli seedhi hai
+ * (PlayIntent) — agent uplabdh ho to agent, warna seedha
+ * youtube_play auzaar; aur saare model 429 par marein to
+ * aam haar ki jagah imaandaar "online seema khatm" wala
+ * jawab, user ki bhasha me.
  */
 class MainActivity : Activity() {
 
@@ -614,6 +623,20 @@ class MainActivity : Activity() {
 
     private fun processCommand(text: String) {
         recognizedText.text = "Aapne kaha: $text"
+        // v36: play-iraade wala sanyojit hukm sabse pehle —
+        // "ইউটিউব খুলে কিশোর কুমারের গান চালাও" ko offline
+        // app-list sirf "youtube" dekhkar nigal jati thi
+        // (sirf app khulta tha, gaana kabhi nahi). Play
+        // kriya + media/YouTube ka zikr ho aur query bachi
+        // ho to kaam play wala hi hai — neeche wala
+        // handlePlayRequest dekho. Query khaali ho ("YouTube
+        // chalao") to aam raasta hi chalega (sirf app
+        // khulega, pehle jaisa).
+        val playQuery = PlayIntent.extractPlayQuery(text)
+        if (!playQuery.isNullOrEmpty()) {
+            handlePlayRequest(text, playQuery)
+            return
+        }
         // v25: online brain uplabdh ho (mode Offline na ho,
         // key set ho, net chalu ho) to pehle AGENT — app ke
         // andar EK hi mastishk (user ka pakka design):
@@ -686,6 +709,20 @@ class MainActivity : Activity() {
         if (!agentAlreadyTried && geminiBrainAllowed()) {
             responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
             askAgentBrain(text)
+            return
+        }
+        // v36: agent is baat par gaya tha aur saare model
+        // 429 (quota) par mare — to aam "nahi kar sakta"
+        // wala jawab jhooth hoga; sach ye hai ki online
+        // seema khatm hai. Wahi bolo, user ki bhasha me.
+        // (agentAlreadyTried ki shart isliye: kataar ka
+        // natija ISI baat ki taaza daud ka hai, purani
+        // band report ka nahi.)
+        if (agentAlreadyTried && GeminiBrain.lastChainWasQuota(this)) {
+            val line = PlayIntent.quotaReply(PlayIntent.requestLanguage(text))
+            politeFailureSpokenThisTurn = true
+            responseText.text = "Maya: $line"
+            speaker.speak(line)
             return
         }
         // v35: offline / bina key ki vinamr haar — par ek turn
@@ -846,15 +883,29 @@ class MainActivity : Activity() {
      * (v21 wala askGeminiBrain/chat raasta ab nahi hai —
      * agent uski jagah le chuka hai.)
      */
-    private fun askAgentBrain(text: String) {
+    /**
+     * v36: [onAgentUnavailable] — agent ko round 1 par koi
+     * model hi na mile (callback null) to aam haal me purana
+     * offline raasta chalta hai; play wale hukm ke liye
+     * bulane wala apna seedha youtube_play wala raasta deta
+     * hai, taaki gaana Gemini ke jeene par na atke.
+     */
+    private fun askAgentBrain(
+        text: String,
+        onAgentUnavailable: (() -> Unit)? = null
+    ) {
         val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
         AgentBrain.run(this, geminiHistory.toList(), text, tools::execute) { reply ->
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 if (reply == null) {
-                    // v35: agent is baat par ja chuka hai — offline
-                    // raasta use dobara nahi bulayega.
-                    processCommandOffline(text, agentAlreadyTried = true)
+                    if (onAgentUnavailable != null) {
+                        onAgentUnavailable()
+                    } else {
+                        // v35: agent is baat par ja chuka hai — offline
+                        // raasta use dobara nahi bulayega.
+                        processCommandOffline(text, agentAlreadyTried = true)
+                    }
                     return@post
                 }
                 geminiHistory.add("user" to text)
@@ -865,6 +916,55 @@ class MainActivity : Activity() {
                 }
                 responseText.text = "Maya: $reply"
                 speaker.speak(reply)
+            }
+        }
+    }
+
+    /**
+     * v36: play-iraade wala hukm ("ইউটিউব খুলে ... গান
+     * চালাও"). Mastishk uplabdh ho to pehle agent — woh
+     * poori baat samajhkar youtube_play auzaar khud
+     * bulayega. Agent uplabdh hi na ho (key nahi / mode
+     * Offline / net nahi) ya round 1 par mar jaye (saare
+     * model 429 samet), to seedha youtube_play auzaar —
+     * gaana bajna Gemini ke jeene par kabhi nahi atkega.
+     */
+    private fun handlePlayRequest(text: String, query: String) {
+        if (geminiBrainAllowed()) {
+            responseText.text = "Maya soch rahi hai — gaana chala rahi hai..."
+            askAgentBrain(text) { runDirectYouTubePlay(text, query) }
+            return
+        }
+        runDirectYouTubePlay(text, query)
+    }
+
+    /**
+     * v36: bina mastishk ke seedha youtube_play — v26/v33
+     * wali wahi mashinari (results kholo, pehle asli video
+     * par tap, watch page ki jaanch) AgentTools se, apne
+     * background thread par (tap ka intezaar UI ko nahi
+     * rokta). Bola jaane wala natija PlayIntent se user ki
+     * bhasha me aur hamesha sachha — chal gaya / pakka
+     * nahi / khula hi nahi.
+     */
+    private fun runDirectYouTubePlay(text: String, query: String) {
+        responseText.text = "Maya: '$query' chala rahi hoon..."
+        background.execute {
+            val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+            val result = try {
+                tools.execute("youtube_play", JSONObject().put("query", query))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            PlayIntent.saveDirectPlayDiag(this, query, result)
+            val line = PlayIntent.playOutcomeReply(
+                result, query, PlayIntent.requestLanguage(text)
+            )
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $line"
+                speaker.speak(line)
             }
         }
     }
