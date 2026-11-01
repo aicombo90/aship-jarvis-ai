@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v34: Mobile hub — background bandobosto ke liye pehle
+     apna mobile chuno. vivo aur Samsung ke battery niyam
+     alag-alag hain, isliye har ek ki apni screen hai. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ASHIP JARVIS AI"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="আপনার মোবাইল কোনটা?"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Background me Jarvis ko zinda rakhne ke bandobosto har company ke phone me alag hote hain. Apna mobile chunein:"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/vivoButton"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_marginTop="20dp"
+            android:text="vivo"
+            android:textSize="20sp" />
+
+        <Button
+            android:id="@+id/samsungButton"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_marginTop="12dp"
+            android:text="Samsung"
+            android:textSize="20sp" />
+
+    </LinearLayout>
+
+</ScrollView>
