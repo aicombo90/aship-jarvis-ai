@@ -696,6 +696,17 @@ class MainActivity : Activity() {
             return
         }
         recognizedText.text = "Aapne kaha: $text"
+        // v38: pakka scroll hukm — agent se pehle pakke
+        // offline raaste se (wake service wala hi niyam):
+        // "স্ক্রল ডাউন করো" bolte hi Accessibility service
+        // swipe karegi; mastishk ke chakkar me nahi padegi,
+        // aur likhkar bheja gaya hukm bhi yahi se jata hai.
+        commandEngine.deterministicScrollCommand(text)?.let { scrollResult ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: ${scrollResult.responseText}"
+            speaker.speak(scrollResult.responseText)
+            return
+        }
         // v36: play-iraade wala sanyojit hukm sabse pehle —
         // "ইউটিউব খুলে কিশোর কুমারের গান চালাও" ko offline
         // app-list sirf "youtube" dekhkar nigal jati thi
