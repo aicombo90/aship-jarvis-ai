@@ -293,24 +293,68 @@ object GeminiBrain {
     }
 
     /**
+     * v39: wahi agent round, par aakhiri user turn ke
+     * saath EK tasveer (base64 JPEG) bhi jaati hai —
+     * ScreenAgent ke vision kadmon ke liye (nishan-aankit
+     * Set-of-Mark tasveer). Tasveer khaali/null ho to ye
+     * [requestAgentRound] jaisa hi hai; kataar, timeout
+     * aur report ke niyam bilkul wahi (requestWithChain)।
+     * Purane bulane walon par koi asar nahi — ye sirf
+     * ek joda hua raasta hai.
+     */
+    internal fun requestAgentRoundWithImage(
+        context: Context,
+        systemInstruction: String,
+        contents: List<Pair<String, String>>,
+        imageJpegBase64: String?
+    ): String? {
+        if (imageJpegBase64.isNullOrEmpty()) {
+            return requestAgentRound(context, systemInstruction, contents)
+        }
+        val appContext = context.applicationContext
+        val key = getKey(appContext) ?: return null
+        val body = buildAgentRequestBody(
+            systemInstruction, contents, imageJpegBase64
+        ).toString()
+        return requestWithChain(appContext, key, body)
+    }
+
+    /**
      * Agent wali body: [contents] ke saare turn kram se,
      * upar di gayi system instruction. Aakar (shape) chat
      * wali body se ek hi hai — isliye [buildRequestBody]
      * bhi ab isi par bana hai.
+     *
+     * v39: [imageJpegBase64] diya gaya ho to woh tasveer
+     * AAKHIRI turn ke text ke saath ek inline_data hisse
+     * bankar judti hai — ScreenAgent har vision kadam par
+     * taazi tasveer ke saath wahi turn bhejta hai.
      */
     private fun buildAgentRequestBody(
         systemInstruction: String,
-        contents: List<Pair<String, String>>
+        contents: List<Pair<String, String>>,
+        imageJpegBase64: String? = null
     ): JSONObject {
         val turns = JSONArray()
-        for ((role, text) in contents) {
+        contents.forEachIndexed { index, (role, text) ->
+            val parts = JSONArray().put(JSONObject().put("text", text))
+            if (index == contents.lastIndex &&
+                !imageJpegBase64.isNullOrEmpty()
+            ) {
+                parts.put(
+                    JSONObject()
+                        .put(
+                            "inline_data",
+                            JSONObject()
+                                .put("mime_type", "image/jpeg")
+                                .put("data", imageJpegBase64)
+                        )
+                )
+            }
             turns.put(
                 JSONObject()
                     .put("role", role)
-                    .put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", text))
-                    )
+                    .put("parts", parts)
             )
         }
         return JSONObject()
