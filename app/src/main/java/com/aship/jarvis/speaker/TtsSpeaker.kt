@@ -154,6 +154,20 @@ class TtsSpeaker(context: Context) {
         engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
     }
 
+    /**
+     * v36: is pal engine sach me kuch bol raha hai kya —
+     * background service ka khud-ki-awaaz wala jaal
+     * (self-hearing guard) isi se chalta hai: Maya apni hi
+     * boli ("চালু করে দিয়েছি") ko hukm samajh kar phir se
+     * kaam na kar de.
+     */
+    val isSpeakingNow: Boolean
+        get() = try {
+            tts?.isSpeaking == true
+        } catch (t: Throwable) {
+            false
+        }
+
     fun stop() {
         tts?.stop()
     }
