@@ -194,6 +194,16 @@
             android:text="Agent chaal (aakhiri): abhi tak koi koshish nahi"
             android:textSize="12sp" />
 
+        <!-- v35: shune wali bhasha ek chhoti si label me bhi
+             dikhao — galat setting ek nazar me pakdi jaye. -->
+        <TextView
+            android:id="@+id/listenLangLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="শোনার ভাষা: বাংলা"
+            android:textSize="13sp" />
+
         <Button
             android:id="@+id/listenLangButton"
             android:layout_width="match_parent"
