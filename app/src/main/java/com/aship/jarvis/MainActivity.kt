@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.speech.SpeechRecognizer
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
@@ -40,6 +41,8 @@ import com.aship.jarvis.voice.SpeechEngine
 import com.aship.jarvis.voice.SpeechEngineFactory
 import com.aship.jarvis.voice.SpeechEngineListener
 import com.aship.jarvis.voice.SystemSpeechEngine
+import com.aship.jarvis.voice.VoskSpeechEngine
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -52,6 +55,14 @@ import java.util.concurrent.Executors
  * v34: background wake-word ke bandobosto is screen se
  * "Mobile" hub me chale gaye hain (vivo / Samsung screenen);
  * yahan sirf unhe kholne wala ek button hai.
+ *
+ * v35: woh button ab phone ki company khud pehchan kar
+ * seedha sahi brand screen kholta hai. Aur saamne wala
+ * sunna mazboot: system recognizer ek bhasha me na sun
+ * paye to agli bhasha khud aazmata hai (cascade), service
+ * hi kharab ho to Vosk par girta hai, aur offline engine
+ * jo baat na samjhe woh Gemini agent ke paas jati hai —
+ * "samajh nahi aaya" par rukna band.
  */
 class MainActivity : Activity() {
 
@@ -83,6 +94,24 @@ class MainActivity : Activity() {
     private lateinit var youtubeTapText: TextView
     private lateinit var agentRunText: TextView
     private lateinit var listenLangButton: Button
+
+    // v35: shune wali bhasha ki chhoti si label (button ke
+    // upar) — galat setting ek nazar me dikh jaye.
+    private lateinit var listenLangLabel: TextView
+
+    // v35: bhasha cascade ki haalat — system recognizer
+    // pehli bhasha me na sun paye to kataar ki agli bhasha
+    // khud aazmata hai: user ki pasand, phir bn-IN, phir
+    // hi-IN (dohraaye gaye hata kar). cascadeIndex batata
+    // hai ki is turn me kaunsi koshish chal rahi hai.
+    private var cascadeLanguages: List<String> = emptyList()
+    private var cascadeIndex: Int = 0
+
+    // v35: ek hi turn me "samajh nahi aaya" wala vinamr
+    // jawab awaaz se zyada se zyada ek baar — dobara ho to
+    // sirf screen par dikhega (baar-baar wahi boli user ko
+    // sabse zyada khalti thi).
+    private var politeFailureSpokenThisTurn: Boolean = false
 
     // v21 Phase 3: Gemini (online brain) section — key sirf
     // phone par rehti hai; status line kabhi key nahi dikhati.
@@ -169,12 +198,27 @@ class MainActivity : Activity() {
         // v34: Mobile hub — background/wake/battery/accessibility/
         // overlay ke saare bandobosto ab is ek button ke peeche
         // hain (vivo / Samsung ke alag-alag hisse).
+        // v35: button ab phone ki company khud pehchan kar
+        // seedha usi brand ki screen kholta hai; company na
+        // mile to purana hub (chunne wali screen) hi khulta
+        // hai. Har brand screen se hub dobara bhi khul sakta
+        // hai ("অন্য ফোনের সেটিং দেখুন").
         findViewById<Button>(R.id.mobileSettingsButton).setOnClickListener {
-            startActivity(Intent(this, MobileHubActivity::class.java))
+            val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT)
+            val target = when {
+                manufacturer.contains("vivo") ||
+                    manufacturer.contains("iqoo") ->
+                    VivoSetupActivity::class.java
+                manufacturer.contains("samsung") ->
+                    SamsungSetupActivity::class.java
+                else -> MobileHubActivity::class.java
+            }
+            startActivity(Intent(this, target))
         }
         panelScanText = findViewById(R.id.panelScanText)
         youtubeTapText = findViewById(R.id.youtubeTapText)
         agentRunText = findViewById(R.id.agentRunText)
+        listenLangLabel = findViewById(R.id.listenLangLabel)
         listenLangButton = findViewById(R.id.listenLangButton)
         listenLangButton.setOnClickListener {
             // v33: shune wali bhasha ghumao — Bangla -> Hindi -> English.
@@ -334,10 +378,40 @@ class MainActivity : Activity() {
             // v1.5 wala atkav tha — isliye mic yahin se wake
             // service ko wapas kar do.
             resumeWakeService()
+            // v35: jeetne wali bhasha ke saath suna hua jarvis_diag
+            // me likho — maidan ki report ke liye.
+            logForegroundHeard(text)
             processCommand(text)
         }
 
         override fun onError(message: String) {
+            val sys = engine as? SystemSpeechEngine
+            if (sys != null) {
+                // v35: kuch samajh nahi aaya (no match / khaali
+                // result / chuppi khatm) — kataar ki agli bhasha
+                // khud aazmao, user ko phir tap na karna pade.
+                // (Ye pehle isliye: tez aaya NO_MATCH bhi cascade
+                // hi deserve karta hai, Vosk-fail wala raasta nahi.)
+                if ((sys.lastErrorCode == SpeechRecognizer.ERROR_NO_MATCH ||
+                        sys.lastErrorCode == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) &&
+                    advanceCascade()
+                ) {
+                    return
+                }
+                // v35: recognizer SERVICE hi kharab hai ya sunna
+                // shuru hote hi fail ho gaya (OriginOS par aksar
+                // hota hai) — to is session ke liye Vosk offline
+                // model par gir jao, haar karke rukna nahi.
+                if ((sys.lastErrorCode == SpeechRecognizer.ERROR_CLIENT ||
+                        sys.lastErrorWasImmediate) &&
+                    !systemStartFallbackUsed &&
+                    prefs.mode != JarvisMode.OFFLINE &&
+                    modelManager.isModelReady(ModelLanguage.HINDI)
+                ) {
+                    startVoskFallback()
+                    return
+                }
+            }
             // System recognizer sunna shuru hi nahi kar paya
             // (unavailable / mic start error) aur mode AUTO/ONLINE
             // hai, to ek baar Vosk engine par gir jao aur phir se
@@ -348,14 +422,7 @@ class MainActivity : Activity() {
                 prefs.mode != JarvisMode.OFFLINE &&
                 modelManager.isModelReady(ModelLanguage.HINDI)
             ) {
-                systemStartFallbackUsed = true
-                engine?.destroy()
-                engine = SpeechEngineFactory.createVoskOrSystem(
-                    this@MainActivity, modelManager
-                )
-                engine?.listener = engineListener
-                updateStatus()
-                startListening()
+                startVoskFallback()
                 return
             }
             // Error ke saath session khatm — mic wake service ko
@@ -363,6 +430,84 @@ class MainActivity : Activity() {
             // shuru hote hi khud pause bhej dega.)
             resumeWakeService()
             statusText.text = message
+        }
+    }
+
+    /**
+     * v35: system recognizer is session ke kaam ka na ho to
+     * Vosk (Hindi offline) par gir kar sunna phir shuru karo.
+     * Vyavhaar purana (v1.3 wala) hi hai — yahan sirf ek
+     * jagah bandha hai taaki do raaste (turant-fail aur
+     * start-fail) ek hi kaam karein. Ek session me ek hi
+     * baar hota hai ([systemStartFallbackUsed]).
+     */
+    private fun startVoskFallback() {
+        systemStartFallbackUsed = true
+        // Don't let Jarvis hear its own voice (purana startListening wala hi dhyaan).
+        speaker.stop()
+        engine?.destroy()
+        engine = SpeechEngineFactory.createVoskOrSystem(
+            this@MainActivity, modelManager
+        )
+        engine?.listener = engineListener
+        updateStatus()
+        // Naya engine = nayi kataar; phir seedha sunna shuru.
+        // (startListening() nahi bulate — woh user ke naye
+        // turn wala reset hai, ye usi turn ka badlav hai.)
+        resetCascade()
+        politeFailureSpokenThisTurn = false
+        engineStartedOk = false
+        engine?.startListening()
+    }
+
+    /** v35: cascade ki kataar — pasand pehle, phir bn-IN, phir hi-IN (dohraaye bina). */
+    private fun resetCascade() {
+        cascadeLanguages = listOf(prefs.listenLanguage, "bn-IN", "hi-IN").distinct()
+        cascadeIndex = 0
+        (engine as? SystemSpeechEngine)?.languageOverride =
+            cascadeLanguages.firstOrNull()
+    }
+
+    /**
+     * v35: kataar ki agli bhasha par jaakar sunna phir shuru
+     * karo. Kataar khatm ho (ya engine system wala na ho) to
+     * false — bulane wala aam error wala raasta lega.
+     */
+    private fun advanceCascade(): Boolean {
+        val sys = engine as? SystemSpeechEngine ?: return false
+        if (cascadeIndex >= cascadeLanguages.lastIndex) return false
+        cascadeIndex++
+        val lang = cascadeLanguages[cascadeIndex]
+        sys.languageOverride = lang
+        statusText.text = when (lang) {
+            "bn-IN" -> "শোনা গেল না — এবার বাংলায় চেষ্টা করছি..."
+            "hi-IN" -> "শোনা গেল না — এবার হিন্দিতে চেষ্টা করছি..."
+            else -> "শোনা গেল না — আবার চেষ্টা করছি..."
+        }
+        engineStartedOk = false
+        engine?.startListening()
+        return true
+    }
+
+    /**
+     * v35: saamne wale sunne se jo asal me suna gaya, use
+     * jeetne wali bhasha ke saath jarvis_diag me likho —
+     * konsi bhasha kaam aayi, maidan ki report bina iske
+     * adhoori rehti thi. Screen wali "Aapne kaha" line
+     * processCommand pehle ki tarah hi lagata hai.
+     */
+    private fun logForegroundHeard(text: String) {
+        val lang = when (val e = engine) {
+            is SystemSpeechEngine -> e.currentLanguage.ifBlank { "system" }
+            is VoskSpeechEngine -> "vosk-hindi"
+            else -> "?"
+        }
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE).edit()
+                .putString("last_foreground_heard", "$lang: $text")
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal kaam isse nahi rukta.
         }
     }
 
@@ -383,6 +528,11 @@ class MainActivity : Activity() {
     private fun startListening() {
         // Don't let Jarvis hear its own voice.
         speaker.stop()
+        // v35: naya sunna = naya turn — bhasha cascade kataar
+        // shuru se banao, aur "samajh nahi aaya" ke ek-baar
+        // wale bole jawab ki ginati bhi taaza karo.
+        resetCascade()
+        politeFailureSpokenThisTurn = false
         // Mic-sharing (v1.3, v1.6): wake service ko rokna YAHAN
         // nahi hai — woh onListeningStateChanged(true) me hota hai,
         // jab sunna sach me shuru ho jata hai. Do recorder ek saath
@@ -488,8 +638,13 @@ class MainActivity : Activity() {
      * par koi model hi na mila ho — tab yahi chalega.
      * (Purana beech-wala Gemini chat ab nahi hai — agent
      * uski jagah le chuka hai; do online raaste nahi bache.)
+     *
+     * v35: [agentAlreadyTried] batata hai ki is baat par
+     * Gemini agent pehle hi ja chuka hai (aur kuch nahi
+     * mila) — taaki neeche wala agent-raasta use dobara na
+     * bulaye (loop nahi bane).
      */
-    private fun processCommandOffline(text: String) {
+    private fun processCommandOffline(text: String, agentAlreadyTried: Boolean = false) {
         // v13: adda trigger ya is screen par chalu adda ho to pehle
         // Maya ka AddaEngine — uski state is activity instance me
         // har tap ke beech bani rehti hai. CommandEngine baad me.
@@ -515,12 +670,39 @@ class MainActivity : Activity() {
             return
         }
         val result = commandEngine.handle(text)
-        // v25: yahan koi online chat nahi bacha — online
-        // uplabdh hone par agent processCommand me pehle hi
-        // chal chuka hota hai. Engine ka jawab (handled ho
-        // ya purana fallback) yahan aakhiri shabd hai.
-        responseText.text = "Jarvis: ${result.responseText}"
-        speaker.speak(result.responseText)
+        if (result.handled) {
+            // Kaam ho gaya — agle turn ke liye "samajh nahi
+            // aaya" ki ek-baar-wali ginati taaza.
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: ${result.responseText}"
+            speaker.speak(result.responseText)
+            return
+        }
+        // v35: offline engine is baat ko kisi command se nahi
+        // jod paya. Key set ho + net chalu ho aur is baat par
+        // agent abhi tak na gaya ho, to kachi baat seedha
+        // Gemini agent ke paas bhejo — "samajh nahi aaya" par
+        // rukna hi dead end tha.
+        if (!agentAlreadyTried && geminiBrainAllowed()) {
+            responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
+            askAgentBrain(text)
+            return
+        }
+        // v35: offline / bina key ki vinamr haar — par ek turn
+        // me awaaz se zyada se zyada EK baar; dobara ho to
+        // sirf screen par dikhega. Saath me shune wali bhasha
+        // jaanchne / likhkar bhejne ka ishara bhi — screen par
+        // Bangla me, awaaz me usi ka Hindi roop (ek boli me ek
+        // hi script saaf padhti hai).
+        responseText.text = "Jarvis: ${result.responseText}\n" +
+            "(শোনার ভাষা ঠিক আছে কিনা দেখুন — না হলে লিখে পাঠান।)"
+        if (!politeFailureSpokenThisTurn) {
+            politeFailureSpokenThisTurn = true
+            speaker.speak(
+                result.responseText +
+                    " सुनने की भाषा जाँच लीजिए, या लिखकर भेजिए।"
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -603,6 +785,15 @@ class MainActivity : Activity() {
             "en-IN" -> "শোনার ভাষা: English (বদলাতে ট্যাপ করো)"
             else -> "শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)"
         }
+        // v35: wahi pasand button ke upar chhoti label me bhi —
+        // galat bhasha lagi ho to bolne se pehle hi dikh jaye.
+        if (::listenLangLabel.isInitialized) {
+            listenLangLabel.text = when (prefs.listenLanguage) {
+                "hi-IN" -> "শোনার ভাষা: हिन्दी"
+                "en-IN" -> "শোনার ভাষা: English"
+                else -> "শোনার ভাষা: বাংলা"
+            }
+        }
     }
 
     private fun refreshGeminiDiag() {
@@ -661,7 +852,9 @@ class MainActivity : Activity() {
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 if (reply == null) {
-                    processCommandOffline(text)
+                    // v35: agent is baat par ja chuka hai — offline
+                    // raasta use dobara nahi bulayega.
+                    processCommandOffline(text, agentAlreadyTried = true)
                     return@post
                 }
                 geminiHistory.add("user" to text)
