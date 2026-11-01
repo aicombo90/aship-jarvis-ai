@@ -27,9 +27,41 @@ class SystemSpeechEngine(
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
 
+    // v35: MainActivity ke bhasha cascade ke liye — set ho to
+    // AppPrefs wali pasand ki jagah ye bhasha chalegi (cascade
+    // haarne wali bhasha badal-badal kar phir aazmata hai).
+    var languageOverride: String? = null
+
+    /** Is koshish me asal me lagi bhasha — jeetne wali bhasha ki report ke liye. */
+    var currentLanguage: String = ""
+        private set
+
+    /** Aakhiri recognizer error ka code (SpeechRecognizer.ERROR_*); koi error na ho to -1. */
+    var lastErrorCode: Int = -1
+        private set
+
+    /**
+     * Aakhiri error sunna shuru hote hi, kuch sune bina aaya tha
+     * ya nahi — OriginOS par recognizer service kharab/missing
+     * hone ki nishaani; MainActivity is par Vosk par girta hai.
+     */
+    var lastErrorWasImmediate: Boolean = false
+        private set
+
+    private var attemptStartedAtMs: Long = 0L
+    private var heardAnythingThisAttempt: Boolean = false
+
     override fun startListening() {
         if (listening) return
+        lastErrorCode = -1
+        lastErrorWasImmediate = false
+        heardAnythingThisAttempt = false
+        attemptStartedAtMs = System.currentTimeMillis()
         if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            // v35: uplabdh hi nahi — code ke saath batao taaki
+            // MainActivity is session ke liye Vosk par gir sake.
+            lastErrorCode = SpeechRecognizer.ERROR_CLIENT
+            lastErrorWasImmediate = true
             listener?.onError("Is phone par speech recognition available nahi hai.")
             return
         }
@@ -44,10 +76,12 @@ class SystemSpeechEngine(
             // bn-IN, kyunki malik Bangla bolte hain; pehle ye
             // hi-IN par atka tha, isliye Bangla baat Hindi
             // aksharon me badal jati thi aur Maya galat samajhti thi.
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE,
-                com.aship.jarvis.prefs.AppPrefs(appContext).listenLanguage
-            )
+            // v35: bhasha cascade ka override ho to woh,
+            // warna user ki pasand (AppPrefs).
+            val language = languageOverride
+                ?: com.aship.jarvis.prefs.AppPrefs(appContext).listenLanguage
+            currentLanguage = language
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
             // Give the speaker time: without these, many devices end the
@@ -61,6 +95,10 @@ class SystemSpeechEngine(
             listening = true
             listener?.onListeningStateChanged(true)
         } catch (e: Exception) {
+            // v35: start hi fail — service wala fail maano,
+            // MainActivity Vosk par girega.
+            lastErrorCode = SpeechRecognizer.ERROR_CLIENT
+            lastErrorWasImmediate = true
             listener?.onError("Mic start nahi ho paya: ${e.message}")
         }
     }
@@ -103,6 +141,13 @@ class SystemSpeechEngine(
 
         override fun onError(error: Int) {
             listening = false
+            // v35: code + turant-fail ki haalat yaad rakho —
+            // MainActivity inhi se cascade / Vosk-fallback
+            // ka faisla leta hai.
+            lastErrorCode = error
+            lastErrorWasImmediate = !heardAnythingThisAttempt &&
+                (System.currentTimeMillis() - attemptStartedAtMs) <
+                IMMEDIATE_ERROR_WINDOW_MS
             listener?.onListeningStateChanged(false)
             listener?.onError("Sunne me dikkat aayi (error $error). Phir se try kijiye.")
         }
@@ -111,7 +156,18 @@ class SystemSpeechEngine(
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             val text = matches?.firstOrNull().orEmpty()
             if (text.isNotBlank()) {
+                heardAnythingThisAttempt = true
                 listener?.onFinalResult(text)
+            } else {
+                // v35: khaali result = kuch samajh nahi aaya.
+                // Pehle ye chup-chaap khatm ho jata tha (dead
+                // end); ab NO_MATCH error bhejta hai taaki
+                // MainActivity bhasha cascade chala sake.
+                listening = false
+                lastErrorCode = SpeechRecognizer.ERROR_NO_MATCH
+                lastErrorWasImmediate = false
+                listener?.onListeningStateChanged(false)
+                listener?.onError("Kuch sunai nahi diya — phir se boliye.")
             }
         }
 
@@ -119,10 +175,16 @@ class SystemSpeechEngine(
             val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             val text = matches?.firstOrNull().orEmpty()
             if (text.isNotBlank()) {
+                heardAnythingThisAttempt = true
                 listener?.onPartialResult(text)
             }
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    companion object {
+        /** v35: isse jaldi aaya error "service turant fail" mana jata hai. */
+        private const val IMMEDIATE_ERROR_WINDOW_MS = 2_500L
     }
 }
