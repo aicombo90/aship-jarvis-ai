@@ -194,6 +194,14 @@
             android:text="Agent chaal (aakhiri): abhi tak koi koshish nahi"
             android:textSize="12sp" />
 
+        <TextView
+            android:id="@+id/screenRunText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Screen chaal (aakhiri): abhi tak koi koshish nahi"
+            android:textSize="12sp" />
+
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
              dikhao — galat setting ek nazar me pakdi jaye. -->
         <TextView
