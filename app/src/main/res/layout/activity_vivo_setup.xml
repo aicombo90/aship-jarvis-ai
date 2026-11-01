@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v34: vivo setup screen — v33 tak ye saare controls main
+     screen ke neeche bikhre hue the. Ab wohi controls, wohi
+     kram me, yahan Mobile hub ke andar hain. View IDs main
+     screen wale hi rakhe gaye hain taaki saajha code
+     (WakeSetupActivity) dono screenon par ek jaisa chale. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="vivo — Background Setup"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Background sunna (wake word)"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/wakeStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Background sunna band hai."
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/wakeStartButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="▶ Background sunna START karo" />
+
+        <Button
+            android:id="@+id/wakeStopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⏹ Background sunna BAND karo" />
+
+        <Button
+            android:id="@+id/batteryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery bandobosto karo (vivo ke liye zaroori)" />
+
+        <TextView
+            android:id="@+id/accessibilityStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Accessibility: নেই"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Accessibility চালু করো" />
+
+        <Button
+            android:id="@+id/overlayPermissionButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
+
+    </LinearLayout>
+
+</ScrollView>
