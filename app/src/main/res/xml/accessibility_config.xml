@@ -2,7 +2,7 @@
 <!--
   v17: JarvisAccessibilityService ki ghoshna.
 
-  Service ka EK hi kaam hai: "mobile data on/off karo" par
+  Service ka pehla kaam hai: "mobile data on/off karo" par
   quick-settings panel kholkar data tile dabana. Isiliye:
    - event types sirf window badlav wale hain (panel khulne ka
      pata chale) — koi key/view monitoring nahi maanga gaya;
@@ -12,11 +12,25 @@
      service ko Android se mile hue hote hain — unke liye alag
      ghoshna nahi hoti.
   Koi gesture, koi filter-key, koi touch-exploration nahi hai.
+
+  v37: screen-agent (agent ke screen_task auzaar) ke liye
+  service ped padhkar saar deti hai aur kaha hua tap/scroll/
+  type chalati hai — uske liye nayi ghoshna nahi chahiye thi,
+  wahi canRetrieveWindowContent + global actions kaafi the.
+
+  v39: screen-VISION ke liye canTakeScreenshot — service
+  takeScreenshot() se is pal ki screen ki tasveer le sakti
+  hai (Android 11+). MediaProjection nahi hai: koi alag
+  razamandi-wala popup nahi aata; service ON karna hi
+  razamandi thi. FLAG_SECURE wali screen (bank/lock) par
+  tasveer kaali aati hai — agent use "screen dikh nahi
+  raha" maan kar imaandaari se ruk jata hai.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100" />
