@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v34: Samsung setup screen — upar wohi saajhe controls
+     (wake word, accessibility, overlay; WakeSetupActivity),
+     neeche Samsung (One UI) ke khaas battery bandobosto ke
+     dhap. View IDs saajhe controls ke liye main screen wale
+     hi hain. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Samsung — Background Setup"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Background sunna (wake word)"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/wakeStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Background sunna band hai."
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/wakeStartButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="▶ Background sunna START karo" />
+
+        <Button
+            android:id="@+id/wakeStopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⏹ Background sunna BAND karo" />
+
+        <TextView
+            android:id="@+id/accessibilityStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Accessibility: নেই"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Accessibility চালু করো" />
+
+        <Button
+            android:id="@+id/overlayPermissionButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OVERLAY PERMISSION (BACKGROUND SE APP KHOLNE KE LIYE)" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Samsung — ব্যাকগ্রাউন্ডে চালু রাখার সেটিং"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="ধাপ ১ — Battery Unrestricted: নিচের বোতাম চাপলে App info খুলবে। সেখানে Battery → Unrestricted বেছে নিন।"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/samsungBatteryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery Unrestricted করো" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="ধাপ ২ — Never sleeping apps: Settings → Battery → Background usage limits → Never sleeping apps → + চিহ্ন → ASHIP JARVIS AI যোগ করুন।"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/samsungNeverSleepingButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Never sleeping apps-এ যোগ করো" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="ধাপ ৩ — Battery optimisation থেকে বাদ: বোতাম চাপলে সরাসরি Allow চাইবে। সেটা না খুললে তালিকা থেকে All apps → ASHIP JARVIS AI → Don&apos;t optimize বেছে নিন।"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/samsungOptimizeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery optimisation থেকে বাদ দাও" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="ধাপ ৪ — Recents-এ অ্যাপ আটকে রাখুন: Recents বোতাম → JARVIS-এর আইকনে চাপ → Keep open / Lock this app। এতে Recents সাফ করলেও অ্যাপ বন্ধ হবে না।"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+</ScrollView>
