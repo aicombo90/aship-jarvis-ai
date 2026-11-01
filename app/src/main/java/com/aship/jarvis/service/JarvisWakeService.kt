@@ -20,6 +20,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
+import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -40,6 +41,8 @@ import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
+import com.aship.jarvis.voice.SpeechEngineListener
+import com.aship.jarvis.voice.SystemSpeechEngine
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -144,6 +147,23 @@ import java.util.concurrent.Executors
  * kachha suna hua text jarvis_diag me band hota hai;
  * (3) khud-ki-awaaz wala jaal — TTS ke dauraan aur uske
  * 1.5 s baad tak suna hua sab goonj hai, hukm nahi.
+ *
+ * v38 do sudhaar: (1) pakka scroll hukm (CommandEngine
+ * .deterministicScrollCommand) OFF wale raaste ke theek
+ * baad, agent se pehle chalta hai — "স্ক্রল ডাউন করো"
+ * bolte hi swipe. (2) BACKGROUND BANGLA SUNNA: Vosk
+ * Hindi Bangla sun hi nahi sakta tha — post-wake hukm
+ * khaali/garble aata tha aur do-retry wala jaap band
+ * kar deta tha. Ab Vosk sirf "Jarvis" wala wake-spotting
+ * rakhta hai; wake milte hi hukm SYSTEM recognizer
+ * (SystemSpeechEngine, main thread par bandha) sunta
+ * hai — wahi bhasha kataar jo saamne wali screen ki hai
+ * (pasand -> bn-IN -> hi-IN). System recognizer uplabdh
+ * na ho ya turant fail ho jaye to usi turn ke liye
+ * purana Vosk wala raasta. System raaste par miss ka
+ * niyam naya hai: ek chhota prompt ("বলুন, শুনছি") +
+ * ek aur khidki, phir imaandaar vida — do-retry wala
+ * jaap is raaste par nahi hai.
  */
 class JarvisWakeService : Service() {
 
@@ -257,6 +277,56 @@ class JarvisWakeService : Service() {
     @Volatile
     private var lastSpeechEndMs = 0L
 
+    // ------------------------------------------------------------------
+    // v38: post-wake hukm ke liye SYSTEM recognizer wala
+    // raasta. Vosk Hindi Bangla sun hi nahi sakta — isliye
+    // wake ke baad wala hukm ab phone ke system recognizer
+    // se suna jayega (wahi jo saamne wali screen par Bangla
+    // theek sunta hai). SystemSpeechEngine sirf MAIN thread
+    // par banta/chalta hai — service use applicationContext
+    // ke saath wahi banati hai, shuru/rok mainHandler se
+    // hoti hai, aur uske callbacks (main thread) asal kaam
+    // executor ko saunp dete hain. System uplabdh na ho /
+    // turant fail ho jaye to usi turn ke liye Vosk wala
+    // purana raasta (startVoskCommandSession).
+    // ------------------------------------------------------------------
+
+    /** Is pal ke command session ka kaan kaun sa hai. */
+    private enum class CommandKind { NONE, VOSK, SYSTEM }
+
+    /** System recognizer engine — sirf main thread par chhoota hai. */
+    private var systemEngine: SystemSpeechEngine? = null
+
+    @Volatile
+    private var commandKind: CommandKind = CommandKind.NONE
+
+    /** System session ki bhasha kataar (v35 wala hi kram: pasand -> bn-IN -> hi-IN). */
+    @Volatile
+    private var systemCascadeLanguages: List<String> = emptyList()
+
+    @Volatile
+    private var systemCascadeIndex: Int = 0
+
+    /** System raaste par ek prompt + ek khidki ka mauka mil chuka hai kya. */
+    @Volatile
+    private var systemRetryUsed: Boolean = false
+
+    /** Is pal jo hukm chal raha hai, woh system recognizer se aaya tha kya. */
+    @Volatile
+    private var currentTurnViaSystem: Boolean = false
+
+    /**
+     * System recognizer is phone par uplabdh hi nahi (ya
+     * turant fail hua) — is wake-chain me dobara koshish
+     * mat karo. Har naye wake par reset hota hai.
+     */
+    @Volatile
+    private var systemUnavailableThisChain: Boolean = false
+
+    /** Maya ki boli ki goonj system session me aayi ho to bina retry kharch kiye kitni baar phir suna. */
+    @Volatile
+    private var systemEchoRestarts: Int = 0
+
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
     // Sirf executor thread par chhoota hai. Har naye wake par
@@ -352,6 +422,15 @@ class JarvisWakeService : Service() {
         executor.shutdownNow()
         stopWakeSession()
         stopCommandSession()
+        // v38: system recognizer bhi band. onDestroy main
+        // thread par chalta hai — engine wahi banta/chalta
+        // hai, isliye yahan seedha destroy theek hai.
+        try {
+            systemEngine?.destroy()
+        } catch (t: Throwable) {
+            // Band karte huey gadbad — teardown nahi rukega.
+        }
+        systemEngine = null
         // v16: screen wala wake lock pada ho to chhod do — waise
         // bhi uska timeout khud use bujha deta, ye bas safaai hai.
         try {
@@ -514,6 +593,10 @@ class JarvisWakeService : Service() {
                     // tod kar wake sunna saaf phir se shuru karo.
                     disarmAckFallback()
                     stopCommandSession()
+                    // v38: phasa hua flow system session bhi
+                    // ho sakta hai — use bhi saath roko.
+                    stopSystemCommandSession()
+                    commandKind = CommandKind.NONE
                     // v13: phas gaya flow tod rahe hain — adda ka
                     // state bhi saath saaf karo, warna agle wake ke
                     // baad bhi purani baatchit chipki rahegi.
@@ -655,6 +738,12 @@ class JarvisWakeService : Service() {
         // v12: har naye wake ke saath command ko ek taaza retry mile.
         commandRetryCount = 0
         ackEndsConversation = false
+        // v38: nayi wake-chain — system recognizer ko taaza
+        // mauka (is phone par uplabdh hai ya nahi, phir
+        // aazmayenge) aur naya ek-prompt wala hisaab.
+        systemRetryUsed = false
+        currentTurnViaSystem = false
+        systemUnavailableThisChain = false
         // v13: naya wake hamesha taaza interaction hai — koi atka
         // hua purana adda state saath nahi ghisdega.
         addaEngine.endSession()
@@ -741,7 +830,24 @@ class JarvisWakeService : Service() {
         }
     }
 
+    /**
+     * v38: command session ki shuruaat — pehle SYSTEM
+     * recognizer (Bangla ke liye wahi ekmatra sahi kaan
+     * hai; wake ke baad Vosk ka mic pehle hi chhut chuka
+     * hota hai). Woh uplabdh na ho ya turant fail ho jaye
+     * to usi turn ke liye purana Vosk wala raasta
+     * ([startVoskCommandSession]) — Hindi background
+     * pehle ki tarah chalta rahega.
+     */
     private fun startCommandSession() {
+        if (destroyed) return
+        if (!systemUnavailableThisChain && tryStartSystemCommandSession()) {
+            return
+        }
+        startVoskCommandSession()
+    }
+
+    private fun startVoskCommandSession() {
         if (destroyed) return
         val loadedModel = model ?: return
         // v16: har naya session (aam command, retry ke baad wala,
@@ -750,7 +856,9 @@ class JarvisWakeService : Service() {
         lightScreenOnWake()
         stopWakeSession()
         stopCommandSession()
+        stopSystemCommandSession()
         state = State.COMMAND
+        commandKind = CommandKind.VOSK
         try {
             val recognizer = Recognizer(loadedModel, SAMPLE_RATE)
             val service = SpeechService(recognizer, SAMPLE_RATE)
@@ -785,6 +893,287 @@ class JarvisWakeService : Service() {
             }
         }
         commandSpeechService = null
+    }
+
+    // ------------------------------------------------------------------
+    // v38: system recognizer wala command session
+    //
+    // Pul (bridge) is prakar hai: engine MAIN thread par
+    // applicationContext ke saath banta hai (SystemSpeechEngine
+    // khud appContext rakhta hai); shuru/rok ke saare kaam
+    // mainHandler se hote hain, aur uske callbacks (jo main
+    // thread par aate hain) faisle executor ko saunp dete
+    // hain — state badlav hamesha executor par hi hota hai,
+    // bilkul Vosk wale raaste ki tarah. Wake wala Vosk
+    // session onWakeDetected me pehle hi band ho chuka
+    // hota hai aur ACK ki boli khatm hone par hi session
+    // khulta hai, isliye mic ka koi takraav nahi hota.
+    // Khidki ka samay engine ke apne input-niyam (saamne
+    // wali screen wale hi) tay karte hain.
+    // ------------------------------------------------------------------
+
+    /**
+     * System session kholne ki koshish. Recognizer uplabdh
+     * hi na ho to false (bulane wala seedha Vosk par
+     * jayega); koshish shuru ho gayi ho to true — turant
+     * fail hone par listener wala raasta Vosk par girayega.
+     * Sirf executor thread se bulao.
+     */
+    private fun tryStartSystemCommandSession(): Boolean {
+        if (!SpeechRecognizer.isRecognitionAvailable(applicationContext)) {
+            systemUnavailableThisChain = true
+            return false
+        }
+        // v16 wala screen-wake refresh, Vosk session ki tarah.
+        lightScreenOnWake()
+        stopWakeSession()
+        stopCommandSession()
+        stopSystemCommandSession()
+        state = State.COMMAND
+        commandKind = CommandKind.SYSTEM
+        systemEchoRestarts = 0
+        resetSystemCascade()
+        setStatus("Command sun raha hoon — boliye")
+        updateNotification("Command boliye...")
+        mainHandler.post { startSystemListeningOnMain() }
+        return true
+    }
+
+    /** v38: bhasha kataar taaza karo — v35 wala hi kram (pasand -> bn-IN -> hi-IN, dohraaye bina). */
+    private fun resetSystemCascade() {
+        systemCascadeLanguages =
+            listOf(prefs.listenLanguage, "bn-IN", "hi-IN").distinct()
+        systemCascadeIndex = 0
+    }
+
+    /** Sirf main thread se — SystemSpeechEngine wahi banta/chalta hai. */
+    private fun startSystemListeningOnMain() {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.SYSTEM
+        ) {
+            return
+        }
+        val engine = systemEngine ?: SystemSpeechEngine(
+            applicationContext, preferOffline = false
+        ).also { created ->
+            created.listener = systemCommandListener
+            systemEngine = created
+        }
+        engine.languageOverride =
+            systemCascadeLanguages.getOrNull(systemCascadeIndex)
+        try {
+            engine.startListening()
+        } catch (t: Throwable) {
+            // Engine ne apna onError na diya ho to bhi
+            // is turn ke liye Vosk par giro.
+            executor.execute { onSystemSessionFailed() }
+        }
+    }
+
+    /** System session roko — engine main thread par hai, isliye post karke. */
+    private fun stopSystemCommandSession() {
+        mainHandler.post {
+            try {
+                systemEngine?.stopListening()
+            } catch (t: Throwable) {
+                // Band karte huey gadbad — session waise bhi khatm.
+            }
+        }
+    }
+
+    private val systemCommandListener = object : SpeechEngineListener {
+        override fun onListeningStateChanged(listening: Boolean) {
+            // Service ko isse kuch nahi lena — session ki
+            // haalat state/commandKind se bandhi hai.
+        }
+
+        override fun onPartialResult(text: String) {
+            // Post-wake hukm ke liye partial ka kaam nahi —
+            // sirf pakka final natija hukm banta hai.
+        }
+
+        override fun onFinalResult(text: String) {
+            // Callback main thread par hai; asal kaam executor par.
+            executor.execute { acceptSystemCommand(text) }
+        }
+
+        override fun onError(message: String) {
+            // Error ki pehchan engine ke bandhe hue code se —
+            // main thread par hi padh lo, phir faisla executor par.
+            val engine = systemEngine ?: return
+            val code = engine.lastErrorCode
+            val immediate = engine.lastErrorWasImmediate
+            executor.execute {
+                if (destroyed || state != State.COMMAND ||
+                    commandKind != CommandKind.SYSTEM
+                ) {
+                    return@execute
+                }
+                when {
+                    code == SpeechRecognizer.ERROR_CLIENT || immediate -> {
+                        // Recognizer service hi kharab /
+                        // missing hai (OriginOS par aam) —
+                        // is chain me phir koshish nahi;
+                        // is turn ke liye Vosk wala raasta.
+                        systemUnavailableThisChain = true
+                        onSystemSessionFailed()
+                    }
+                    (code == SpeechRecognizer.ERROR_NO_MATCH ||
+                        code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) &&
+                        advanceSystemCascade() -> {
+                        // Kuch samajh nahi aaya — kataar ki
+                        // agli bhasha par wahi session phir
+                        // khula hai (v35 wala hi vyavhaar).
+                    }
+                    else -> handleSystemCommandMiss()
+                }
+            }
+        }
+    }
+
+    /** Kataar ki agli bhasha par system session phir kholo. Kataar khatm ho to false. */
+    private fun advanceSystemCascade(): Boolean {
+        if (systemCascadeIndex >= systemCascadeLanguages.lastIndex) return false
+        systemCascadeIndex++
+        mainHandler.post { startSystemListeningOnMain() }
+        return true
+    }
+
+    /**
+     * System session turant-fail / uplabdh-nahi wala ant —
+     * is turn ke liye purana Vosk wala command session
+     * chalao. Is chain me system dobara nahi aazmayenge
+     * (turant-fail har wake par dohrana bekaar hai).
+     * Sirf executor thread se bulao.
+     */
+    private fun onSystemSessionFailed() {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.SYSTEM
+        ) {
+            return
+        }
+        systemUnavailableThisChain = true
+        startVoskCommandSession()
+    }
+
+    /**
+     * System recognizer ne pakka hukm suna — wahi
+     * onCommandHeard wala raasta jo Vosk wala text leta
+     * tha (pakke hukm -> agent -> adda), neeche kuch
+     * nahi badla. Sirf executor thread se bulao.
+     */
+    private fun acceptSystemCommand(text: String) {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.SYSTEM
+        ) {
+            return
+        }
+        if (text.isBlank()) {
+            handleSystemCommandMiss()
+            return
+        }
+        if (selfEchoGuardActive()) {
+            // Maya ki apni boli (prompt) goonj bankar aayi
+            // hai — retry kharch kiye bina wahi khidki phir
+            // kholo; baar-baar ho to miss mano.
+            if (systemEchoRestarts < MAX_SYSTEM_ECHO_RESTARTS) {
+                systemEchoRestarts++
+                resetSystemCascade()
+                mainHandler.post { startSystemListeningOnMain() }
+            } else {
+                handleSystemCommandMiss()
+            }
+            return
+        }
+        currentTurnViaSystem = true
+        // v12 diagnostics wala hi "Mic ne aakhri suna",
+        // aur v38 ki engine-wali report jarvis_diag me.
+        rememberCommandFinal(text)
+        saveBackgroundHeardDiag(fromSystem = true, text = text)
+        stopSystemCommandSession()
+        commandKind = CommandKind.NONE
+        onCommandHeard(text)
+    }
+
+    /**
+     * v38: system raaste par miss (kuch suna nahi /
+     * cascade khatm / recognizer ki aam galti) ka NAYA
+     * niyam — purana do-retry wala "বুঝতে পারিনি" jaap
+     * is raaste par NAHI hai:
+     *  - pehli baar: ek chhota prompt user ki pasandeeda
+     *    bhasha me ("বলুন, শুনছি") + ek aur sunne ki
+     *    khidki (ACK wale raaste se);
+     *  - dusri baar: ek imaandaar vida line bolkar wapas
+     *    wake sunne par (startClosingLine).
+     * Adda chalu ho to adda ke apne niyam (handleCommandMiss
+     * wala hi vyavhaar) — Maya wahan khud sambhalti hai.
+     * Sirf executor thread se bulao.
+     */
+    private fun handleSystemCommandMiss() {
+        if (destroyed) return
+        stopSystemCommandSession()
+        commandKind = CommandKind.NONE
+        if (addaEngine.isActive) {
+            if (addaNoSpeechCount == 0) {
+                addaNoSpeechCount = 1
+                startCommandSession()
+            } else {
+                addaEngine.endSession()
+                addaNoSpeechCount = 0
+                orbOverlay.hideNow()
+                startWakeSession()
+            }
+            return
+        }
+        if (!systemRetryUsed) {
+            systemRetryUsed = true
+            state = State.ACK
+            ackEndsConversation = false
+            setStatus("Samajh nahi aaya — boliye, sun rahi hoon")
+            updateNotification("Boliye, sun rahi hoon...")
+            lightScreenOnWake()
+            speaker.speak(systemRetryPrompt())
+            armAckFallback()
+        } else {
+            startClosingLine()
+        }
+    }
+
+    /** v38: system raaste ka ek-mauka wala prompt — user ki pasandeeda bhasha me. */
+    private fun systemRetryPrompt(): String =
+        when (prefs.listenLanguage) {
+            "hi-IN" -> "बोलिए, सुन रही हूँ।"
+            "en-IN" -> "Go ahead — I'm listening."
+            else -> "বলুন, শুনছি।"
+        }
+
+    /**
+     * v38: post-wake hukm KIS kaan se suna gaya, woh
+     * "jarvis_diag" me "last_background_heard" par band
+     * karo ("system bn-IN: ..." / "vosk: ...") — agle
+     * test me bina andaze ke dikhega ki Bangla asal me
+     * system se suna gaya ya Vosk par gir gaya tha.
+     * Setup page wala "Mic ne aakhri suna" (AppPrefs)
+     * dono raaston par pehle ki tarah hi banta hai
+     * (rememberCommandFinal).
+     */
+    private fun saveBackgroundHeardDiag(fromSystem: Boolean, text: String) {
+        val tag = if (fromSystem) {
+            val lang = systemCascadeLanguages
+                .getOrNull(systemCascadeIndex)
+                ?.takeIf { it.isNotBlank() }
+            if (lang != null) "system $lang" else "system"
+        } else {
+            "vosk"
+        }
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_background_heard", "$tag: ${text.trim()}")
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
     }
 
     private val commandListener = object : RecognitionListener {
@@ -839,6 +1228,11 @@ class JarvisWakeService : Service() {
             // v12 diagnostics: command recognizer ne jo suna, woh
             // bhi "Mic ne aakhri suna" me dikhe.
             rememberCommandFinal(text)
+            // v38: ye turn Vosk se aaya hai — system wale
+            // ek-prompt niyam is par lagu nahi honge, aur
+            // report me kaan ka naam "vosk" bandhega.
+            currentTurnViaSystem = false
+            saveBackgroundHeardDiag(fromSystem = false, text = text)
             executor.execute { onCommandHeard(text) }
         }
     }
@@ -872,6 +1266,14 @@ class JarvisWakeService : Service() {
         // chalu nahi banna chahiye.
         commandEngine.deterministicOffCommand(text)?.let { offResult ->
             finishCommandResult(text, offResult)
+            return
+        }
+        // v38: pakka scroll hukm bhi agent se pehle pakke
+        // offline raaste se — "স্ক্রল ডাউন করো" bolte hi
+        // Accessibility swipe karegi, mastishk ke chakkar
+        // me nahi padegi (saamne wali screen wala hi niyam).
+        commandEngine.deterministicScrollCommand(text)?.let { scrollResult ->
+            finishCommandResult(text, scrollResult)
             return
         }
         // v36: play-iraade wala sanyojit hukm ("YouTube
@@ -920,6 +1322,15 @@ class JarvisWakeService : Service() {
      * REPLY ho aur command session band ho chuka ho.
      */
     private fun finishCommandResult(text: String, rawResult: CommandResult) {
+        // v38: system recognizer se aaya hukm suna to gaya
+        // par kisi kaam se nahi juda — purana do-retry
+        // wala "বুঝতে পারিনি" jaap is raaste par nahi
+        // hai: ek chhota prompt + ek khidki, phir vida
+        // (handleSystemCommandMiss wala naya niyam).
+        if (!rawResult.handled && currentTurnViaSystem) {
+            handleSystemCommandMiss()
+            return
+        }
         // v12: "handled" ka faisla RAW result par hota hai — neeche
         // wale v1.10 CANT_DO conversion se PEHLE. Isliye galat-suna
         // kholne ka prayas ("pesbuk kholo" jaisa) bhi pehle apna ek
@@ -1774,6 +2185,9 @@ class JarvisWakeService : Service() {
 
         /** v33: ek command ko kul itne retry milenge. */
         private const val MAX_COMMAND_RETRIES = 2
+
+        /** v38: system session me goonj wala final aaye to bina retry kharch kiye itni baar phir sunna. */
+        private const val MAX_SYSTEM_ECHO_RESTARTS = 2
 
         /** v1.10: unsupported kholne ki koshish par bola jaane wala jawab. */
         const val CANT_DO_REPLY = "माफ़ कीजिए, अभी मैं यह काम नहीं कर सकता हूँ।"
