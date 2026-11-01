@@ -131,6 +131,16 @@ import java.util.concurrent.TimeUnit
  * scroll / type karna aur send jaise kadam par user
  * ki pushti lena usi ke andar hai. Natija yahan bas
  * jyon-ka-tyon mastishk ko saunpa jata hai.
+ *
+ * v40: ek share wala auzaar — share_screenshot. Is
+ * pal ki screen tasveer (v39 capture, [ScreenshotStore])
+ * cache JPEG + FileProvider URI se target app
+ * (default WhatsApp) ki share screen par chipkayi
+ * jati hai. Tasveer KHUD NAHI jaati — sampark chunna
+ * aur Send dabana hamesha user ka kaam; natija bilkul
+ * wahi kehta hai. screen_task me gallery-trash wala
+ * kaam pehchane jane par [TrashPlaybook] ka bandha
+ * suraksha text bhi ScreenAgent ke saath judta hai.
  */
 class AgentTools(
     private val context: Context,
@@ -181,13 +191,15 @@ class AgentTools(
             args.optString("when").trim().lowercase(Locale.ROOT)
         )
         "screen_task" -> screenTask(args.optString("task").trim())
+        "share_screenshot" -> shareScreenshot(args.optString("app").trim())
         else -> ToolResult(
             false,
             "Unknown tool '$tool'. Available tools: open_app, mobile_data, " +
                 "torch, web_search, youtube_play, get_time, get_date, " +
                 "calculate, get_battery, get_network, set_timer, set_alarm, " +
                 "call_person, whatsapp_message, remember_fact, " +
-                "recall_facts, forget_fact, get_weather, screen_task."
+                "recall_facts, forget_fact, get_weather, screen_task, " +
+                "share_screenshot."
         )
     }
 
@@ -207,8 +219,215 @@ class AgentTools(
         if (task.isEmpty()) {
             return ToolResult(false, "No task text was given.")
         }
-        val outcome = ScreenAgent(context).runTask(task)
+        // v40: gallery ke trash / recently-deleted ko
+        // khaali karne wala kaam ho to bandha suraksha
+        // playbook (ginati + pakapaki chetaavni + pushti)
+        // screen wale mastishk ke saath jud jata hai —
+        // kaam ka apna text bilkul nahi badalta.
+        val playbook = TrashPlaybook.forTask(task)
+        val outcome = ScreenAgent(context).runTask(task, playbook)
         return ToolResult(outcome.ok, outcome.text)
+    }
+
+    /**
+     * v40: screenshot share karne wala auzaar —
+     * "…karke screenshot mere WhatsApp par pathao"
+     * jaise kaamon ka aakhiri kadam. Is pal ki taazi
+     * tasveer pakdi jati hai (usi capture se jo screen
+     * wala auzaar bhi leta hai — taazi tasveer hi
+     * service ki aakhiri saaf tasveer bhi ban jati hai),
+     * cache me JPEG bankar FileProvider ke content://
+     * URI se ACTION_SEND intent me chipkayi jati hai,
+     * aur target app (default WhatsApp) ke package par
+     * bandhkar uski share screen kholi jati hai.
+     *
+     * IMAANDARI SABSE UPAR: ye auzaar tasveer BHEJTA
+     * NAHI hai — koi intent kisi chune hue sampark tak
+     * khud nahi bhej sakta. Share screen KHULTI hai;
+     * sampark chunna aur Send dabana hamesha user ka
+     * kaam hai, aur natija bilkul wahi kehta hai —
+     * mastishk "bhej diya" kabhi na kahe. Target app
+     * phone me na ho to aam share chooser khulta hai
+     * aur natija woh bhi sach-sach kehta hai. Screen
+     * surakshit (FLAG_SECURE) ho ya service band ho
+     * to seedha FAILED — share screen khuli hi nahi.
+     * Bandha (sync) auzaar hai; AgentBrain ke executor
+     * thread se hi chalta hai.
+     */
+    private fun shareScreenshot(appRaw: String): ToolResult {
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return ToolResult(
+                false,
+                "FAILED — the accessibility service is OFF, so no " +
+                    "screenshot can be captured. Ask the user to turn " +
+                    "on Accessibility for ASHIP JARVIS AI first. " +
+                    "Nothing was shared."
+            )
+        }
+        val bitmap = ScreenshotStore.captureFresh(context)
+            ?: return ToolResult(
+                false,
+                "FAILED — the screenshot could not be captured " +
+                    "right now. Nothing was shared."
+            )
+        if (ScreenshotStore.screenLooksSecure(context, bitmap)) {
+            return ToolResult(
+                false,
+                "FAILED — the current screen is a protected/secure " +
+                    "screen (banking or lock style); its screenshot " +
+                    "cannot be captured or shared. Nothing was shared."
+            )
+        }
+        val file = ScreenshotStore.writeShareJpeg(context, bitmap)
+            ?: return ToolResult(
+                false,
+                "FAILED — the screenshot could not be written to a " +
+                    "shareable file. Nothing was shared."
+            )
+        val uri = try {
+            androidx.core.content.FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", file
+            )
+        } catch (t: Throwable) {
+            return ToolResult(
+                false,
+                "FAILED — the screenshot file could not be exposed " +
+                    "safely for sharing. Nothing was shared."
+            )
+        }
+        val targetPackage = shareTargetPackage(appRaw)
+        val targetLabel = shareTargetLabel(appRaw, targetPackage)
+        val baseIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/jpeg"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = android.content.ClipData.newRawUri("screenshot", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (targetPackage != null) {
+            val targeted = Intent(baseIntent).apply {
+                setPackage(targetPackage)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (resolves(targeted)) {
+                dispatchShareIntent(targeted)?.let { return it }
+                return ToolResult(
+                    true,
+                    "The screenshot is attached and $targetLabel's " +
+                        "share screen has been OPENED for the user. " +
+                        "The image has NOT been sent — the user must " +
+                        "still pick the contact or chat and tap Send " +
+                        "themselves. Tell the user exactly that: the " +
+                        "share screen is open with the screenshot " +
+                        "attached; sending stays in their hands."
+                )
+            }
+            // Target app phone me nahi mila — aam chooser
+            // par giro, aur natija woh sach bhi bole.
+            val chooser = Intent.createChooser(Intent(baseIntent), null)
+                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            dispatchShareIntent(chooser)?.let { return it }
+            return ToolResult(
+                true,
+                "PARTIAL — $targetLabel was not found on this phone, " +
+                    "so the general share sheet has been OPENED with " +
+                    "the screenshot attached instead. The image has " +
+                    "NOT been sent — the user picks the app/contact " +
+                    "and taps Send. Tell the user honestly."
+            )
+        }
+        val chooser = Intent.createChooser(Intent(baseIntent), null)
+            .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        dispatchShareIntent(chooser)?.let { return it }
+        return ToolResult(
+            true,
+            "The share sheet has been OPENED with the screenshot " +
+                "attached. The image has NOT been sent — the user " +
+                "picks the app/contact and taps Send themselves. " +
+                "Tell the user exactly that."
+        )
+    }
+
+    /**
+     * v40: share target app ka package — khaali/default
+     * naam WhatsApp (brief ka pakka default); jaane-maane
+     * naam unke package par; "." wala naam seedha package
+     * hi mana jata hai; anjaan naam par null (aam chooser)।
+     */
+    private fun shareTargetPackage(appRaw: String): String? {
+        val name = appRaw.lowercase(Locale.ROOT).trim()
+        return when {
+            name.isEmpty() -> WHATSAPP_PACKAGE
+            name.contains("whatsapp") || name.contains("হোয়াটসঅ্যাপ") ||
+                name.contains("व्हाट्सएप") || name.contains("व्हाट्सऐप") ->
+                WHATSAPP_PACKAGE
+            name.contains("telegram") || name.contains("টেলিগ্রাম") ||
+                name.contains("टेलीग्राम") -> "org.telegram.messenger"
+            name.contains("instagram") || name.contains("ইনস্টাগ্রাম") ||
+                name.contains("इंस्टाग्राम") -> "com.instagram.android"
+            name.contains("messenger") -> "com.facebook.orca"
+            name.contains("gmail") || name.contains("জিমেইল") ||
+                name.contains("जीमेल") || name.contains("email") ||
+                name.contains("mail") -> "com.google.android.gm"
+            name.contains(".") -> name
+            else -> null
+        }
+    }
+
+    /** v40: natije ke text ke liye share target ka bolne-layak naam. */
+    private fun shareTargetLabel(appRaw: String, pkg: String?): String =
+        when (pkg) {
+            WHATSAPP_PACKAGE -> "WhatsApp"
+            "org.telegram.messenger" -> "Telegram"
+            "com.instagram.android" -> "Instagram"
+            "com.facebook.orca" -> "Messenger"
+            "com.google.android.gm" -> "Gmail"
+            null -> appRaw.ifEmpty { "the app" }
+            else -> appRaw.ifEmpty { pkg }
+        }
+
+    /**
+     * v40: share wala intent asal me bhejo —
+     * [dispatchWhatsAppIntent] wala hi bandobosto:
+     * saamne ho to seedha startActivity, background
+     * service se ho to overlay bridge. Chal jaye to
+     * null; asafal ho to wajah ke saath sachha FAILED
+     * (share screen khuli hi nahi — "bhej diya" to
+     * bilkul nahi)।
+     */
+    private fun dispatchShareIntent(intent: Intent): ToolResult? {
+        if (fromBackgroundService) {
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> null
+                LaunchOutcome.PERMISSION_NEEDED -> ToolResult(
+                    false,
+                    "FAILED — the share screen could not be opened: " +
+                        "'Display over other apps' permission is " +
+                        "needed. The image was NOT shared."
+                )
+                LaunchOutcome.LOCKED -> ToolResult(
+                    false,
+                    "FAILED — the phone is locked, so the share " +
+                        "screen could not be opened. The image was " +
+                        "NOT shared."
+                )
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED ->
+                    ToolResult(
+                        false,
+                        "FAILED — the share screen could not be " +
+                            "opened. The image was NOT shared."
+                    )
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            null
+        } catch (e: Exception) {
+            ToolResult(
+                false,
+                "FAILED — the share screen could not be opened " +
+                    "(${e.javaClass.simpleName}). The image was NOT shared."
+            )
+        }
     }
 
     /**
