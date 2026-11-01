@@ -38,6 +38,7 @@ import com.aship.jarvis.update.UpdateDownloader
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.service.JarvisWakeService
 import com.aship.jarvis.speaker.TtsSpeaker
+import com.aship.jarvis.voice.BanglaModelManager
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
 import com.aship.jarvis.voice.SpeechEngine
@@ -109,6 +110,16 @@ class MainActivity : Activity() {
     // v37: screen-agent (screen_task) ki report line —
     // "jarvis_diag" ki last_screen_run report yahan dikhti hai.
     private lateinit var screenRunText: TextView
+
+    // v41: Bangla offline model (Zipformer) ki haalat —
+    // status line + download button is screen par hi hain
+    // taaki malik ek nazar me dekhe: model aaya ya nahi,
+    // download kitna hua, aur aakhiri baar offline kaan
+    // ne kya suna (last_bangla_asr wali report line).
+    private lateinit var banglaModelStatusText: TextView
+    private lateinit var banglaModelButton: Button
+    private lateinit var banglaAsrText: TextView
+    private lateinit var banglaModelManager: BanglaModelManager
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -228,6 +239,7 @@ class MainActivity : Activity() {
         commandEngine = CommandEngine(this)
         addaEngine = AddaEngine()
         modelManager = ModelManager(this)
+        banglaModelManager = BanglaModelManager(this)
 
         statusText = findViewById(R.id.statusText)
         recognizedText = findViewById(R.id.recognizedText)
@@ -278,6 +290,11 @@ class MainActivity : Activity() {
         youtubeTapText = findViewById(R.id.youtubeTapText)
         agentRunText = findViewById(R.id.agentRunText)
         screenRunText = findViewById(R.id.screenRunText)
+        banglaModelStatusText = findViewById(R.id.banglaModelStatusText)
+        banglaModelButton = findViewById(R.id.banglaModelButton)
+        banglaAsrText = findViewById(R.id.banglaAsrText)
+        banglaModelButton.setOnClickListener { downloadBanglaModel() }
+        refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
         listenLangButton = findViewById(R.id.listenLangButton)
         listenLangButton.setOnClickListener {
@@ -1125,6 +1142,95 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
+    // v41: Bangla offline model download (Zipformer)
+    // ------------------------------------------------------------------
+
+    private fun downloadBanglaModel() {
+        if (banglaModelManager.isReady()) {
+            statusText.text = "বাংলা অফলাইন মডেল আগেই তৈরি আছে।"
+            refreshBanglaModelUi()
+            return
+        }
+        if (banglaModelManager.isDownloading()) {
+            statusText.text = "বাংলা অফলাইন মডেল ডাউনলোড চলছে…"
+            return
+        }
+        statusText.text = "বাংলা অফলাইন মডেল ডাউনলোড শুরু হচ্ছে…"
+        background.execute {
+            banglaModelManager.download(
+                object : BanglaModelManager.DownloadCallback {
+                    override fun onProgress(percent: Int) {
+                        mainHandler.post {
+                            statusText.text =
+                                "বাংলা অফলাইন মডেল ডাউনলোড হচ্ছে… $percent%"
+                            refreshBanglaModelUi()
+                        }
+                    }
+
+                    override fun onComplete() {
+                        mainHandler.post {
+                            statusText.text =
+                                "বাংলা অফলাইন মডেল তৈরি — এবার ব্যাকগ্রাউন্ডে " +
+                                    "বাংলা কমান্ড অফলাইনেই শুনবে।"
+                            refreshBanglaModelUi()
+                            updateStatus()
+                        }
+                    }
+
+                    override fun onError(message: String) {
+                        mainHandler.post {
+                            // Malik ne khud button dabakar maanga
+                            // tha — nakami saaf Bangla me bolo,
+                            // chup mat raho.
+                            statusText.text =
+                                "বাংলা অফলাইন মডেল ডাউনলোড হয়নি — নেট চেক করে " +
+                                    "আবার চেষ্টা করো।"
+                            refreshBanglaModelUi()
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * v41: Bangla model wali status line + button ka
+     * taaza roop — model ki asal haalat (files) aur
+     * download ki bandhi hui report se banta hai.
+     * refreshDiagLines ke 2-second wale chakkar se bhi
+     * bulta hai, taaki download ka percent bina chhue
+     * aage badhta dikhe.
+     */
+    private fun refreshBanglaModelUi() {
+        if (!::banglaModelStatusText.isInitialized) return
+        when {
+            banglaModelManager.isReady() -> {
+                banglaModelStatusText.text =
+                    "বাংলা অফলাইন মডেল: তৈরি আছে ✓ — ব্যাকগ্রাউন্ড বাংলা " +
+                        "কমান্ড এবার অফলাইনেই শুনবে"
+                banglaModelButton.text = "বাংলা অফলাইন মডেল ✓ তৈরি"
+            }
+            banglaModelManager.isDownloading() -> {
+                val pct = banglaModelManager.downloadPercent()
+                banglaModelStatusText.text =
+                    "বাংলা অফলাইন মডেল: ডাউনলোড হচ্ছে… $pct%"
+                banglaModelButton.text = "ডাউনলোড হচ্ছে… $pct%"
+            }
+            banglaModelManager.lastDownloadFailed() -> {
+                banglaModelStatusText.text =
+                    "বাংলা অফলাইন মডেল: ডাউনলোড হয়নি — নেট চেক করে আবার চেষ্টা করো"
+                banglaModelButton.text = "বাংলা অফলাইন মডেল আবার ডাউনলোড করো"
+            }
+            else -> {
+                banglaModelStatusText.text =
+                    "বাংলা অফলাইন মডেল: ডাউনলোড হয়নি (৭১ MB — একবার Wi-Fi-তে " +
+                        "নামালেই হবে)"
+                banglaModelButton.text = "বাংলা অফলাইন মডেল ডাউনলোড করো"
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Report lines ka refresh (v34 se wake bandobosto Mobile
     // hub me hai; yahan sirf jarvis_diag wali reporten bachi)
     // ------------------------------------------------------------------
@@ -1196,9 +1302,23 @@ class MainActivity : Activity() {
                     "Screen chaal (aakhiri): $screen"
                 }
             }
+            // v41: Bangla offline kaan ki report bhi yahin
+            // se — wake service "last_bangla_asr" bandhta
+            // hai ("zipformer 840ms: ..." / EMPTY / FAIL).
+            if (::banglaAsrText.isInitialized) {
+                val bangla = diag.getString("last_bangla_asr", null)
+                banglaAsrText.text = if (bangla.isNullOrBlank()) {
+                    "Bangla ASR (aakhiri): abhi tak koi koshish nahi"
+                } else {
+                    "Bangla ASR (aakhiri): $bangla"
+                }
+            }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
         }
+        // v41: Bangla model ki haalat wali line/button bhi
+        // isi chakkar me taaza rahe (download ka percent).
+        refreshBanglaModelUi()
         // v37: screen-agent ka sawal latka ho to use is
         // screen par rakho — user dusri app se wapas aakar
         // jawab yahin bolkar ya likhkar de sakta hai (dono
