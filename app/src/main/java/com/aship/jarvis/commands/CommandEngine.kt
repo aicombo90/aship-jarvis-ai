@@ -4,6 +4,7 @@ import android.content.Context
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.ai.ScreenshotStore
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1170,6 +1171,134 @@ class CommandEngine(
     }
 
     /**
+     * v40: ye suna hua hukm seedha SCREENSHOT lene wala
+     * hai kya — "স্ক্রিনশট নাও/তোলো/নে", "स्क्रीनशॉट लो",
+     * "screenshot lo / take a screenshot / screenshot"।
+     * [deterministicOffCommand] /
+     * [deterministicScrollCommand] wali hi shaili: match
+     * kachhe (raw) text se, teeno script, aur faisla
+     * SASTA hai (koi latch/IO nahi) taaki dono bulaane
+     * wale pehle poochh saken. Do suraksha-shartein:
+     * (1) screenshot shabd hona hi chahiye;
+     * (2) PATHANE/share ka iraada ho to ye seedha hukm
+     * NAHI hai — "…করে স্ক্রিনশট পাঠাও" jaise sanyukt
+     * hukm agent + share_screenshot auzaar ke hain.
+     * Lene wali kriya na mile to nanga "স্ক্রিনশট" sirf
+     * chhote (4 shabd tak) hukm-jaise vakya me maana
+     * jata hai — lambe vakya me beech me aaya screenshot
+     * shabd bharosa-mand hukm nahi hai.
+     */
+    fun isScreenshotCommand(rawText: String): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return false
+        if (SCREENSHOT_SHARE_MARKERS.any { raw.contains(it) }) return false
+        if (SCREENSHOT_WORD_MARKERS.none { raw.contains(it) }) return false
+        if (SCREENSHOT_TAKE_VERBS.any { raw.contains(it) }) return true
+        val tokens = raw.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+        return tokens.size <= 4
+    }
+
+    /**
+     * v40: pakke screenshot hukm ki asal koshish —
+     * v39 accessibility capture se tasveer, phir
+     * gallery (MediaStore, "ASHIP JARVIS" album) me
+     * bachaakar hukm ki bhasha me chhota sachha jawab।
+     * BANDHA (blocking) call hai: capture ka jawab
+     * service ke main-executor se aata hai, isliye
+     * bulane wala thread MAIN-thread NAHI hona chahiye
+     * (foreground raasta apne background executor se,
+     * wake-service apne executor thread se bulata hai)।
+     * Service band ho, tasveer hi na mile, ya screen
+     * surakshit (FLAG_SECURE) ho — teeno me imaan-daar
+     * wajah boli jati hai, jhoothi safalta kabhi nahi।
+     * Har koshish jarvis_diag me "last_screenshot_command"
+     * bankar rehti hai (scroll wali report ki shaili)।
+     */
+    fun runScreenshotCommand(rawText: String): CommandResult {
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveScreenshotDiag(rawText, "SERVICE_OFF")
+            return CommandResult(screenshotNeedsAccessibilityReply(lang), true)
+        }
+        val bitmap = ScreenshotStore.captureFresh(context)
+        if (bitmap == null) {
+            saveScreenshotDiag(rawText, "FAIL")
+            return CommandResult(screenshotFailedReply(lang), true)
+        }
+        if (ScreenshotStore.screenLooksSecure(context, bitmap)) {
+            saveScreenshotDiag(rawText, "SECURE")
+            return CommandResult(screenshotSecureReply(lang), true)
+        }
+        val saved = ScreenshotStore.saveToGallery(context, bitmap)
+        saveScreenshotDiag(rawText, if (saved) "OK" else "FAIL")
+        return if (saved) {
+            CommandResult(screenshotSavedReply(lang), true)
+        } else {
+            CommandResult(screenshotFailedReply(lang), true)
+        }
+    }
+
+    /** v40: screenshot bach gaya — hukm ki bhasha me chhoti tasalli. */
+    private fun screenshotSavedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনশট নিয়ে গ্যালারিতে রেখে দিয়েছি।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीनशॉट लेकर गैलरी में रख दिया है।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Screenshot taken and saved to your gallery."
+        }
+
+    /** v40: screen surakshit hai — screenshot ho hi nahi sakta. */
+    private fun screenshotSecureReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "এই স্ক্রিনটা সুরক্ষিত — এর স্ক্রিনশট নেওয়া যাবে না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "यह स्क्रीन सुरक्षित है — इसका स्क्रीनशॉट नहीं लिया जा सकता।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "This screen is protected, so I can't take its screenshot."
+        }
+
+    /** v40: capture/bachana asafal — sachha nakam jawab. */
+    private fun screenshotFailedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনশট নিতে পারলাম না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीनशॉट नहीं ले पाई।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I couldn't take the screenshot."
+        }
+
+    /** v40: screenshot ke liye Accessibility pehle chahiye. */
+    private fun screenshotNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনশট নিতে Accessibility লাগবে — অ্যাপ খুলে চালু করে নাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीनशॉट लेने के लिए पहले ऐप खोलकर Accessibility ऑन कर लो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Taking a screenshot needs Accessibility — " +
+                    "please open the app and turn it on."
+        }
+
+    /** v40: screenshot koshish ki report jarvis_diag me — suna hua hukm + natija. */
+    private fun saveScreenshotDiag(rawText: String, tag: String) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_screenshot_command",
+                    "screenshot: " + rawText.trim().take(40) + " -> " + tag
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
      * v25: agent ke auzaar (AgentTools) ke liye seedha
      * app-kholna. Raasta wahi pakka hai jo "kholo" command
      * leta hai — pehle fixed list, phir launcher ke labels
@@ -1385,6 +1514,39 @@ class CommandEngine(
         /** v38: nange scroll shabd ke saath hukm wali kriya hai kya. */
         val SCROLL_DO_VERBS = listOf(
             "করো", "কর", "करो", "कर", "karo", "koro", "do"
+        )
+
+        /** v40: screenshot shabd ke saare roop — kachhe text par contains milaane ke liye. */
+        val SCREENSHOT_WORD_MARKERS = listOf(
+            "স্ক্রিনশট", "স্ক্রীনশট", "স্ক্রিন শট",
+            "स्क्रीनशॉट", "स्क्रीनशाट", "स्क्रीन शॉट",
+            "screenshot", "screen shot"
+        )
+
+        /**
+         * v40: screenshot LENE wali kriya ke sanket.
+         * Bangla "নে" jaan-boojh kar nahi hai — "মনে"-jaise
+         * shabdon ke andar ghuskar jhootha match bana
+         * sakta hai; nanga chhota "স্ক্রিনশট নে" token-ginati
+         * wale raaste se waise bhi pakda jata hai.
+         */
+        val SCREENSHOT_TAKE_VERBS = listOf(
+            "নাও", "নিন", "নেও", "নিয়ে",
+            "তোলো", "তুলে", "তোল", "করো", "কর",
+            "लो", "ले", "निकालो", "खींचो", "करो",
+            "take", "capture", "snap", "lo", "le", "karo", "koro", "now"
+        )
+
+        /**
+         * v40: pathane/share ke iraade ke sanket — inme
+         * se ek bhi ho to hukm seedha screenshot-wala
+         * NAHI hai (agent + share_screenshot ka kaam hai).
+         */
+        val SCREENSHOT_SHARE_MARKERS = listOf(
+            "পাঠাও", "পাঠিয়ে", "পাঠান", "পাঠা", "পাঠাতে",
+            "শেয়ার", "পাঠিয়ে দাও",
+            "send", "share",
+            "भेज", "भेजो", "भेजिए", "शेयर"
         )
 
         /**
