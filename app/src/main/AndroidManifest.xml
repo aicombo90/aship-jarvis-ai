@@ -96,6 +96,21 @@
             </intent-filter>
         </activity>
 
+        <!-- v34: Mobile hub — background bandobosto ab yahin
+             se hota hai: pehle mobile chuno (vivo / Samsung),
+             phir us company wali setup screen. -->
+        <activity
+            android:name=".MobileHubActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".VivoSetupActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".SamsungSetupActivity"
+            android:exported="false" />
+
         <!-- Phase 2: wake-word foreground service. Not exported; only
              this app's UI starts and stops it. -->
         <service
