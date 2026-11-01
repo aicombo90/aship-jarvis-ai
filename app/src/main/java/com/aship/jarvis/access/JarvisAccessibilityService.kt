@@ -3,8 +3,11 @@ package com.aship.jarvis.access
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
+import android.hardware.HardwareBuffer
+import android.view.Display
 import android.content.ComponentName
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -81,6 +84,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  * saaf taur par kaha jaye; send/pay/delete jaise kadmon
  * ki pushti user se ScreenAgent leta hai, yahan nahi.
  *
+ * v39: chautha ghoshit kaam — screen-VISION ki tasveer:
+ * [captureScreenshot] takeScreenshot() (Android 11+,
+ * config me canTakeScreenshot) se is pal ki screen ka
+ * Bitmap deta hai, taaki ScreenAgent node-khaali screen
+ * (gallery, browser, canvas app) par nishan-aankit (Set-
+ * of-Mark) tasveer mastishk ko bhej sake. Tasveer kahin
+ * bhejni/share karni is sanskar me NAHI hai — saaf
+ * (bina-nishan) tasveer sirf yaad me rehti hai
+ * ([lastCleanScreenshot]) aane wale sanskaron ke liye.
+ * System ki dar-seema (rate limit) ka samman: ~1.2 s ke
+ * andar dusri maang par pichhli tasveer hi laut-ti hai;
+ * gadbad (interval-wali bhi) par null — bulane wala us
+ * kadam par bina tasveer aage badhta hai.
+ *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
  * Kul intezaar ~8 second se bandha hai.
@@ -155,7 +172,11 @@ class JarvisAccessibilityService : AccessibilityService() {
      * content-description milakar saaf kiya hua naam hai
      * (khaali bhi ho sakta hai — bina-naam wala button);
      * (centerX, centerY) screen par uske beech ke
-     * nirdeshank hain.
+     * nirdeshank hain. v39: chaukona [left], [top],
+     * [right], [bottom] (screen px) bhi band hota hai —
+     * Set-of-Mark tasveer par wahi chaukona nambar ke
+     * saath banta hai aur tap_mark usi hisse ke beech
+     * par padta hai.
      */
     data class ScreenElement(
         val text: String,
@@ -163,7 +184,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         val clickable: Boolean,
         val editable: Boolean,
         val centerX: Int,
-        val centerY: Int
+        val centerY: Int,
+        val left: Int = 0,
+        val top: Int = 0,
+        val right: Int = 0,
+        val bottom: Int = 0
     )
 
     /** v37: ek pal ki screen ka saar — saamne wali app aur uske hisse. */
@@ -194,6 +219,28 @@ class JarvisAccessibilityService : AccessibilityService() {
     @Volatile
     private var tapBusy = false
     private val ytLabels = LinkedHashSet<String>()
+
+    // v39: screen-tasveer ki cache — system ki dar-seema
+    // (~1 s se jaldi dusri tasveer par ERROR_TAKE_SCREENSHOT_
+    // INTERVAL_TIME_SHORT) se bachne ke liye. Maangne wale
+    // ke thread aur takeScreenshot ke callback thread dono
+    // chhoote hain, isliye @Volatile; ScreenAgent ki maangein
+    // waise bhi ek ke baad ek aati hain.
+    @Volatile
+    private var lastShotBitmap: Bitmap? = null
+
+    @Volatile
+    private var lastShotAtMs: Long = 0L
+
+    /**
+     * v39: aakhiri safal SAFAL tasveer ka saaf (bina
+     * nishan wala) roop — aane wale sanskaron (share
+     * waghera) ke liye sirf yaad me rakha hai; is sanskar
+     * me iska koi istemal nahi hota.
+     */
+    @Volatile
+    var lastCleanScreenshot: Bitmap? = null
+        private set
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -354,6 +401,100 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * v39: is pal ki screen ki TASVEER — takeScreenshot()
+     * (Android 11+; usse purane phone par turant null)।
+     * Callback kisi bhi thread par aa sakta hai.
+     *
+     * Dar-seema ka samman: pichhli safal tasveer
+     * [SHOT_MIN_INTERVAL_MS] se taazi ho to wahi laut-ti
+     * hai — system ka interval-wala error (aur har doosri
+     * gadbad) null bankar aata hai, bulane wala us kadam
+     * par bina tasveer ke aage badhta hai; kaam kabhi
+     * tasveer ki wajah se nahi rukta. Safal tasveer
+     * [lastCleanScreenshot] me bhi band hoti hai.
+     *
+     * FLAG_SECURE wali screen par tasveer kaali aati hai —
+     * use pehchanna ScreenAgent/ScreenVision ka kaam hai,
+     * yahan tasveer jaisi mili waisi hi jaati hai.
+     */
+    fun captureScreenshot(callback: (Bitmap?) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            deliverShot(callback, null)
+            return
+        }
+        val cached = lastShotBitmap
+        val age = SystemClock.uptimeMillis() - lastShotAtMs
+        if (cached != null && age in 0 until SHOT_MIN_INTERVAL_MS) {
+            deliverShot(callback, cached)
+            return
+        }
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        deliverShot(callback, unwrapShot(screenshot))
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        // Interval-wali gadbad bhi yahin aati
+                        // hai — is kadam par tasveer nahi.
+                        deliverShot(callback, null)
+                    }
+                }
+            )
+        } catch (t: Throwable) {
+            deliverShot(callback, null)
+        }
+    }
+
+    /**
+     * v39: ScreenshotResult ke hardware buffer ko aam
+     * (software, padhne-aankne layak) Bitmap me badlo —
+     * hardware bitmap par na pixel padhe jate hain na
+     * Canvas se nishan bante hain. Buffer har haal me
+     * band hota hai (system ki seema bandhi hai).
+     */
+    private fun unwrapShot(screenshot: ScreenshotResult): Bitmap? {
+        var hardware: Bitmap? = null
+        val copy = try {
+            hardware = Bitmap.wrapHardwareBuffer(
+                screenshot.hardwareBuffer,
+                screenshot.colorSpace
+            )
+            hardware?.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            null
+        }
+        try {
+            hardware?.recycle()
+        } catch (t: Throwable) {
+            // Pehle se saaf: kuch nahi karna.
+        }
+        try {
+            screenshot.hardwareBuffer.close()
+        } catch (t: Throwable) {
+            // Band karne ki gadbad tasveer ko nahi rokti.
+        }
+        if (copy != null) {
+            lastShotBitmap = copy
+            lastShotAtMs = SystemClock.uptimeMillis()
+            lastCleanScreenshot = copy
+        }
+        return copy
+    }
+
+    /** v39: tasveer ka natija surakshit roop se bulane wale tak pahunchayo. */
+    private fun deliverShot(callback: (Bitmap?) -> Unit, bitmap: Bitmap?) {
+        try {
+            callback(bitmap)
+        } catch (t: Throwable) {
+            // Bulane wala ja chuka hai: natija chhod do.
+        }
+    }
+
+    /**
      * v37: screen par [text] naam wali cheez dabao — naam
      * mila to ungli-jaisa gesture tap (v33 wala hi raasta),
      * woh na chale to ACTION_CLICK। Natija: dab paya ya
@@ -501,7 +642,11 @@ class JarvisAccessibilityService : AccessibilityService() {
                         clickable = clickable,
                         editable = editable,
                         centerX = bounds.centerX(),
-                        centerY = bounds.centerY()
+                        centerY = bounds.centerY(),
+                        left = bounds.left,
+                        top = bounds.top,
+                        right = bounds.right,
+                        bottom = bounds.bottom
                     )
                 )
             } catch (t: Throwable) {
@@ -1569,6 +1714,24 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.captureScreen(callback)
         }
 
+        /**
+         * v39: kahin se bhi screen ki tasveer maango:
+         * service band ho (ya instance abhi bandha na ho)
+         * to turant null, warna chalti hui service ko kaam
+         * saunp do (natija callback se).
+         */
+        fun captureScreenshot(
+            context: Context,
+            callback: (Bitmap?) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(null)
+                return
+            }
+            service.captureScreenshot(callback)
+        }
+
         /** v37: kahin se bhi naam wali cheez dabao — service band ho to turant false. */
         fun tapScreenText(
             context: Context,
@@ -1681,6 +1844,10 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val SCROLL_DURATION_MS = 320L
         // v38: hukm wale scroll ka swipe samay (~60% unchai ka safar).
         private const val SCROLL_COMMAND_DURATION_MS = 350L
+        // v39: tasveer ki dar-seema — isse jaldi dusri maang
+        // par pichhli tasveer hi laut-ti hai (system ka
+        // interval error ~1 s ke aas-paas aata hai).
+        private const val SHOT_MIN_INTERVAL_MS = 1_200L
         private val WHITESPACE_RUN = Regex("""\s+""")
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
