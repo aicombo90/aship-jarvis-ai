@@ -374,6 +374,16 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * v38: pakke scroll hukm wala swipe — screen-agent wale
+     * [scrollScreen] se alag, ungli screen ki ~60% unchai
+     * tak chalti hai (hukm wala scroll ek baar me zyada
+     * door jaye). Mashinari wahi (dispatchSwipe) hai.
+     */
+    fun scrollCommand(down: Boolean, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runScrollCommand(down) }
+    }
+
+    /**
      * v37: is pal focus wale (ya pehle dikhai dene wale
      * editable) khane me [text] likho — ACTION_SET_TEXT,
      * woh na chale to clipboard + paste wala raasta.
@@ -569,6 +579,15 @@ class JarvisAccessibilityService : AccessibilityService() {
         val yFrom = metrics.heightPixels * if (down) 0.72f else 0.28f
         val yTo = metrics.heightPixels * if (down) 0.28f else 0.72f
         return dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_DURATION_MS)
+    }
+
+    /** v38: hukm wale scroll ka swipe — 0.80 <-> 0.20, yani screen ki ~60% unchai ka safar. */
+    private fun runScrollCommand(down: Boolean): Boolean {
+        val metrics = resources.displayMetrics
+        val cx = metrics.widthPixels / 2f
+        val yFrom = metrics.heightPixels * if (down) 0.80f else 0.20f
+        val yTo = metrics.heightPixels * if (down) 0.20f else 0.80f
+        return dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_COMMAND_DURATION_MS)
     }
 
     /** v37: (x1, y1) se (x2, y2) tak ungli-jaisa swipe — [tapAtPoint] wala hi bandha intezaar. */
@@ -1593,6 +1612,20 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.scrollScreen(down, callback)
         }
 
+        /** v38: kahin se bhi pakka scroll hukm (~60% unchai wala swipe) — service band ho to turant false. */
+        fun scrollCommand(
+            context: Context,
+            down: Boolean,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.scrollCommand(down, callback)
+        }
+
         /** v37: kahin se bhi focus wale khane me likho — service band ho to turant false. */
         fun typeScreenText(
             context: Context,
@@ -1646,6 +1679,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val MAX_SCREEN_ELEMENTS = 60
         private const val MAX_SCREEN_LABEL_CHARS = 90
         private const val SCROLL_DURATION_MS = 320L
+        // v38: hukm wale scroll ka swipe samay (~60% unchai ka safar).
+        private const val SCROLL_COMMAND_DURATION_MS = 350L
         private val WHITESPACE_RUN = Regex("""\s+""")
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
