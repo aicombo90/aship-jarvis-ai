@@ -34,7 +34,8 @@ import com.aship.jarvis.voice.ModelManager
  * nahi hai — wahan uski jagah Samsung wala khaas hissa hai):
  * wakeStatusText, wakeStartButton, wakeStopButton,
  * accessibilityStatusText, accessibilityButton,
- * overlayPermissionButton, batteryButton (sirf vivo).
+ * overlayPermissionButton, batteryButton (sirf vivo),
+ * appInfoButton + otherBrandButton (v35, dono par).
  */
 abstract class WakeSetupActivity : Activity() {
 
@@ -87,6 +88,44 @@ abstract class WakeSetupActivity : Activity() {
         accessibility?.setOnClickListener { onAccessibilityButtonClicked() }
         val overlay: Button? = findViewById(R.id.overlayPermissionButton)
         overlay?.setOnClickListener { onOverlayPermissionClicked() }
+        // v35: Restricted Settings wala madad hissa (dono brand
+        // screenon par ek jaisa) — "App info খুলুন" button.
+        val appInfo: Button? = findViewById(R.id.appInfoButton)
+        appInfo?.setOnClickListener { openAppDetailsSettings() }
+        // v35: brand ki screen ab main screen se seedha khulti
+        // hai, phir bhi doosri screen dekhni ho to hub ka
+        // raasta har brand screen par rakha hai.
+        val otherBrand: Button? = findViewById(R.id.otherBrandButton)
+        otherBrand?.setOnClickListener {
+            startActivity(Intent(this, MobileHubActivity::class.java))
+        }
+    }
+
+    /**
+     * v35: is app ki App info (details) screen kholo —
+     * Restricted Settings wala ⋮ menü wahin milta hai
+     * (⋮ → Allow restricted settings), usi ke liye ye
+     * button Accessibility wale hisse ke saath diya hai.
+     */
+    protected fun openAppDetailsSettings() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (e2: Exception) {
+                Toast.makeText(
+                    this,
+                    "Settings > Apps > ASHIP JARVIS AI kholiye.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     override fun onResume() {
