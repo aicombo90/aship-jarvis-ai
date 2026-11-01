@@ -16,14 +16,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
-import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.GeminiBrain
@@ -51,9 +49,9 @@ import java.util.concurrent.Executors
  * offline CommandEngine and speaks the reply. Mode (Offline / Online /
  * Auto) is picked here and remembered between launches.
  *
- * Phase 2 adds the section at the bottom: start/stop the background
- * wake-word service (JarvisWakeService) and the battery-exemption
- * shortcut vivo phones need for it to survive.
+ * v34: background wake-word ke bandobosto is screen se
+ * "Mobile" hub me chale gaye hain (vivo / Samsung screenen);
+ * yahan sirf unhe kholne wala ek button hai.
  */
 class MainActivity : Activity() {
 
@@ -64,20 +62,16 @@ class MainActivity : Activity() {
     private lateinit var commandInput: EditText
     private lateinit var modeGroup: RadioGroup
 
-    // Phase 2: background wake-word section.
-    private lateinit var wakeStatusText: TextView
-    private lateinit var wakeStartButton: Button
-    private lateinit var wakeStopButton: Button
-    private var pendingWakeStart = false
+    // v34: background wake-word ke bandobosto (start/stop,
+    // battery, accessibility, overlay) ab "Mobile" hub ke
+    // andar hain — VivoSetupActivity / SamsungSetupActivity,
+    // saajha aadhaar WakeSetupActivity. Is screen par unhe
+    // kholne wala sirf ek button bacha hai.
 
     // v29: contacts permission app khulne par zyada se
     // zyada ek baar maangi jati hai — mana ho to baar-
     // baar tang (nag) nahi karna.
     private var contactsPermissionRequested = false
-
-    // v17: Accessibility (mobile data) section — battery wale
-    // bandobosto ki tarah hi ek status line + ek button.
-    private lateinit var accessibilityStatusText: TextView
 
     // v23: panel-scan report ki line — Accessibility service
     // har data koshish ke baad SharedPreferences "jarvis_diag"
@@ -172,21 +166,12 @@ class MainActivity : Activity() {
             downloadHindiModel()
         }
 
-        wakeStatusText = findViewById(R.id.wakeStatusText)
-        wakeStartButton = findViewById(R.id.wakeStartButton)
-        wakeStopButton = findViewById(R.id.wakeStopButton)
-
-        wakeStartButton.setOnClickListener { onWakeStartClicked() }
-        wakeStopButton.setOnClickListener {
-            if (JarvisWakeService.isRunning) {
-                startService(JarvisWakeService.stopIntent(this))
-            }
-            mainHandler.postDelayed({ updateWakeUi() }, 600)
+        // v34: Mobile hub — background/wake/battery/accessibility/
+        // overlay ke saare bandobosto ab is ek button ke peeche
+        // hain (vivo / Samsung ke alag-alag hisse).
+        findViewById<Button>(R.id.mobileSettingsButton).setOnClickListener {
+            startActivity(Intent(this, MobileHubActivity::class.java))
         }
-        findViewById<Button>(R.id.batteryButton).setOnClickListener {
-            onBatteryButtonClicked()
-        }
-        accessibilityStatusText = findViewById(R.id.accessibilityStatusText)
         panelScanText = findViewById(R.id.panelScanText)
         youtubeTapText = findViewById(R.id.youtubeTapText)
         agentRunText = findViewById(R.id.agentRunText)
@@ -199,12 +184,6 @@ class MainActivity : Activity() {
                 else -> "bn-IN"
             }
             refreshListenLangButton()
-        }
-        findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
-            onAccessibilityButtonClicked()
-        }
-        findViewById<Button>(R.id.overlayPermissionButton).setOnClickListener {
-            onOverlayPermissionClicked()
         }
         findViewById<Button>(R.id.updateCheckButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -224,7 +203,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
         }
         refreshGeminiKeyUi()
-        updateWakeUi()
+        refreshDiagLines()
 
         // v29: call_person auzaar ke liye contacts
         // permission — app khulne par ek baar maango;
@@ -239,8 +218,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        updateWakeUi()
-        // Keep the wake status line live while this screen is visible.
+        refreshDiagLines()
+        // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
         mainHandler.postDelayed(wakeRefreshRunnable, WAKE_REFRESH_MS)
     }
@@ -461,36 +440,9 @@ class MainActivity : Activity() {
                 ).show()
             }
         }
-        if (requestCode == REQUEST_RECORD_AUDIO_WAKE) {
-            val granted = grantResults.isNotEmpty() &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED
-            if (granted && pendingWakeStart) {
-                pendingWakeStart = false
-                requestNotificationsPermissionIfNeeded()
-                startWakeServiceNow()
-            } else {
-                pendingWakeStart = false
-                Toast.makeText(
-                    this,
-                    "Mic permission ke bina background sunna nahi chalega.",
-                    Toast.LENGTH_LONG
-                ).show()
-                updateWakeUi()
-            }
-        }
-        if (requestCode == REQUEST_POST_NOTIFICATIONS) {
-            val granted = grantResults.isNotEmpty() &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                Toast.makeText(
-                    this,
-                    "Notification permission nahi mila — service chalega, " +
-                        "par upar wala notice nahi dikhega.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            updateWakeUi()
-        }
+        // v34: wake-start aur notification permission ke jawab
+        // ab WakeSetupActivity me bante hain (wahi se maange
+        // jate hain) — yahan sirf mic + contacts bache hain.
         if (requestCode == REQUEST_READ_CONTACTS) {
             val granted = grantResults.isNotEmpty() &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
@@ -640,8 +592,8 @@ class MainActivity : Activity() {
      * kya bola (OK / HTTP code / timeout / net). GeminiBrain
      * report likhta hai; wake service se hui koshishen bhi
      * yahin dikhti hain kyunki prefs file ek hi hai. Ye line
-     * refreshGeminiKeyUi ke saath aur updateWakeUi (onResume
-     * + har 2 s) ke saath taza hoti hai.
+     * refreshGeminiKeyUi ke saath aur refreshDiagLines
+     * (onResume + har 2 s) ke saath taza hoti hai.
      */
     /** v33: "শোনার ভাষা" button ka label — AppPrefs wali pasand dikhao. */
     private fun refreshListenLangButton() {
@@ -755,91 +707,31 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
-    // Phase 2: background wake-word listening
+    // Report lines ka refresh (v34 se wake bandobosto Mobile
+    // hub me hai; yahan sirf jarvis_diag wali reporten bachi)
     // ------------------------------------------------------------------
 
     private val wakeRefreshRunnable = object : Runnable {
         override fun run() {
-            updateWakeUi()
+            refreshDiagLines()
             mainHandler.postDelayed(this, WAKE_REFRESH_MS)
         }
     }
 
-    private fun updateWakeUi() {
-        if (!::wakeStatusText.isInitialized) return
-        val modelReady = modelManager.isModelReady(ModelLanguage.HINDI)
-        val running = JarvisWakeService.isRunning
-        wakeStartButton.isEnabled = modelReady && !running
-        wakeStopButton.isEnabled = running
-        wakeStatusText.text = buildString {
-            when {
-                !modelReady -> append(
-                    "Background sunna band hai: pehle Hindi offline model " +
-                        "download kijiye (upar wala button) — bina model ke " +
-                        "wake word sunna nahi chalega."
-                )
-                running -> append(
-                    "Background sunna CHALU hai — ${JarvisWakeService.statusMessage}"
-                )
-                else -> append("Background sunna band hai.")
-            }
-            append("\nWake hits (kitni baar 'Jarvis' suna): ${prefs.wakeHitCount}")
-            val lastHeard = if (
-                prefs.lastHeardPartialAtMs > prefs.lastHeardAtMs &&
-                prefs.lastHeardPartialText.isNotBlank()
-            ) {
-                prefs.lastHeardPartialText
-            } else {
-                prefs.lastHeardText.ifBlank { prefs.lastHeardPartialText }
-            }
-            val lastHeardLabel = if (lastHeard.isBlank()) "—" else "'$lastHeard'"
-            append("\nMic ne aakhri suna: $lastHeardLabel")
-            if (running && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                append(
-                    "\nNote: notification permission nahi hai — upar wala " +
-                        "notice nahi dikhega, service phir bhi chal raha hai."
-                )
-            }
-            append(
-                if (isBatteryOptimizationIgnored()) {
-                    "\nBattery bandobosto: ho gaya hai (whitelist me hai)."
-                } else {
-                    "\nBattery bandobosto: nahi hua — vivo service ko band kar " +
-                        "sakta hai, neeche wale button se theek kijiye."
-                }
-            )
-            append(
-                if (Settings.canDrawOverlays(this@MainActivity)) {
-                    "\nOverlay permission ('Display over other apps'): mila hai — " +
-                        "background se app khul sakta hai."
-                } else {
-                    "\nOverlay permission ('Display over other apps'): NAHI mila — " +
-                        "background se koi app nahi khulega; neeche wale " +
-                        "OVERLAY button se dijiye."
-                }
-            )
-        }
-        // v17: Accessibility ki haalat — ye function onResume par
-        // aur har 2 s me chalta hai, isliye Settings se wapas
-        // aate hi line khud taza ho jati hai.
-        if (::accessibilityStatusText.isInitialized) {
-            accessibilityStatusText.text = if (
-                JarvisAccessibilityService.isEnabled(this)
-            ) {
-                "Accessibility: চালু আছে — 'মোবাইল ডাটা অন করো' বললেই হবে।"
-            } else {
-                "Accessibility: নেই — মোবাইল ডাটা কমান্ডের জন্য " +
-                    "নিচের বোতাম থেকে চালু করুন।"
-            }
-        }
+    /**
+     * v34: is screen par ab sirf report wali lines taza hoti
+     * hain (panel scan, YouTube tap, agent chaal, shune wali
+     * bhasha, online koshish). Wake / battery / accessibility /
+     * overlay ki haalat ab Mobile hub ki screenon par dikhti
+     * hai (WakeSetupActivity.refreshSetupUi dekho).
+     */
+    private fun refreshDiagLines() {
+        if (!::panelScanText.isInitialized) return
         // v23: aakhiri panel-scan ki report — tile na mile to
         // is line se pata chalta hai ki panel me asal me tha
         // kya. Report service SharedPreferences "jarvis_diag"
         // me likhti hai; kabhi koshish hi na hui ho to waisa
-        // saaf likho. Ye bhi updateWakeUi ke saath hi taza
+        // saaf likho. Ye bhi refreshDiagLines ke saath hi taza
         // hoti hai (onResume + har 2 s).
         if (::panelScanText.isInitialized) {
             val report = try {
@@ -886,49 +778,6 @@ class MainActivity : Activity() {
         refreshGeminiDiag()
     }
 
-    private fun onWakeStartClicked() {
-        if (!modelManager.isModelReady(ModelLanguage.HINDI)) {
-            Toast.makeText(
-                this,
-                "Pehle Hindi offline model download kijiye — bina model ke " +
-                    "background sunna nahi chalega.",
-                Toast.LENGTH_LONG
-            ).show()
-            updateWakeUi()
-            return
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            pendingWakeStart = true
-            requestPermissions(
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                REQUEST_RECORD_AUDIO_WAKE
-            )
-            return
-        }
-        requestNotificationsPermissionIfNeeded()
-        startWakeServiceNow()
-    }
-
-    private fun startWakeServiceNow() {
-        // Stopping this screen's own tap-to-speak engine first: two
-        // recognizers must never fight over the microphone.
-        if (listening) {
-            engine?.stopListening()
-        }
-        try {
-            startForegroundService(JarvisWakeService.startIntent(this))
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "Service start nahi ho paya: ${e.message}",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-        mainHandler.postDelayed({ updateWakeUi() }, 600)
-    }
-
     /**
      * v29: contacts permission sirf call_person auzaar
      * ke liye hai. Ek app-start par zyada se zyada ek
@@ -951,114 +800,9 @@ class MainActivity : Activity() {
         )
     }
 
-    /** Android 13+: ask for the notification permission; denial is fine. */
-    private fun requestNotificationsPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                REQUEST_POST_NOTIFICATIONS
-            )
-        }
-    }
-
-    private fun isBatteryOptimizationIgnored(): Boolean {
-        val powerManager = getSystemService(PowerManager::class.java) ?: return false
-        return powerManager.isIgnoringBatteryOptimizations(packageName)
-    }
-
-    private fun onBatteryButtonClicked() {
-        if (isBatteryOptimizationIgnored()) {
-            Toast.makeText(
-                this,
-                "Battery bandobosto pehle se ho gaya hai — Jarvis whitelist me hai.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-        try {
-            startActivity(
-                Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
-                )
-            )
-        } catch (e: Exception) {
-            try {
-                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            } catch (e2: Exception) {
-                Toast.makeText(
-                    this,
-                    "Settings > Battery > ASHIP JARVIS AI > No restrictions chunein.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    /**
-     * v17: "Accessibility চালু করো" — battery wale button ki
-     * tarah seedha sahi Settings page kholta hai. Wahan
-     * "Installed apps" ke andar ASHIP JARVIS AI ko ON karna
-     * hai; wapas aane par status line khud badal jayegi.
-     * Service pehle se chalu ho to sirf bata do.
-     */
-    private fun onAccessibilityButtonClicked() {
-        if (JarvisAccessibilityService.isEnabled(this)) {
-            Toast.makeText(
-                this,
-                "Accessibility pehle se chalu hai — 'mobile data on karo' bolkar dekho.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-        try {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "Settings > Accessibility > Installed apps > " +
-                    "ASHIP JARVIS AI > On kijiye.",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    /**
-     * "Display over other apps" — bina iske Android background service
-     * se koi app kholne nahi deta (Phase 2 fix). Settings ka page
-     * kholta hai; wahan Allow karke wapas aana hai.
-     */
-    private fun onOverlayPermissionClicked() {
-        if (Settings.canDrawOverlays(this)) {
-            Toast.makeText(
-                this,
-                "Overlay permission pehle se mila hai — background se app khul sakta hai.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-        try {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-            )
-        } catch (e: Exception) {
-            try {
-                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
-            } catch (e2: Exception) {
-                Toast.makeText(
-                    this,
-                    "Settings > Apps > ASHIP JARVIS AI > 'Display over other apps' Allow kijiye.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
+    // v34: notification / battery / accessibility / overlay
+    // wale bandobosto yahan se Mobile hub ki screenon par
+    // chale gaye hain (WakeSetupActivity dekho).
 
     // ------------------------------------------------------------------
     // In-app update (GitHub Releases)
@@ -1238,8 +982,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_RECORD_AUDIO = 1001
-        private const val REQUEST_RECORD_AUDIO_WAKE = 1002
-        private const val REQUEST_POST_NOTIFICATIONS = 1003
         private const val REQUEST_READ_CONTACTS = 1004
         private const val WAKE_REFRESH_MS = 2_000L
 
