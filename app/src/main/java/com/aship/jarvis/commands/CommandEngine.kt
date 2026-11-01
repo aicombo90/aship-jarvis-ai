@@ -188,7 +188,13 @@ class CommandEngine(
 
         // --- Torch / flashlight -------------------------------------------
         if (text.contains("torch") || text.contains("flashlight") || text.contains("flash light")) {
-            val turnOff = text.contains("off") || text.contains("band")
+            // v36: OFF hamesha jeetega — spasht "band" (uske
+            // saare roop) text me kahin bhi ho to band hi
+            // hoga, "chalu/jalao" jaise ON wale shabd garble
+            // me saath ghus aaye hon tab bhi. Bina disha wala
+            // hukm pehle ki tarah ON ki taraf hi jata hai
+            // (is branch ka purana vyavhaar).
+            val turnOff = hasOffWord(text)
             val ok = PhoneActions.setTorch(context, !turnOff)
             return if (ok) {
                 CommandResult(if (turnOff) "टॉर्च बंद कर दिया।" else "टॉर्च जला दिया।", true)
@@ -474,6 +480,13 @@ class CommandEngine(
             "फ्लैशलाइट" to "flashlight", "ফ্ল্যাশলাইট" to "flashlight",
             "अलार्म" to "alarm", "অ্যালার্ম" to "alarm",
             "बंद" to "band", "বন্ধ" to "band",
+            // v36: OFF ke aur sune/garble hue roop — Vosk Hindi
+            // Bangla "বন্ধ" ko aksar बन्द/बंध sunta hai, aur
+            // Bangla recognizer বন্দ/বাঁধ bhi de sakta hai.
+            // Ye na hon to "টর্চ বন্ধ করো" ka "band" banta hi
+            // nahi tha aur hukm ON me badal jata tha.
+            "बन्द" to "band", "बंध" to "band",
+            "বন্দ" to "band", "বাঁধ" to "band",
             // Time / date
             "समय" to "samay", "সময়" to "samay",
             "बजे" to "baje", "বাজে" to "baje",
@@ -963,6 +976,20 @@ class CommandEngine(
     private fun hasWord(text: String, word: String): Boolean =
         text.split(Regex("""\s+""")).any { it.trim(',', '.', '।') == word }
 
+    /**
+     * v36: OFF disha ka pakka sanket hai kya. "band" wala
+     * milaap jaan-boojh kar contains hai — normalize ke
+     * baad OFF ke saare script roop (বন্ধ/বন্দ/বাঁধ/बंद/
+     * बन्द/बंध) "band" bankar aate hain aur Latin garble
+     * "bandh" bhi usi me aa jata hai; "bondho" Bangla
+     * Latin wala aam roop hai. "off" ke liye poora shabd
+     * chahiye, taaki "offline" jaise shabdon ke andar
+     * chhupa "off" galti se disha na ban jaye.
+     */
+    private fun hasOffWord(text: String): Boolean =
+        text.contains("band") || text.contains("bondho") ||
+            hasWord(text, "off")
+
     private fun openTarget(target: AppTarget): CommandResult {
         if (fromBackgroundService) {
             // Background launches must cross the overlay bridge, and a
@@ -997,6 +1024,38 @@ class CommandEngine(
         } else {
             CommandResult("${target.displayName} इस फ़ोन में नहीं मिला या खुल नहीं पाया।", true)
         }
+    }
+
+    /**
+     * v36: spasht OFF wala device hukm — seedha yahin se,
+     * pakke offline raaste se chalao aur sachha natija do.
+     * Background (orb) wale raaste par Vosk ka garble text
+     * agent ke paas jata tha aur wahan "বন্ধ করো" bhi kabhi
+     * kabhi "chalu" bankar laut aata tha; spasht OFF kabhi
+     * ON nahi banna chahiye, isliye wake service agent se
+     * PEHLE is jaanch ko bulati hai. Torch aur mobile data
+     * — dono wahi disha-niyam jo [dispatch] leta hai (OFF
+     * mile to OFF hi). Aisa hukm na ho to null — bulane
+     * wala apna aam raasta aaram se aage badhaye.
+     */
+    fun deterministicOffCommand(rawText: String): CommandResult? {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        if (text.isEmpty() || !hasOffWord(text)) return null
+        if (text.contains("torch") || text.contains("flashlight") ||
+            text.contains("flash light")
+        ) {
+            val ok = PhoneActions.setTorch(context, false)
+            return if (ok) {
+                CommandResult("टॉर्च बंद कर दिया।", true)
+            } else {
+                CommandResult("इस फ़ोन पर टॉर्च कंट्रोल नहीं हो पाया।", true)
+            }
+        }
+        val dataMention = text.contains("mobile data") || hasWord(text, "data")
+        if (dataMention) {
+            return mobileDataCommand(turnOn = false)
+        }
+        return null
     }
 
     /**
