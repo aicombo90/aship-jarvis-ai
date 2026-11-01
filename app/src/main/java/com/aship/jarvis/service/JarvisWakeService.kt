@@ -33,6 +33,7 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
@@ -43,6 +44,7 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -131,6 +133,16 @@ import java.util.concurrent.Executors
  * na mile to purana raasta (adda -> engine -> retry) bilkul
  * pehle jaisa chalega; gate band ho to agent ka naam bhi
  * nahi liya jata.
+ *
+ * v36 teen background sudhaar: (1) play-iraade wala hukm
+ * (PlayIntent) agent ke saath-saath seedhe youtube_play
+ * par bhi ja sakta hai — agent mare to gaana phir bhi
+ * bajega; (2) spasht OFF wala device hukm (torch/data)
+ * agent se pehle pakke offline raaste se chalta hai —
+ * "বন্ধ" kabhi "চালু" nahi banta, aur device hukm ka
+ * kachha suna hua text jarvis_diag me band hota hai;
+ * (3) khud-ki-awaaz wala jaal — TTS ke dauraan aur uske
+ * 1.5 s baad tak suna hua sab goonj hai, hukm nahi.
  */
 class JarvisWakeService : Service() {
 
@@ -205,6 +217,18 @@ class JarvisWakeService : Service() {
     // hai. Koi asli utterance aate hi ye ginati reset ho jati hai.
     @Volatile
     private var addaNoSpeechCount = 0
+
+    // v36: khud-ki-awaaz wala jaal (self-hearing guard) —
+    // Maya ki boli kab khatm hui (uptime millis). TTS bol
+    // raha ho ya khatm hue SELF_ECHO_GUARD_MS ke andar ho,
+    // to suna hua kuch bhi hukm nahi banta: uski apni boli
+    // ("টর্চ চালু করে দিয়েছি") ke shabd dobara kaam
+    // chalu kar dete the. onTtsFinished asal samay likhta
+    // hai; armReplyFallback andaz wala samay pehle se likh
+    // deta hai, taaki finish-callback kho jaye to bhi
+    // khidki band rahe.
+    @Volatile
+    private var lastSpeechEndMs = 0L
 
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
@@ -508,6 +532,9 @@ class JarvisWakeService : Service() {
         // nahi judni chahiye.
         override fun onPartialResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
+            // v36: Maya khud bol rahi ho (ya abhi-abhi chup
+            // hui ho) to ye uski apni goonj hai — wake mat mano.
+            if (selfEchoGuardActive()) return
             val partial = parseJsonField(hypothesis, "partial")
             rememberWakePartial(partial)
             if (containsWakeWord(partial)) {
@@ -517,6 +544,7 @@ class JarvisWakeService : Service() {
 
         override fun onResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
+            if (selfEchoGuardActive()) return
             val text = parseJsonField(hypothesis, "text")
             rememberWakeFinal(text)
             if (containsWakeWord(text)) {
@@ -526,6 +554,7 @@ class JarvisWakeService : Service() {
 
         override fun onFinalResult(hypothesis: String?) {
             if (state != State.WAKE || wakePaused) return
+            if (selfEchoGuardActive()) return
             val text = parseJsonField(hypothesis, "text")
             rememberWakeFinal(text)
             if (containsWakeWord(text)) {
@@ -613,9 +642,28 @@ class JarvisWakeService : Service() {
         armAckFallback()
     }
 
+    /**
+     * v36: khud-ki-awaaz wala jaal abhi band hai kya — TTS
+     * bol raha ho, ya boli khatm hue SELF_ECHO_GUARD_MS
+     * (1.5 s) bhi na beete hon. Is khidki me recognizer jo
+     * bhi "sune" (partial ya final, wake ya command), woh
+     * Maya ki apni boli ki goonj hi mani jayegi aur hukm
+     * kabhi nahi banegi — uske jawabon ke "চালু" jaise
+     * shabd dobara wahi kaam chalu kar dete the.
+     */
+    private fun selfEchoGuardActive(): Boolean {
+        if (speaker.isSpeakingNow) return true
+        val end = lastSpeechEndMs
+        return end > 0L &&
+            SystemClock.uptimeMillis() - end < SELF_ECHO_GUARD_MS
+    }
+
     private fun onTtsFinished() {
         executor.execute {
             if (destroyed) return@execute
+            // v36: boli asal me yahan khatm hui — goonj wali
+            // khidki (self-hearing guard) yahin se gini jayegi.
+            lastSpeechEndMs = SystemClock.uptimeMillis()
             when (state) {
                 State.ACK -> {
                     onAckSpeechDone()
@@ -710,6 +758,9 @@ class JarvisWakeService : Service() {
     private val commandListener = object : RecognitionListener {
         override fun onPartialResult(hypothesis: String?) {
             if (state != State.COMMAND) return
+            // v36: boli ki goonj wala partial session ki umar
+            // nahi badhayega — asal awaaz ke shabd hi badhayein.
+            if (selfEchoGuardActive()) return
             val partial = parseJsonField(hypothesis, "partial").trim()
             if (partial.isNotEmpty() && partial != commandLastPartial) {
                 // The words actually changed — the user is mid-command,
@@ -748,6 +799,11 @@ class JarvisWakeService : Service() {
 
         private fun acceptCommand(text: String) {
             if (state != State.COMMAND || text.isBlank()) return
+            // v36: Maya ki apni boli (ya uski goonj) hukm
+            // bankar phir se kaam chalu na kar de — boli ke
+            // dauraan aur uske pal bhar baad tak ka suna hua
+            // sab yahin chhod do.
+            if (selfEchoGuardActive()) return
             // v12 diagnostics: command recognizer ne jo suna, woh
             // bhi "Mic ne aakhri suna" me dikhe.
             rememberCommandFinal(text)
@@ -762,6 +818,34 @@ class JarvisWakeService : Service() {
         state = State.REPLY
         stopCommandSession()
         addaNoSpeechCount = 0
+        // v36 (C): device wala hukm (torch / mobile data)
+        // suna gaya ho to uska KACHHA text jarvis_diag me
+        // band karo — Vosk ne asal me suna kya tha, woh
+        // agle test me bina andaze ke dikhega.
+        logDeviceCommandHeard(text)
+        // v36 (A): spasht OFF wala device hukm agent ke
+        // paas kabhi nahi jayega — pakka offline raasta
+        // yahin chalega. "বন্ধ করো" ka garble agent se
+        // "chalu" bankar laut aata tha; spasht band kabhi
+        // chalu nahi banna chahiye.
+        commandEngine.deterministicOffCommand(text)?.let { offResult ->
+            finishCommandResult(text, offResult)
+            return
+        }
+        // v36: play-iraade wala sanyojit hukm ("YouTube
+        // khulo aur gaana chalao") — app-list use sirf
+        // kholkar nigal na le. Agent uplabdh ho to agent
+        // (uska null jawab seedhe youtube_play par girega),
+        // warna seedha auzaar: gaana Gemini par nahi atka.
+        val playQuery = PlayIntent.extractPlayQuery(text)
+        if (!playQuery.isNullOrEmpty()) {
+            if (geminiBrainAllowed()) {
+                askAgentBrain(text, playQuery)
+            } else {
+                runDirectYouTubePlay(text, playQuery)
+            }
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -876,7 +960,13 @@ class JarvisWakeService : Service() {
      * (v21 wala askGeminiBrain/chat raasta ab nahi hai —
      * agent uski jagah le chuka hai.)
      */
-    private fun askAgentBrain(text: String) {
+    /**
+     * v36: [playQueryFallback] — play-iraade wale hukm ke
+     * liye: agent ko round 1 par koi model na mile to
+     * offline engine ki jagah seedha youtube_play chalega
+     * (gaana Gemini ke jeene par nahi atkega).
+     */
+    private fun askAgentBrain(text: String, playQueryFallback: String? = null) {
         setStatus("Maya soch rahi hai — kaam kar rahi hai...")
         updateNotification("Maya soch rahi hai — kaam kar rahi hai...")
         val tools = AgentTools(
@@ -885,7 +975,7 @@ class JarvisWakeService : Service() {
         AgentBrain.run(
             applicationContext, geminiHistory.toList(), text, tools::execute
         ) { reply ->
-            executor.execute { onAgentBrainAnswer(text, reply) }
+            executor.execute { onAgentBrainAnswer(text, reply, playQueryFallback) }
         }
     }
 
@@ -898,16 +988,47 @@ class JarvisWakeService : Service() {
      * raasta bilkul pehle jaisa: adda, phir engine, phir
      * finishCommandResult — retry ab bhi waisa hi bacha hai.
      */
-    private fun onAgentBrainAnswer(text: String, reply: String?) {
+    private fun onAgentBrainAnswer(
+        text: String,
+        reply: String?,
+        playQueryFallback: String? = null
+    ) {
         // Beech me service band ho gayi ho ya flow aage badh
         // gaya ho to der se aaya jawab chup-chaap chhod do.
         if (destroyed || state != State.REPLY) return
         if (reply == null) {
+            // v36: play wala hukm tha aur mastishk nahi mila —
+            // gaana seedhe auzaar se bajega, offline engine
+            // use sirf kholkar nahi chhodega.
+            if (playQueryFallback != null) {
+                runDirectYouTubePlay(text, playQueryFallback)
+                return
+            }
             if (addaEngine.shouldHandle(text)) {
                 handleAddaHeard(text)
                 return
             }
-            finishCommandResult(text, commandEngine.handle(text))
+            val engineResult = commandEngine.handle(text)
+            // v36: engine bhi na sambhal paye aur agent ki
+            // haar saare modelon ke 429 (quota) se hui ho,
+            // to retry/veda wale aam raaste ki jagah
+            // imaandaar "online seema khatm" wala jawab —
+            // user ki bhasha me, handled bankar (retry nahi).
+            if (!engineResult.handled &&
+                GeminiBrain.lastChainWasQuota(applicationContext)
+            ) {
+                finishCommandResult(
+                    text,
+                    CommandResult(
+                        PlayIntent.quotaReply(
+                            PlayIntent.requestLanguage(text)
+                        ),
+                        true
+                    )
+                )
+                return
+            }
+            finishCommandResult(text, engineResult)
             return
         }
         // Baatchit ki yaad: aakhiri 10 turn rakho, jodi todna mat.
@@ -924,6 +1045,70 @@ class JarvisWakeService : Service() {
         speaker.speak(reply)
         armReplyFallback(reply)
         orbOverlay.setReply(reply)
+    }
+
+    /**
+     * v36: bina mastishk ke seedha youtube_play — v26/v33
+     * wali wahi mashinari (results kholo, pehle asli video
+     * par gesture tap, watch page ki jaanch) AgentTools se.
+     * Auzaar bandha (sync) hai aur tap ka intezaar lamba ho
+     * sakta hai, isliye apne alag thread par chalega;
+     * natija wapas executor par aakar aam jawab ki tarah
+     * bola jayega (gola, reply fallback — sab waisa hi).
+     * State REPLY pehle se hai aur command session band
+     * hai, bilkul agent wale jawab jaisa mahaul.
+     * Bola jaane wala natija PlayIntent se user ki bhasha
+     * me aur hamesha sachha.
+     */
+    private fun runDirectYouTubePlay(text: String, query: String) {
+        setStatus("Gaana chala rahi hoon...")
+        updateNotification("Gaana chala rahi hoon...")
+        Thread {
+            val tools = AgentTools(
+                applicationContext, commandEngine, fromBackgroundService = true
+            )
+            val result = try {
+                tools.execute("youtube_play", JSONObject().put("query", query))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            PlayIntent.saveDirectPlayDiag(applicationContext, query, result)
+            val line = PlayIntent.playOutcomeReply(
+                result, query, PlayIntent.requestLanguage(text)
+            )
+            executor.execute {
+                if (destroyed || state != State.REPLY) return@execute
+                setStatus("Seedha jawab mila — bol rahi hoon")
+                updateNotification("Jarvis jawab de raha hai...")
+                lightScreenOnWake()
+                speaker.speak(line)
+                armReplyFallback(line)
+                orbOverlay.setReply(line)
+            }
+        }.start()
+    }
+
+    /**
+     * v36 (C): device hukm (torch / flashlight / mobile
+     * data) ke liye recognizer ne KACHHA kya suna, woh
+     * "jarvis_diag" me "last_device_heard" par band karo.
+     * "Mic ne aakhri suna" (AppPrefs) har command ka text
+     * rakhta hai; ye device-wali alag report isliye hai
+     * taaki galat-suna OFF/ON wala garble agle test me
+     * bina dhundhe dikh jaye. Sirf device wale shabd hon
+     * tabhi likhte hain — aam baatchit isme nahi aati.
+     */
+    private fun logDeviceCommandHeard(text: String) {
+        val lower = text.lowercase(Locale.ROOT)
+        if (DEVICE_HEARD_WORDS.none { lower.contains(it) }) return
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_device_heard", text.trim())
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
     }
 
     /**
@@ -1140,6 +1325,16 @@ class JarvisWakeService : Service() {
         mainHandler.removeCallbacks(replyFallbackRunnable)
         val delay = (REPLY_FALLBACK_BASE_MS + spokenText.length * REPLY_FALLBACK_PER_CHAR_MS)
             .coerceAtMost(REPLY_FALLBACK_MAX_MS)
+        // v36: boli ke khatm hone ka andaz wala samay pehle
+        // se likh do — finish-callback (onTtsFinished) aaye
+        // to woh asal samay se use badal dega; callback kho
+        // jaye aur fallback wala raasta chale to bhi goonj
+        // wali khidki (self-hearing guard) is andaz tak
+        // band rahegi.
+        val estimatedEnd = SystemClock.uptimeMillis() + delay
+        if (estimatedEnd > lastSpeechEndMs) {
+            lastSpeechEndMs = estimatedEnd
+        }
         mainHandler.postDelayed(replyFallbackRunnable, delay)
     }
 
@@ -1557,6 +1752,26 @@ class JarvisWakeService : Service() {
 
         /** v16: ek baar ke screen-wake ki umar; har session/jawab use badha deta hai. */
         private const val WAKE_SCREEN_TIMEOUT_MS = 15_000L
+
+        /**
+         * v36: boli khatm hone ke baad itni der tak suna hua
+         * sab goonj mana jayega (self-hearing guard) — Maya
+         * ke apne jawab ke shabd dobara hukm na ban jayein.
+         */
+        private const val SELF_ECHO_GUARD_MS = 1_500L
+
+        /**
+         * v36 (C): device hukm ki pehchan wale shabd — inme
+         * se koi suna jaye to kachha text jarvis_diag ki
+         * "last_device_heard" report me band hota hai.
+         */
+        private val DEVICE_HEARD_WORDS = listOf(
+            "torch", "টর্চ", "टॉर्च", "টার্চ", "टार्च",
+            "flashlight", "ফ্ল্যাশলাইট", "फ्लैशलाइट",
+            "mobile data", "মোবাইল ডাটা", "মোবাইল ডেটা",
+            "मोबाइल डेटा", "मोबाइल डाटा", "ডাটা", "ডেটা",
+            "डेटा", "डाटा"
+        )
 
         /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
         private const val MAX_GEMINI_HISTORY_ENTRIES = 20
