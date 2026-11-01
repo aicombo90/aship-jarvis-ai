@@ -1276,6 +1276,17 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, scrollResult)
             return
         }
+        // v40: pakka SCREENSHOT hukm bhi agent se pehle
+        // pakke offline raaste se — tasveer lekar gallery
+        // me bachayi jati hai, jawab hukm ki bhasha me.
+        // Bandhi koshish isi executor thread par chalti
+        // hai (main thread par nahi — capture ka jawab
+        // service ke main-executor se aata hai, isliye
+        // yahan latch par intezaar surakshit hai)।
+        if (commandEngine.isScreenshotCommand(text)) {
+            finishCommandResult(text, commandEngine.runScreenshotCommand(text))
+            return
+        }
         // v36: play-iraade wala sanyojit hukm ("YouTube
         // khulo aur gaana chalao") — app-list use sirf
         // kholkar nigal na le. Agent uplabdh ho to agent
