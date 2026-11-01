@@ -56,6 +56,14 @@ import java.util.concurrent.Executors
  * lata hai — mastishk mausam ka andaza khud NAHI
  * lagata. stepLabel me uska shahar bhi dikhta hai.
  *
+ * v37: ek aur auzaar — screen_task (asal chal
+ * [ScreenAgent] me): dusri app ke andar kai kadam
+ * wala kaam screen chalakar poora karna. App band ho
+ * to pehle open_app, phir screen_task — ye kram
+ * instruction me saaf likha hai. Natije ki imaandari
+ * (poora / pushti par ruka / fail, kahaan tak
+ * pahuncha) auzaar ke text se hi aati hai.
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -270,6 +278,9 @@ object AgentBrain {
                 }
             "call_person", "whatsapp_message" -> args.optString("name")
             "get_weather" -> args.optString("city")
+            // v37: screen_task ka kaam user ke apne shabd
+            // hain — report me kata hua roop kaafi hai.
+            "screen_task" -> args.optString("task").take(20)
             // v31 PRIVACY: yaad wale auzaaron ke args —
             // khud yaad rakhi baatein/match — report me
             // KABHI nahi; sirf auzaar ka naam dikhega.
@@ -429,6 +440,24 @@ object AgentBrain {
             "bola wahi bhejo; aaj ke liye when='today', kal ke " +
             "liye 'tomorrow'. Mausam ka andaza khud mat lagao. " +
             "Use it for weather questions.\n" +
+            "- screen_task, args {\"task\": \"<the task in the " +
+            "user's own words>\"} — drives the screen of another " +
+            "app step by step (reading the screen, tapping, " +
+            "scrolling, typing) to complete a multi-step task " +
+            "INSIDE an app that no other tool covers — e.g. " +
+            "sending a live location in WhatsApp, or picking the " +
+            "latest gallery video into the CapCut editor. If the " +
+            "app is not open yet, first call open_app for it, " +
+            "then screen_task with the full task (including the " +
+            "app and person's names, in the user's own words). " +
+            "Send/pay/delete taps inside are confirmed with the " +
+            "user by the app itself — the task stops if the user " +
+            "does not say yes. The result says honestly whether " +
+            "the task completed, stopped, or failed, and how far " +
+            "it got; when it carries the screen agent's own " +
+            "summary, relay that as your final answer. NEVER " +
+            "claim a message or location was sent unless the " +
+            "result says the task COMPLETED.\n" +
             "\n" +
             "RULES:\n" +
             "- A question that needs no phone action: answer it directly " +
