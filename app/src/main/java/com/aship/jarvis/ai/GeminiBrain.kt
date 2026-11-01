@@ -55,6 +55,15 @@ import java.util.concurrent.Executors
  * ek kachhi koshish maangta hai — kataar aur report ke
  * niyam chat walon se ek hi hain, isliye "Online koshish"
  * wali report agent ke round bhi dikhati hai.
+ *
+ * v36: kataar ke "agle model par jao" wale sanketon me
+ * 429 (quota/rate-limit) aur 500 bhi jud gaye — v35 tak
+ * pehle model ka 429 poori kataar ko wahin rok deta tha
+ * aur agent round 1 par bina baaki model aazmaye mar
+ * jata tha. Saath hi kataar ka kul nateeja (ok / quota /
+ * failed) alag band hota hai ([lastChainWasQuota]), taaki
+ * saare model 429 par marein to bulane wala jhootha aam
+ * jawab ki jagah imaandaar "online seema khatm" bol sake.
  */
 object GeminiBrain {
 
@@ -184,18 +193,30 @@ object GeminiBrain {
         body: String
     ): String? {
         val attempts = mutableListOf<String>()
+        val codes = mutableListOf<Int>()
         var result: String? = null
         for (model in MODELS) {
             val startedAtMs = System.currentTimeMillis()
             val attempt = tryModel(key, model, body)
             val seconds = (System.currentTimeMillis() - startedAtMs) / 1000
             attempts.add("$model: ${attempt.outcome} (${seconds}s)")
+            codes.add(attempt.code)
             if (attempt.code == HttpURLConnection.HTTP_OK && attempt.reply != null) {
                 result = attempt.reply
                 break
             }
+            // v36: 429 (quota / rate-limit) aur 500 bhi "agle
+            // model par jao" wali gadbadiyan hain. v35 tak 429
+            // is kataar me tha hi nahi — pehla model 429 deta
+            // to poori kataar wahin ruk jati thi aur agent
+            // round 1 par hi mar jata tha, jabki baaki modelon
+            // ki seema alag ho sakti hai. 400/401/403 par ab
+            // bhi wahin rukte hain — woh key/request ki
+            // gadbad hai, model badalne se nahi sudhregi.
             val tryNext = attempt.code == HttpURLConnection.HTTP_OK ||
                 attempt.code == HttpURLConnection.HTTP_NOT_FOUND ||
+                attempt.code == 429 ||
+                attempt.code == HttpURLConnection.HTTP_INTERNAL_ERROR ||
                 attempt.code == HttpURLConnection.HTTP_UNAVAILABLE ||
                 attempt.code == -1
             if (!tryNext) {
@@ -203,7 +224,43 @@ object GeminiBrain {
             }
         }
         saveLastAttempt(context, attempts.joinToString(" | "))
+        // v36: kataar ka kul nateeja alag se band karo —
+        // bulane wale ko ye jaanna hai ki haar QUOTA (har
+        // model 429) se hui ya kisi aur wajah se, taaki
+        // Maya jhootha aam jawab dene ke bajaye sach bol
+        // sake ki online seema khatm hai (lastChainWasQuota).
+        val outcome = when {
+            result != null -> CHAIN_OUTCOME_OK
+            codes.isNotEmpty() && codes.all { it == 429 } -> CHAIN_OUTCOME_QUOTA
+            else -> CHAIN_OUTCOME_FAILED
+        }
+        saveChainOutcome(context, outcome)
         return result
+    }
+
+    /**
+     * v36: aakhiri model-kataar quota par mari thi kya —
+     * har model ne 429 diya ho tabhi true. Report wali
+     * prefs ("jarvis_diag") me hi band hota hai; key,
+     * sawal ya jawab isme kabhi nahi aata.
+     */
+    fun lastChainWasQuota(context: Context): Boolean = try {
+        context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_CHAIN_OUTCOME, null) == CHAIN_OUTCOME_QUOTA
+    } catch (e: Exception) {
+        false
+    }
+
+    /** v36: kataar ke kul natije ko "jarvis_diag" me band karo. */
+    private fun saveChainOutcome(context: Context, outcome: String) {
+        try {
+            context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_LAST_CHAIN_OUTCOME, outcome)
+                .apply()
+        } catch (e: Exception) {
+            // Report bonus hai; asal jawab wala raasta isse alag hai.
+        }
     }
 
     // ------------------------------------------------------------------
@@ -377,6 +434,13 @@ object GeminiBrain {
     // report bhi yahi file istemal karti hai.
     private const val DIAG_PREFS_NAME = "jarvis_diag"
     private const val KEY_LAST_GEMINI_ATTEMPT = "last_gemini_attempt"
+
+    // v36: model-kataar ke kul natije ki report wali chaabi
+    // aur uske teen hi sambhavit moolya.
+    private const val KEY_LAST_CHAIN_OUTCOME = "last_chain_outcome"
+    private const val CHAIN_OUTCOME_OK = "ok"
+    private const val CHAIN_OUTCOME_QUOTA = "quota"
+    private const val CHAIN_OUTCOME_FAILED = "failed"
 
     private const val GENERATE_CONTENT_BASE_URL =
         "https://generativelanguage.googleapis.com/v1beta/models/"
