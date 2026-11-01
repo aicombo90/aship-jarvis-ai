@@ -25,13 +25,35 @@ import java.util.concurrent.TimeUnit
  *
  *   screen ka saar padho (Accessibility ped se —
  *   package + dikhai dene wale hisse, unke naam,
- *   clickable/editable hona aur beech ke nirdeshank;
- *   koi screenshot NAHI, MediaProjection nahi) ->
+ *   clickable/editable hona aur beech ke nirdeshank) ->
  *   kaam + saar + ab tak ke kadam mastishk ko bhejo ->
  *   uska EK JSON kadam (tap_text / tap_at / scroll /
  *   type / back / home / wait / ask_user / done /
  *   fail) chalao -> screen thaharne ki saans (~1.2 s)
  *   -> phir saar padho...
+ *
+ * v39: DRISHTI (vision) jud gayi — par naap-tol ke
+ * saath. Saar kaam ka lage (kaafi clickable/editable
+ * hisse hon) to kadam bina tasveer ke hi chalta hai
+ * (purana node-raasta, 0 extra kota). Screen tasveeri
+ * lage — hisse bahut kam/khaali hon, ya saamne browser
+ * (Chrome), gallery/photos ya canvas-wali app ho — to
+ * us kadam par service se TASVEER aati hai, uspar
+ * hisson ke chaukone par nambar bane hote hain
+ * (Set-of-Mark, [ScreenVision]), aur mastishk ya to
+ * nambar bolta hai (tap_mark — tap pakke beech par,
+ * nirdeshank ki galti khatm) ya khaali sat-h ke liye
+ * 0–1000 wale nakse par tap_point deta hai. Ek kaam
+ * me zyada se zyada [MAX_VISION_CALLS] tasveer-kadam
+ * — kota ki hifazat; khatm hon to kaam node-raaste
+ * par hi aage badhta hai aur report me "vision n/10"
+ * band hota hai.
+ *
+ * Surakshit screen (bank/lock — FLAG_SECURE) par
+ * tasveer kaali aati hai aur node bhi khaali hote
+ * hain: woh haal dikhe to agent wahin RUK jata hai
+ * aur imaandaari se kehta hai ki ye screen surakshit
+ * hai, dikh nahi raha — uske khilaaf zor nahi chalta.
  *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
@@ -73,6 +95,15 @@ class ScreenAgent(private val context: Context) {
     /** Daud ka kul natija: mastishk (AgentBrain) ke liye sachha varnan. */
     data class Outcome(val ok: Boolean, val text: String)
 
+    /**
+     * v39: is daud me kitni tasveer-kadam (vision call)
+     * hue — [saveDiag] report me "vision n/10" bankar
+     * jata hai. ScreenAgent ek kaam ke liye ek banta
+     * hai, isliye ye khet (field) daud-bhar ka hai;
+     * [runTask] shuru me use saaf karta hai.
+     */
+    private var visionUsed = 0
+
     /** Ek kaam chalao — bandha (sync) call, background thread se hi bulana. */
     fun runTask(taskRaw: String): Outcome {
         val task = taskRaw.trim()
@@ -106,6 +137,9 @@ class ScreenAgent(private val context: Context) {
         var stepsDone = 0
         var invalidReplies = 0
         var rounds = 0
+        // v39: tasveer-kadam ki ginati is daud ke liye saaf.
+        visionUsed = 0
+        var visionExhaustedNoted = false
         while (rounds < MAX_ROUNDS) {
             rounds++
             if (SystemClock.uptimeMillis() > deadline) {
@@ -129,11 +163,94 @@ class ScreenAgent(private val context: Context) {
                         historySummary(history) + "."
                 )
             }
-            val raw = GeminiBrain.requestAgentRound(
-                context,
-                SCREEN_INSTRUCTION,
-                listOf("user" to buildStepPrompt(task, history, snapshot))
-            )
+            // v39: is kadam par tasveer chahiye kya? Saar
+            // kaam ka ho to node-raasta (purana, kota-mukt);
+            // screen tasveeri ho to Set-of-Mark tasveer ke
+            // saath vision kadam — kota bandha hai
+            // ([MAX_VISION_CALLS] ek kaam me).
+            var stepMarked: List<JarvisAccessibilityService.ScreenElement> =
+                emptyList()
+            var stepImage: String? = null
+            val visionWanted = wantsVision(snapshot)
+            if (visionWanted && visionUsed < MAX_VISION_CALLS) {
+                val shot = screenshotSync()
+                if (shot != null) {
+                    val usableNodes = snapshot.elements.any {
+                        it.clickable || it.editable
+                    }
+                    if (!usableNodes &&
+                        ScreenVision.looksSecureOrBlack(shot)
+                    ) {
+                        // Surakshit screen: tasveer kaali,
+                        // node khaali — aage zor lagana
+                        // bekaar aur galat hai. Wahin ruk.
+                        saveDiag(
+                            task,
+                            "STOPPED (screen surakshit — dikh nahi raha)",
+                            stepsDone
+                        )
+                        return Outcome(
+                            false,
+                            "STOPPED — the current screen is a " +
+                                "protected/secure screen (the kind " +
+                                "used by banking apps and lock " +
+                                "screens): it cannot be seen or " +
+                                "captured, and it exposes no " +
+                                "readable controls. The screen " +
+                                "agent stopped after $stepsDone " +
+                                "steps WITHOUT touching anything. " +
+                                "Actions taken so far: " +
+                                historySummary(history) + ". Tell " +
+                                "the user honestly, in their own " +
+                                "language, that this screen is " +
+                                "protected and Maya cannot see it — " +
+                                "they will need to handle this " +
+                                "screen themselves."
+                        )
+                    }
+                    val marked = ScreenVision.chooseMarked(snapshot.elements)
+                    val rendered = ScreenVision.renderMarkedImage(shot, marked)
+                    if (rendered != null) {
+                        visionUsed++
+                        stepMarked = rendered.marked
+                        stepImage = rendered.jpegBase64
+                    }
+                }
+                // Tasveer na mile (dar-seema/gadbad) to ye
+                // kadam bina tasveer ke hi chalega — neeche
+                // stepImage null hi rehta hai.
+            } else if (visionWanted && !visionExhaustedNoted &&
+                visionUsed >= MAX_VISION_CALLS
+            ) {
+                // Kota bandobosto: tasveer ki seema khatm —
+                // mastishk ko saaf bata do, taaki woh node
+                // kataar se hi kaam chalaye, andaza na lagaye.
+                visionExhaustedNoted = true
+                history.add(
+                    "System note: this task's vision budget " +
+                        "($MAX_VISION_CALLS image calls) is used " +
+                        "up. Continue with the element list only — " +
+                        "you will NOT receive more images in this task."
+                )
+            }
+            val raw = if (stepImage != null) {
+                GeminiBrain.requestAgentRoundWithImage(
+                    context,
+                    SCREEN_INSTRUCTION,
+                    listOf(
+                        "user" to buildVisionStepPrompt(
+                            task, history, snapshot, stepMarked
+                        )
+                    ),
+                    stepImage
+                )
+            } else {
+                GeminiBrain.requestAgentRound(
+                    context,
+                    SCREEN_INSTRUCTION,
+                    listOf("user" to buildStepPrompt(task, history, snapshot))
+                )
+            }
             if (raw == null) {
                 val quota = GeminiBrain.lastChainWasQuota(context)
                 saveDiag(
@@ -298,6 +415,61 @@ class ScreenAgent(private val context: Context) {
                     )
                     settle(deadline)
                 }
+                is ScreenAction.TapMark -> {
+                    // v39: nambar wala tap — is kadam ki
+                    // tasveer par bane nishan se hissa nikalo
+                    // aur uske PAKKE beech par tap karo.
+                    val element = stepMarked.getOrNull(action.mark - 1)
+                    stepsDone++
+                    if (element == null) {
+                        history.add(
+                            "$stepsDone. tap_mark " + action.mark +
+                                " -> FAILED (no such mark on this step — " +
+                                "marks exist only on steps where an " +
+                                "image was sent)"
+                        )
+                    } else {
+                        val kind = sensitiveKind(element.text)
+                        val refusal = checkConfirmation(
+                            kind, labelKey(element.text), lang, task,
+                            stepsDone, history, confirmedTargets, deadline
+                        )
+                        if (refusal != null) return refusal
+                        val ok = tapPointSync(element.centerX, element.centerY)
+                        history.add(
+                            "$stepsDone. tap_mark " + action.mark +
+                                " (\"" + element.text + "\") -> " +
+                                if (ok) "OK" else "FAILED"
+                        )
+                    }
+                    settle(deadline)
+                }
+                is ScreenAction.TapPoint -> {
+                    // v39: khaali sat-h ke liye 0–1000 wala
+                    // naksa — asal screen px me badalkar tap.
+                    val metrics = context.resources.displayMetrics
+                    val realX = (action.x * metrics.widthPixels / 1000)
+                        .coerceIn(0, (metrics.widthPixels - 1).coerceAtLeast(0))
+                    val realY = (action.y * metrics.heightPixels / 1000)
+                        .coerceIn(0, (metrics.heightPixels - 1).coerceAtLeast(0))
+                    val label = nearestLabel(snapshot, realX, realY)
+                    val kind = label?.let { sensitiveKind(it) }
+                    val refusal = checkConfirmation(
+                        kind,
+                        label?.let { labelKey(it) } ?: "",
+                        lang, task, stepsDone, history,
+                        confirmedTargets, deadline
+                    )
+                    if (refusal != null) return refusal
+                    val ok = tapPointSync(realX, realY)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. tap_point (" + action.x + ", " +
+                            action.y + ") -> " +
+                            if (ok) "OK" else "FAILED"
+                    )
+                    settle(deadline)
+                }
             }
         }
         saveDiag(task, "FAILED (kadam khatm)", stepsDone)
@@ -306,7 +478,15 @@ class ScreenAgent(private val context: Context) {
             "FAILED — the screen task used all $MAX_ROUNDS steps " +
                 "without finishing. Actions taken: " +
                 historySummary(history) + ". Tell the user honestly " +
-                "that the task could not be completed."
+                "that the task could not be completed." +
+                if (visionUsed >= MAX_VISION_CALLS) {
+                    " Note: this task also used up its whole " +
+                        "vision budget ($MAX_VISION_CALLS image " +
+                        "calls) — the free online limit is the " +
+                        "binding constraint, not effort."
+                } else {
+                    ""
+                }
         )
     }
 
@@ -501,6 +681,12 @@ class ScreenAgent(private val context: Context) {
     private sealed class ScreenAction {
         class TapText(val value: String) : ScreenAction()
         class TapAt(val x: Int, val y: Int) : ScreenAction()
+
+        /** v39: tasveer par bane nambar wala tap (1 se shuru). */
+        class TapMark(val mark: Int) : ScreenAction()
+
+        /** v39: 0–1000 khaake wala tap — khaali sat-hon ke liye. */
+        class TapPoint(val x: Int, val y: Int) : ScreenAction()
         class Scroll(val down: Boolean) : ScreenAction()
         class Type(val value: String) : ScreenAction()
         object Back : ScreenAction()
@@ -537,6 +723,19 @@ class ScreenAgent(private val context: Context) {
                 val x = obj.optInt("x", -1)
                 val y = obj.optInt("y", -1)
                 if (x >= 0 && y >= 0) ScreenAction.TapAt(x, y) else null
+            }
+            "tap_mark" -> {
+                val mark = obj.optInt("mark", -1)
+                if (mark >= 1) ScreenAction.TapMark(mark) else null
+            }
+            "tap_point" -> {
+                val x = obj.optInt("x", -1)
+                val y = obj.optInt("y", -1)
+                if (x in 0..1000 && y in 0..1000) {
+                    ScreenAction.TapPoint(x, y)
+                } else {
+                    null
+                }
             }
             "scroll" -> ScreenAction.Scroll(
                 !obj.optString("direction").trim()
@@ -598,6 +797,81 @@ class ScreenAgent(private val context: Context) {
         return out.toString()
     }
 
+    /**
+     * v39: ye kadam tasveeri hai kya — yani node-saar
+     * akela kaafi nahi lagta? Teen sanket: (1) saamne
+     * wali app woh hai jahan ped aksar khaali/tasveeri
+     * hota hai ([VISION_FIRST_PACKAGES]: browser,
+     * gallery/photos, canvas app); (2) kaam ke hisse
+     * (clickable/editable) bahut kam hain; (3) hisse
+     * hain hi nahi. Koi bhi sanket mile to kadam
+     * tasveer ke saath jayega (kota raha to) — warna
+     * node-raasta hi kaafi hai.
+     */
+    private fun wantsVision(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot
+    ): Boolean {
+        if (snapshot.packageName in VISION_FIRST_PACKAGES) return true
+        val actionable = snapshot.elements.count {
+            it.clickable || it.editable
+        }
+        return actionable < MIN_ACTIONABLE_FOR_NODE_STEP
+    }
+
+    /**
+     * v39: vision kadam ke liye sandesh — kaam + itihas
+     * + NISHAN wale hisson ki kataar (nambar, naam,
+     * pakka beech). Tasveer isi sandesh ke saath
+     * inline_data bankar jaati hai; nambar tasveer par
+     * bane nambar hi hain, isliye model ka tap_mark
+     * seedha usi hisse par padta hai.
+     */
+    private fun buildVisionStepPrompt(
+        task: String,
+        history: List<String>,
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        marked: List<JarvisAccessibilityService.ScreenElement>
+    ): String {
+        val out = StringBuilder()
+        out.append("Task (in the user's own words): ").append(task).append("\n\n")
+        out.append("Actions already taken:\n")
+        if (history.isEmpty()) {
+            out.append("(none yet)\n")
+        } else {
+            for (line in history) {
+                out.append("- ").append(line).append("\n")
+            }
+        }
+        out.append("\nCurrent screen (an image is attached):\n")
+        out.append("App package: ")
+            .append(snapshot.packageName.ifEmpty { "(unknown)" })
+            .append("\n")
+        out.append(
+            "The attached image is the actual screen with " +
+                "numbered marks drawn on elements. Marked elements:\n"
+        )
+        if (marked.isEmpty()) {
+            out.append("(no elements could be marked — use " +
+                "tap_point on the 0-1000 grid only if you can " +
+                "clearly see the target in the image)\n")
+        } else {
+            marked.forEachIndexed { index, element ->
+                out.append("Mark ").append(index + 1).append(": \"")
+                    .append(element.text.ifEmpty { "(no label)" })
+                    .append("\" | ").append(element.className)
+                if (element.clickable) out.append(" | clickable")
+                if (element.editable) out.append(" | editable")
+                out.append(" @ (")
+                    .append(element.centerX).append(", ")
+                    .append(element.centerY).append(")\n")
+            }
+        }
+        out.append(
+            "\nReply with ONLY one JSON action object for the NEXT step."
+        )
+        return out.toString()
+    }
+
     /** Kadmon ka chhota saar — natije ke imaandaar varnan ke liye. */
     private fun historySummary(history: List<String>): String {
         val actions = history.filter { line ->
@@ -629,6 +903,29 @@ class ScreenAgent(private val context: Context) {
         }
         awaitLatch(latch)
         return if (delivered) snapshot else null
+    }
+
+    /**
+     * v39: tasveer ka bandha intezaar — [captureSync]
+     * wala hi latch. Tasveer na mile (service band,
+     * dar-seema, purana Android) to null; bulane wala
+     * us kadam par node-raaste se aage badhta hai.
+     */
+    private fun screenshotSync(): android.graphics.Bitmap? {
+        val latch = CountDownLatch(1)
+        var bitmap: android.graphics.Bitmap? = null
+        var delivered = false
+        try {
+            JarvisAccessibilityService.captureScreenshot(context) { result ->
+                bitmap = result
+                delivered = true
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        awaitLatch(latch)
+        return if (delivered) bitmap else null
     }
 
     private fun tapTextSync(text: String): Boolean =
@@ -707,13 +1004,16 @@ class ScreenAgent(private val context: Context) {
     /**
      * Daud ki report "jarvis_diag" me "last_screen_run"
      * par band karo — AgentBrain wali report wala hi
-     * andaaz: <kaam (kata hua)> — <natija> (<n> steps)।
-     * Likhe hue sandeshon ka text isme kabhi nahi aata.
+     * andaaz: <kaam (kata hua)> — <natija> (<n> steps,
+     * vision <v>/10)। Likhe hue sandeshon ka text ya
+     * tasveer ka data isme kabhi nahi aata — sirf
+     * tasveer-kadmon ki GINATI jaati hai (v39).
      */
     private fun saveDiag(task: String, outcome: String, steps: Int) {
         try {
             val value = task.take(MAX_DIAG_TASK_CHARS) +
-                " — " + outcome + " (" + steps + " steps)"
+                " — " + outcome + " (" + steps + " steps, vision " +
+                visionUsed + "/" + MAX_VISION_CALLS + ")"
             context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_LAST_SCREEN_RUN, value)
@@ -747,6 +1047,42 @@ class ScreenAgent(private val context: Context) {
 
         /** tap_at ki pushti ke liye nishane ki adhiktam doori (px). */
         private const val MAX_NEAREST_DISTANCE_PX = 90
+
+        /**
+         * v39: ek kaam me zyada se zyada itne tasveer-kadam
+         * — Gemini ki muft seema hi asal bandhan hai; isse
+         * zyada tasveerein bhejna ek kaam ko poora kota
+         * kha jayega. Seema khatm hone par kaam node-raaste
+         * par aage badhta hai.
+         */
+        private const val MAX_VISION_CALLS = 10
+
+        /**
+         * v39: node-saar me kaam ke hisse isse kam hon to
+         * screen tasveeri mani jati hai (vision kadam).
+         */
+        private const val MIN_ACTIONABLE_FOR_NODE_STEP = 3
+
+        /**
+         * v39: woh package jahan ped aksar khaali ya
+         * tasveeri hota hai — browser, gallery/photos,
+         * canvas-wali apps (CapCut, Maps). In par kadam
+         * pehle tasveer se jayega. Ye ek andaaz (heuristic)
+         * kataar hai; kisi app ka naam yahan na bhi ho to
+         * kam-hisson wala niyam use phir bhi vision par
+         * le jata hai.
+         */
+        private val VISION_FIRST_PACKAGES = setOf(
+            "com.android.chrome",
+            "com.google.android.apps.photos",
+            "com.android.gallery3d",
+            "com.google.android.gallery3d",
+            "com.vivo.gallery",
+            "com.miui.gallery",
+            "com.lemon.lvoverseas",
+            "com.lemon.lv",
+            "com.google.android.apps.maps"
+        )
 
         private const val DIAG_PREFS_NAME = "jarvis_diag"
         private const val KEY_LAST_SCREEN_RUN = "last_screen_run"
@@ -794,14 +1130,20 @@ class ScreenAgent(private val context: Context) {
                 "At each step you receive: the task in the user's own " +
                 "words, the actions already taken, and a compact list " +
                 "of the elements currently visible on screen (label, " +
-                "type, clickable/editable, center coordinates). You " +
-                "cannot see screenshots — only this element list.\n" +
+                "type, clickable/editable, center coordinates). On " +
+                "some steps an IMAGE of the screen is attached as " +
+                "well, with numbered marks drawn on the elements; " +
+                "on those steps the element list gives each mark's " +
+                "number, label and exact center.\n" +
                 "\n" +
                 "Reply with ONLY a JSON object, no other text, no " +
                 "markdown. Exactly one of these shapes:\n" +
                 "{\"action\":\"tap_text\",\"value\":\"<visible label " +
                 "of the element to tap>\"}\n" +
                 "{\"action\":\"tap_at\",\"x\":<int>,\"y\":<int>}\n" +
+                "{\"action\":\"tap_mark\",\"mark\":<mark number from " +
+                "the attached image>\"}\n" +
+                "{\"action\":\"tap_point\",\"x\":<0-1000>,\"y\":<0-1000>}\n" +
                 "{\"action\":\"scroll\",\"direction\":\"down\"|\"up\"}\n" +
                 "{\"action\":\"type\",\"value\":\"<text to type into " +
                 "the focused input field>\"}\n" +
@@ -821,6 +1163,14 @@ class ScreenAgent(private val context: Context) {
                 "- Prefer tap_text with the element's exact visible " +
                 "label; use tap_at only when the element has no usable " +
                 "label (use its listed center coordinates).\n" +
+                "- On steps WITH an attached image: prefer tap_mark " +
+                "with the number drawn on the target element — its " +
+                "tap lands exactly on that element's known center. " +
+                "Use tap_point (x and y on a 0-1000 grid over the " +
+                "image) ONLY for targets that have no mark and no " +
+                "element entry (photos, icons, canvas areas). " +
+                "tap_mark and tap_point work only on steps where an " +
+                "image was attached.\n" +
                 "- Work ONLY from what the screen list actually shows. " +
                 "If the target is not visible, scroll to look for it. " +
                 "Never invent elements, labels or results.\n" +
