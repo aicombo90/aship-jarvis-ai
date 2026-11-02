@@ -229,6 +229,14 @@
             android:text="Bangla ASR (aakhiri): abhi tak koi koshish nahi"
             android:textSize="12sp" />
 
+        <TextView
+            android:id="@+id/quotaText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Quota hisaab (aaj): total 0 | main 0 | lite 0"
+            android:textSize="12sp" />
+
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
              dikhao — galat setting ek nazar me pakdi jaye. -->
         <TextView
