@@ -1,6 +1,7 @@
 package com.aship.jarvis.ai
 
 import android.content.Context
+import com.aship.jarvis.commands.PlayIntent
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
@@ -74,6 +75,17 @@ import java.util.concurrent.Executors
  * screen_task, user ke apne shabdon me (app apna
  * suraksha playbook khud jodta hai).
  *
+ * v48: SHAKSIYAT-BHASHA KA BANDHAN — bulane wala
+ * chaahe to is daud ki boli-bhasha pakki kar sakta
+ * hai ([run] ka replyLanguage): background me
+ * "Maya" naam se bulaya gaya session SIRF Hindi
+ * bolega aur "Tara" wala SIRF Bangla, user jis
+ * bhasha me bhi baat kare. Bandhan instruction ke
+ * aakhir me ek spasht override block bankar judta
+ * hai jo LANGUAGE RULE se upar rehta hai. Na diya
+ * jaye (saamne wali screen ka aam raasta) to bartav
+ * bilkul v47 wala hi hai.
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -97,12 +109,13 @@ object AgentBrain {
         history: List<Pair<String, String>>,
         userText: String,
         toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
+        replyLanguage: PlayIntent.SpokenLang? = null,
         callback: (String?) -> Unit
     ) {
         val appContext = context.applicationContext
         executor.execute {
             val reply = try {
-                runLoop(appContext, history, userText, toolExecutor)
+                runLoop(appContext, history, userText, toolExecutor, replyLanguage)
             } catch (t: Throwable) {
                 // Andar ki anjaani gadbad: round 1 wali
                 // imaandari — bulane wala offline gir jaye.
@@ -118,7 +131,8 @@ object AgentBrain {
         context: Context,
         history: List<Pair<String, String>>,
         userText: String,
-        toolExecutor: (String, JSONObject) -> AgentTools.ToolResult
+        toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
+        replyLanguage: PlayIntent.SpokenLang?
     ): String? {
         // Baatchit: purane turn + nayi baat; har round ke
         // baad model ka kaccha jawab aur auzaar ka natija
@@ -129,7 +143,9 @@ object AgentBrain {
         // v31: instruction is daud ke liye taiyaar hota
         // hai — bandhi hui yaad taaza padhkar uske
         // aakhir me sandarbh bankar judti hai.
-        val instruction = buildInstruction(context)
+        // v48: shaksiyat-bhasha ka bandhan ho to woh
+        // override block sabke aakhir me judta hai.
+        val instruction = buildInstruction(context, replyLanguage)
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
@@ -200,13 +216,41 @@ object AgentBrain {
      * auzaar bulane ki zaroorat nahi. Yaad khali ho to
      * instruction bilkul pehle jaisa hi rehta hai.
      */
-    private fun buildInstruction(context: Context): String {
-        val block = MayaMemory.contextBlock(context)
-            ?: return AGENT_INSTRUCTION
-        return AGENT_INSTRUCTION +
-            "\n\nMEMORY — the user has asked you to remember " +
-            "these things; use them to answer personal " +
-            "questions directly, with NO tool call:\n" + block
+    private fun buildInstruction(
+        context: Context,
+        replyLanguage: PlayIntent.SpokenLang? = null
+    ): String {
+        var text = AGENT_INSTRUCTION
+        MayaMemory.contextBlock(context)?.let { block ->
+            text += "\n\nMEMORY — the user has asked you to remember " +
+                "these things; use them to answer personal " +
+                "questions directly, with NO tool call:\n" + block
+        }
+        // v48: shaksiyat ka bhasha-bandhan — ye block
+        // instruction ke sabse aakhir me rehta hai aur
+        // upar wale LANGUAGE RULE se upar hai: is
+        // session me boli SIRF bandhi bhasha me hogi,
+        // user kisi bhi bhasha me baat kare.
+        when (replyLanguage) {
+            PlayIntent.SpokenLang.HINDI -> text +=
+                "\n\nPERSONA LANGUAGE OVERRIDE (highest priority): " +
+                    "in this conversation you are MAYA, called by the " +
+                    "name Maya/Jarvis. EVERY \"say\" line and final " +
+                    "answer from you MUST be in Hindi written in " +
+                    "Devanagari script ONLY — even if the user speaks " +
+                    "or writes Bengali or English. Understand the user " +
+                    "in any language, but always ANSWER in Hindi only."
+            PlayIntent.SpokenLang.BENGALI -> text +=
+                "\n\nPERSONA LANGUAGE OVERRIDE (highest priority): " +
+                    "in this conversation you are TARA, called by the " +
+                    "name Tara. EVERY \"say\" line and final answer " +
+                    "from you MUST be in Bengali written in Bengali " +
+                    "script ONLY — even if the user speaks or writes " +
+                    "Hindi or English. Understand the user in any " +
+                    "language, but always ANSWER in Bengali only."
+            else -> Unit
+        }
+        return text
     }
 
     // ------------------------------------------------------------------
