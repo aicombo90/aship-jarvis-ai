@@ -8,6 +8,7 @@ import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.SessionCommands
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -129,6 +130,19 @@ import java.util.concurrent.TimeUnit
  * sudhaar, aakhiri natija. Likhe hue sandeshon ka
  * asal text audit me kabhi nahi jata.
  *
+ * v49: TAANA SESSION + SEEKHI CHAAL — session
+ * wali daud me har kadam ke sandesh me session
+ * ka sandarbh bhi judta hai (pichhle hukm/natije,
+ * pehle liya gaya screenshot — [runTask] ka
+ * sessionContext), aur kisi bandhe seekhe hue
+ * kaam ([LearnedRoutines]) ke kadam playbook
+ * bankar lagte hain ("playbook: learned:<naam>"
+ * kataar me bhi band hota hai)। SEND pushti me
+ * ek bandhi chhoot bhi hai — user ke apne
+ * session-hukm ka saaf bhejne-aadesh
+ * ([userDirectedSend] dekho); PAY/DELETE/
+ * CONFIRM aur banking-rok bilkul pehle jaise।
+ *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
  * khatm, kaam wahin imaandaari se rukta hai.
@@ -192,7 +206,23 @@ class ScreenAgent(
      * (AgentTools) apna jhanda deta hai; na de to
      * saamne wala roop (purana bartao)।
      */
-    private val fromBackgroundService: Boolean = false
+    private val fromBackgroundService: Boolean = false,
+    /**
+     * v49: user ke APNE session-hukm ne bhejne ka
+     * saaf aadesh diya tha kya ("পাঠিয়ে দাও" —
+     * taana session ke andar wala hukm, pehchan
+     * wake service/[SessionCommands] ki hai)।
+     * Sirf tabhi is daud ka SEND tap usi hukm se
+     * pehle-se-pusht mana jata hai
+     * ([checkConfirmation] dekho)। PAY / DELETE /
+     * CONFIRM par iska koi asar NAHI hai, aur
+     * banking/payment wali rok (denylist) isse
+     * upar hi rehti hai — woh kabhi nahi hat-ti।
+     * Aam (bina session wale) kaam me ye hamesha
+     * false hai aur pushti dwaar bilkul pehle
+     * jaisa hai।
+     */
+    private val userDirectedSend: Boolean = false
 ) {
 
     /** Daud ka kul natija: mastishk (AgentBrain) ke liye sachha varnan. */
@@ -224,6 +254,19 @@ class ScreenAgent(
      */
     private var playbookText: String? = null
     private var deletePreConfirmed = false
+
+    /**
+     * v49: taana (continuous) session ke andar
+     * chali daud ka sandarbh — session ke pichhle
+     * hukm + unke natije + "pehle screenshot liya
+     * gaya tha" wala sanket। Har kadam ke sandesh
+     * me playbook ke theek baad judta hai, taaki
+     * "তিন নম্বরটা" / "ওই পেজটা" jaise ishare
+     * mastishk session ke hisaab se samjhe, andaze
+     * se nahi। Session ke bahar null — sandesh
+     * bilkul pehle jaisa।
+     */
+    private var sessionContextText: String? = null
 
     /**
      * v44: kadam-jaanch ki report-ginati — is daud me
@@ -261,10 +304,15 @@ class ScreenAgent(
     fun runTask(
         taskRaw: String,
         playbook: String? = null,
-        playbookName: String? = null
+        playbookName: String? = null,
+        sessionContext: String? = null
     ): Outcome {
         val history = mutableListOf<String>()
         auditOutcomeLabel = null
+        // v49: session sandarbh is daud ke liye
+        // bandh gaya (session ke bahar null)।
+        sessionContextText = sessionContext
+            ?.trim()?.takeIf { it.isNotEmpty() }
         val outcome = try {
             runTaskLoop(taskRaw, playbook, playbookName, history)
         } catch (t: Throwable) {
@@ -1533,6 +1581,31 @@ class ScreenAgent(
         // Pushti na mili ho to ye raasta band rehta hai
         // aur neeche wala aam dwaar hi chalega.
         if (kind == SensitiveKind.DELETE && deletePreConfirmed) return null
+        // v49: USER KE APNE HUKM WALA BHEJNA — taana
+        // session ke andar user ne is kaam ke apne
+        // hukm me saaf bhejne ko kaha tha ("পাঠিয়ে
+        // দাও") aur bulane wale ne woh pehchan is
+        // daud ko di hai ([userDirectedSend])। Us
+        // haal me SEND tap par alag se pushti NAHI
+        // maangi jati — hukm khud hi pushti hai।
+        // Kataar me iska saaf nishan band hota hai
+        // (audit record me bhi yahi jayega)।
+        // Sirf SEND ke liye hai: PAY / DELETE /
+        // CONFIRM hamesha pehle wala dwaar hi
+        // dekhenge, aur banking/payment wali rok
+        // isse pehle hi (capture jaanch me) lag
+        // chuki hoti hai — woh kabhi nahi hat-ti।
+        if (kind == SensitiveKind.SEND && userDirectedSend) {
+            history.add(
+                "System note: user-directed send — the " +
+                    "user's own command in this session " +
+                    "explicitly instructed this send, so " +
+                    "the send tap is treated as " +
+                    "pre-confirmed by that instruction " +
+                    "(no separate confirmation was asked)."
+            )
+            return null
+        }
         if (targetKey.isNotEmpty() && targetKey in confirmedTargets) {
             return null
         }
@@ -1909,6 +1982,22 @@ class ScreenAgent(
         out.append(text).append("\n")
     }
 
+    /**
+     * v49: session wali daud ho to uska sandarbh
+     * kadam ke sandesh me playbook ke theek baad
+     * jodo — session ke pichhle hukm/natije aur
+     * "pehle screenshot liya tha" wala sanket,
+     * taaki "তিন নম্বরটা" jaise ishare peeche
+     * wali baat se judein, andaze se nahi।
+     */
+    private fun appendSessionContext(out: StringBuilder) {
+        val text = sessionContextText ?: return
+        out.append("\nSESSION CONTEXT (this task runs inside an " +
+            "ongoing hands-free session — the user is directing " +
+            "step by step):\n")
+        out.append(text).append("\n")
+    }
+
     private fun buildStepPrompt(
         task: String,
         history: List<String>,
@@ -1917,6 +2006,7 @@ class ScreenAgent(
         val out = StringBuilder()
         out.append("Task (in the user's own words): ").append(task).append("\n")
         appendPlaybook(out)
+        appendSessionContext(out)
         out.append("\n")
         out.append("Actions already taken:\n")
         if (history.isEmpty()) {
@@ -1989,6 +2079,7 @@ class ScreenAgent(
         val out = StringBuilder()
         out.append("Task (in the user's own words): ").append(task).append("\n")
         appendPlaybook(out)
+        appendSessionContext(out)
         out.append("\n")
         out.append("Actions already taken:\n")
         if (history.isEmpty()) {

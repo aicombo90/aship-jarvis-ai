@@ -27,17 +27,21 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.aship.jarvis.MainActivity
+import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.SessionShot
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
@@ -203,6 +207,37 @@ import java.util.concurrent.Executors
  * bhi pakke taur par screen_task ko jata hai
  * ([UrlIntent]) — baatchit wala mastishk use baat
  * banakar nahi taal sakta.
+ *
+ * v49 TAANA (CONTINUOUS) SCREEN SESSION + SEEKHE
+ * KAAM. (1) Background session me SCREEN-KAAM
+ * (pakka screenshot hukm, share_screenshot, ya
+ * koi screen_task — seedha/URL wala/agent wala)
+ * chale to baatchit wahin khatm NAHI hoti: natija
+ * bolkar Maya/Tara poochti hai "আর কিছু করতে
+ * হবে?" / "और कुछ करना है?" aur bina wake naam ke
+ * agla hukm sunti hai — kadam-kadam wala poora
+ * kram (screenshot -> WhatsApp -> teesra sampark
+ * -> "সেন্ড করে দাও") ek hi session me chalta
+ * hai. Session ka sandarbh (pichhle hukm/natije,
+ * pehle liya gaya screenshot) har agle hukm ke
+ * saath mastishk tak jata hai. Samajh na aaye to
+ * woh POOCHHTI hai par session kabhi nahi marti —
+ * na galti se, na kota se, na asafal kaam se.
+ * Ant sirf teen raaston se: "সিস্টেম শাটডাউন"
+ * (gola gayab, wake sunna chaloo — poori band
+ * NAHI), prompt par saaf "না", ya 15 minute ki
+ * poori khamoshi (chetaavni bolkar band). Apne
+ * hukm me saaf bhejne ka aadesh ho to us kaam ka
+ * Send tap pehle-se-pusht hai ([SessionCommands]
+ * + ScreenAgent dekho)। (2) Session ke bahar bhi
+ * seekhne wale pakke hukm yahin sambhalte hain
+ * ([LearnCommands]): "মনে রেখো" aakhiri SAFAL
+ * screen-kaam ko bandhta hai — asafal kabhi nahi
+ * seekha jata; "শিখে নাও: …" bolkar sikhayi
+ * chaal bandhti hai. Adda session ke andar jaan-
+ * boojh kar NAHI chalta — session kaam ki haalat
+ * hai, adda uska apna alag ek-baar wala raasta
+ * rakhta hai (session ke bahar bilkul pehle jaisa)।
  */
 class JarvisWakeService : Service() {
 
@@ -423,6 +458,57 @@ class JarvisWakeService : Service() {
     @Volatile
     private var closingReason: String = SESSION_END_NOT_UNDERSTOOD
 
+    // ------------------------------------------------------------------
+    // v49: TAANA (continuous) SCREEN SESSION ki haalat.
+    //
+    // [sessionActive]: is chain me koi screen-kaam
+    // chal chuka hai aur ab hum "jaage rehne" wali
+    // haalat me hain — har hukm ke jawab ke baad
+    // "আর কিছু করতে হবে?" wala prompt aayega aur
+    // bina wake naam ke agli khidki khulegi। Ant
+    // sirf shutdown / prompt-par-na / 15-minute
+    // khamoshi se hoga; har ant [clearContinuousSession]
+    // se guzarta hai (endSession wale bandhe nishan
+    // se — koi ant bina safaai ke nahi)।
+    //
+    // [sessionAwaitingMore]: is pal khuli sunne wali
+    // khidki "আর কিছু?" wale prompt ke turant baad
+    // wali hai kya — sirf USI khidki ki baat par
+    // saaf "না" session band karta hai; beech kaam
+    // me "না" ek aam hukm hi rehta hai।
+    //
+    // [sessionContextLines]: is session ke hukm +
+    // boli hui saar-linein (aakhiri 10) — mastishk
+    // (AgentBrain/ScreenAgent) ko sandarbh bankar
+    // jati hain, taaki "তিন নম্বরটা" / "ওই
+    // স্ক্রিনশটটা" jaise ishare peeche jud sakein।
+    //
+    // [sessionMissCount]: lagatar kitni baar suna
+    // par kuch juda nahi — pehli baar par sawal
+    // wala prompt, dusri par imaandaar line aur
+    // wapas "আর কিছু?" par (session phir bhi
+    // zinda)।
+    //
+    // [lastBrainTools]: aakhiri agent-daud ki
+    // auzaar-tukdi — uske [AgentTools.screenWorkUsed]
+    // nishan se pata chalta hai ki mastishk ne
+    // screen-kaam chalaya tha (session yahin se
+    // banta hai, jawab aane par)।
+    // Saare khet sirf executor thread par chhoote
+    // hain (sessionActive @Volatile sirf isliye hai
+    // ki idle wala timer bhi use padh sake)।
+    // ------------------------------------------------------------------
+    @Volatile
+    private var sessionActive: Boolean = false
+
+    private var sessionAwaitingMore: Boolean = false
+    private var sessionShotTaken: Boolean = false
+    private val sessionContextLines = mutableListOf<String>()
+    private var sessionMissCount: Int = 0
+
+    @Volatile
+    private var lastBrainTools: AgentTools? = null
+
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
     // Sirf executor thread par chhoota hai. Har naye wake par
@@ -513,6 +599,12 @@ class JarvisWakeService : Service() {
         state = State.STOPPED
         isRunning = false
         wakePaused = false
+        // v49: taana session bhi saath saaf — idle
+        // wali ghadi aur bandhi tasveer sabse pehle
+        // (neeche wala removeCallbacksAndMessages
+        // uske posted kaam ko bhi uda dega)।
+        disarmSessionIdle()
+        clearContinuousSession()
         prefs.wakeServiceRunning = false
         setStatus("Band hai")
         // Gola sabse pehle hatao — neeche wala removeCallbacksAndMessages
@@ -884,6 +976,12 @@ class JarvisWakeService : Service() {
         // v21: pichhli chain ki Gemini baatchit bhi saath saaf —
         // naya wake matlab nayi baatchit.
         geminiHistory.clear()
+        // v49: naya wake = nayi kataar — koi atka hua
+        // taana session saath nahi ghisdega (session
+        // apni chain ke andar hi jeeta/marta hai;
+        // uske ant report me pehle bandh chuke hote
+        // hain, isliye yahan sirf safaai hai)।
+        clearContinuousSession()
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
@@ -953,6 +1051,308 @@ class JarvisWakeService : Service() {
         } catch (t: Throwable) {
             // Report bonus hai — asal flow isse nahi rukta.
         }
+        // v49: ye function har session-ant ka bandha
+        // darwaza hai (v48 wala niyam) — taana session
+        // chal raha ho to uski safaai bhi yahin se
+        // hogi, taaki koi bhi ant (shutdown / done /
+        // idle / phasne par sudhaar / aam vida) aadha
+        // session peeche na chhode।
+        if (sessionActive) {
+            clearContinuousSession()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v49: TAANA SESSION ka bandobast — pravesh, prompt,
+    // na-samajh wala sawal, ant, aur khamoshi-ghadi।
+    // Saare function sirf executor thread se bulaye
+    // jate hain (timer wale runnable apna kaam
+    // executor ko saunp dete hain)।
+    // ------------------------------------------------------------------
+
+    /**
+     * Taana session shuru karo — pehla screen-kaam
+     * chalte hi bulaya jata hai। Pehle se chal raha
+     * ho to kuch nahi hota (sandarbh/tasveer bane
+     * rehte hain)। Gemini wali baatchit-yaad
+     * (geminiHistory) yahan NAHI saaf hoti — woh
+     * isi chain ka sandarbh hai aur session use
+     * aage badhata hai।
+     */
+    private fun enterContinuousSession() {
+        if (sessionActive) return
+        sessionActive = true
+        sessionAwaitingMore = false
+        sessionShotTaken = false
+        sessionContextLines.clear()
+        sessionMissCount = 0
+        SessionShot.clear()
+    }
+
+    /** Session ki poori safaai — har ant yahin se guzarta hai। */
+    private fun clearContinuousSession() {
+        sessionActive = false
+        sessionAwaitingMore = false
+        sessionShotTaken = false
+        sessionContextLines.clear()
+        sessionMissCount = 0
+        SessionShot.clear()
+        disarmSessionIdle()
+        mainHandler.removeCallbacks(sessionReopenRunnable)
+    }
+
+    /**
+     * Ek session-hukm ka jawab bola gaya — ab
+     * session ka bandha prompt bolo ("আর কিছু
+     * করতে হবে?" / "और कुछ करना है?") aur ACK
+     * wale raaste se agli sunne wali khidki kholo
+     * (boli khatm hone par onAckSpeechDone seedha
+     * command session kholega — wake naam ki
+     * zaroorat NAHI)। Gola dikhta rehta hai।
+     */
+    private fun promptSessionMore() {
+        if (destroyed) return
+        sessionAwaitingMore = true
+        state = State.ACK
+        ackEndsConversation = false
+        setStatus("Session chal raha hai — 'আর কিছু?' pooch rahi hoon")
+        updateNotification(
+            "Session chal raha hai — boliye, band karne ke liye " +
+                "'সিস্টেম শাটডাউন' boliye"
+        )
+        lightScreenOnWake()
+        val prompt = sessionMoreText()
+        speaker.speak(prompt)
+        armAckFallback()
+        orbOverlay.setReply(prompt)
+        armSessionIdle()
+    }
+
+    /**
+     * Session ke andar suna-par-na-juda hukm:
+     * pehli baar EK sawal wala prompt ("কোনটা
+     * বলতে চাইছো?") bolkar phir suno; dusri
+     * lagatar baar imaandaar line bolkar wapas
+     * "আর কিছু?" par jao। Dono haal me session
+     * ZINDA rehta hai — na-samajh kabhi maut nahi
+     * (user ka pakka hukm)।
+     */
+    private fun handleSessionNotUnderstood() {
+        if (destroyed) return
+        sessionMissCount++
+        if (sessionMissCount <= 1) {
+            state = State.ACK
+            ackEndsConversation = false
+            sessionAwaitingMore = false
+            setStatus("Samajh nahi aaya — sawal pooch rahi hoon")
+            updateNotification("Phir se boliye...")
+            lightScreenOnWake()
+            speaker.speak(sessionClarifyText())
+            armAckFallback()
+        } else {
+            sessionMissCount = 0
+            val line = sessionNotUnderstoodText()
+            setStatus("Samajh nahi aaya — session chal raha hai")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(line)
+            armReplyFallback(line)
+            orbOverlay.setReply(line)
+        }
+    }
+
+    /**
+     * Vida-line bolkar session band karo — ACK
+     * wale band raaste se: boli khatm hote hi
+     * onAckSpeechDone ant ki wajah ([reason])
+     * bandhega, gola HATAYEGA aur wake sunna phir
+     * chalu karega। Shutdown aur khamoshi wale
+     * ant yahi raasta lete hain (gola gayab,
+     * service zinda — poori band NAHI)।
+     */
+    private fun endSessionWithClosingLine(reason: String, line: String) {
+        disarmSessionIdle()
+        closingReason = reason
+        state = State.ACK
+        ackEndsConversation = true
+        setStatus("Session band ho raha hai")
+        updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
+        lightScreenOnWake()
+        speaker.speak(line)
+        armAckFallback()
+        orbOverlay.setReply(line)
+    }
+
+    /**
+     * "আর কিছু?" par saaf "না" — session ka
+     * vinamra aam ant: chhoti vida line REPLY
+     * wale aam raaste se boli jati hai (gola
+     * thaharkar gayab, wake sunna chaloo — bilkul
+     * v48 ke aam ant jaisa, sirf wajah
+     * "session-done" bandhti hai)। Session ka
+     * jhanda bolne se PEHLE hataya jata hai taaki
+     * boli-khatm wala bandobast aam ant hi dekhe;
+     * baaki safaai yahin pakki ho jati hai।
+     */
+    private fun endSessionDone() {
+        val line = sessionDoneText()
+        clearContinuousSession()
+        pendingEndReason = SESSION_END_DONE
+        setStatus("Session khatm — jawab de raha hoon")
+        updateNotification("Jarvis jawab de raha hai...")
+        lightScreenOnWake()
+        speaker.speak(line)
+        armReplyFallback(line)
+        orbOverlay.setReply(line)
+    }
+
+    /**
+     * Mastishk (AgentBrain) aur screen-kaam
+     * (ScreenAgent) ke liye is session ka compact
+     * sandarbh — session na chal raha ho to null
+     * (bulane wale ka bartav bilkul pehle jaisa)।
+     */
+    private fun sessionContextText(): String? {
+        if (!sessionActive) return null
+        val out = StringBuilder()
+        out.append(
+            "You are inside a CONTINUOUS hands-free screen " +
+                "session: the user is giving step-by-step spoken " +
+                "commands, and after each command the app asks " +
+                "\"anything else?\" and listens again. Resolve " +
+                "references like \"the third one\", \"that page\" " +
+                "or \"send it\" against this session and the " +
+                "current screen."
+        )
+        if (sessionContextLines.isNotEmpty()) {
+            out.append("\nSession so far:")
+            sessionContextLines.forEachIndexed { index, line ->
+                out.append("\n").append(index + 1)
+                    .append(") ").append(line)
+            }
+        }
+        if (sessionShotTaken) {
+            out.append(
+                "\nA screenshot was taken earlier in this " +
+                    "session and is stored. If the user refers " +
+                    "to THAT screenshot, call share_screenshot " +
+                    "— the app reuses the stored capture " +
+                    "instead of taking a new one."
+            )
+        }
+        return out.toString()
+    }
+
+    /** Ek poora hua session len-den sandarbh me bandho (aakhiri [SESSION_CONTEXT_MAX_LINES])। */
+    private fun noteSessionOutcome(userText: String, outcomeLine: String) {
+        if (!sessionActive) return
+        val entry = userText.trim().take(SESSION_CONTEXT_CMD_CHARS) +
+            " → " + outcomeLine.trim().take(SESSION_CONTEXT_OUTCOME_CHARS)
+        sessionContextLines.add(entry)
+        while (sessionContextLines.size > SESSION_CONTEXT_MAX_LINES) {
+            sessionContextLines.removeAt(0)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v49: khamoshi-ghadi (idle valve) + khidki phir kholna
+    // ------------------------------------------------------------------
+
+    /**
+     * 15 minute ki poori khamoshi: session sunne
+     * wali haalat (COMMAND/ACK) me ho to chetaavni
+     * line bolkar session band (gola gayab, wajah
+     * "session-idle")। Kaam chal raha ho (REPLY)
+     * to ghadi sirf aage badhti hai — lamba
+     * screen-kaam beech me kabhi nahi katega।
+     */
+    private val sessionIdleRunnable = Runnable {
+        executor.execute {
+            if (destroyed || !sessionActive) return@execute
+            when (state) {
+                State.COMMAND, State.ACK -> {
+                    endSessionWithClosingLine(
+                        SESSION_END_IDLE, sessionIdleText()
+                    )
+                }
+                State.REPLY -> armSessionIdle()
+                else -> Unit
+            }
+        }
+    }
+
+    private fun armSessionIdle() {
+        mainHandler.removeCallbacks(sessionIdleRunnable)
+        mainHandler.postDelayed(sessionIdleRunnable, SESSION_IDLE_MS)
+    }
+
+    private fun disarmSessionIdle() {
+        mainHandler.removeCallbacks(sessionIdleRunnable)
+    }
+
+    /**
+     * Khaali/error wali khidki ke baad session ki
+     * khidki phir kholne wala bandha intezaar —
+     * chhota sa antar isliye, taaki recognizer ke
+     * turant-fail par band-bina-soch wala chakkar
+     * (spin) na bane; har asal khidki apna samay
+     * leti hai aur beech me idle ghadi chalti
+     * rehti hai।
+     */
+    private val sessionReopenRunnable = Runnable {
+        executor.execute {
+            if (destroyed || !sessionActive) return@execute
+            if (state == State.COMMAND || state == State.ACK) {
+                startCommandSession()
+            }
+        }
+    }
+
+    private fun reopenSessionWindow() {
+        mainHandler.removeCallbacks(sessionReopenRunnable)
+        mainHandler.postDelayed(
+            sessionReopenRunnable, SESSION_REOPEN_DELAY_MS
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // v49: session wali boli linein — shaksiyat ki apni bhasha me
+    // ------------------------------------------------------------------
+
+    /** "আর কিছু?" wala prompt — session ki pehchan। */
+    private fun sessionMoreText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_MORE_TEXT_HI
+        Persona.TARA -> SESSION_MORE_TEXT_BN
+    }
+
+    /** Na-samajh par ek sawal — poochhna, band karna nahi। */
+    private fun sessionClarifyText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_CLARIFY_TEXT_HI
+        Persona.TARA -> SESSION_CLARIFY_TEXT_BN
+    }
+
+    /** Doosri na-samajh par imaandaar line — phir prompt aayega। */
+    private fun sessionNotUnderstoodText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_NOT_UNDERSTOOD_TEXT_HI
+        Persona.TARA -> SESSION_NOT_UNDERSTOOD_TEXT_BN
+    }
+
+    /** Shutdown wali vida — gola gayab hone se pehle ki line। */
+    private fun sessionShutdownText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_SHUTDOWN_TEXT_HI
+        Persona.TARA -> SESSION_SHUTDOWN_TEXT_BN
+    }
+
+    /** Prompt par "না" ki vinamra vida। */
+    private fun sessionDoneText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_DONE_TEXT_HI
+        Persona.TARA -> SESSION_DONE_TEXT_BN
+    }
+
+    /** Khamoshi wale ant ki chetaavni line। */
+    private fun sessionIdleText(): String = when (sessionPersona) {
+        Persona.MAYA -> SESSION_IDLE_TEXT_HI
+        Persona.TARA -> SESSION_IDLE_TEXT_BN
     }
 
     /**
@@ -1020,6 +1420,29 @@ class JarvisWakeService : Service() {
                         setStatus("Adda chal raha hai — Maya sun rahi hai")
                         updateNotification("Maya adda sun rahi hai — boliye...")
                         startCommandSession()
+                    } else if (sessionActive && ScreenConfirm.hasPending()) {
+                        // v49: taana session ke andar screen
+                        // wale kaam ka sawal abhi latka hai
+                        // (uski boli abhi khatm hui hai) —
+                        // jawab wake naam se NAHI, session
+                        // ki apni sunne wali khidki se aayega:
+                        // seedha command session kholo।
+                        // (Session ke bahar ye pal purana
+                        // v48 wala hi hai: neeche wala aam
+                        // ant + wake sunna।)
+                        setStatus("Screen wala kaam sawal pooch raha hai — jawab boliye")
+                        updateNotification("Jawab boliye...")
+                        startCommandSession()
+                    } else if (sessionActive) {
+                        // v49: TAANA SESSION chal raha hai —
+                        // jawab bola gaya, par baatchit
+                        // khatm NAHI: "আর কিছু করতে হবে?"
+                        // poochho aur bina wake naam ke
+                        // agli khidki kholo। Session ka
+                        // ant yahan NAHI band hota (woh
+                        // sirf shutdown / na / khamoshi par
+                        // bandhega)।
+                        promptSessionMore()
                     } else {
                         // v48: jawab bola gaya — session ka ant
                         // yahin band hota hai (wajah jawab bolne
@@ -1074,6 +1497,15 @@ class JarvisWakeService : Service() {
      */
     private fun startCommandSession() {
         if (destroyed) return
+        // v49: taana session ki khidki khul rahi hai —
+        // 15-minute wali khamoshi-ghadi yahin se chalegi
+        // (koi baat mile to onCommandHeard use band
+        // kar dega; kaam chal raha ho to ghadi aage
+        // badh jayegi, session beech kaam me nahi
+        // marega — sessionIdleRunnable dekho)।
+        if (sessionActive) {
+            armSessionIdle()
+        }
         // v48: Zipformer SIRF Tara ke liye hai — Maya
         // (Hindi) ke session me Bangla kaan kabhi nahi
         // khulega; uska kram seedha system (hi-IN) ->
@@ -1381,6 +1813,18 @@ class JarvisWakeService : Service() {
         if (destroyed) return
         stopSystemCommandSession()
         commandKind = CommandKind.NONE
+        if (sessionActive) {
+            // v49: taana session me khaali khidki
+            // (kuch suna nahi / recognizer chup) maut
+            // NAHI hai — khidki chup-chaap phir kholo।
+            // Asli band sirf 15-minute wali poori
+            // khamoshi (idle ghadi) karegi; suna-par-
+            // na-juda wala hukm yahan aata hi nahi
+            // (woh finishCommandResult ke session
+            // wale sawal-raaste par jata hai)।
+            reopenSessionWindow()
+            return
+        }
         if (addaEngine.isActive) {
             if (addaNoSpeechCount == 0) {
                 addaNoSpeechCount = 1
@@ -1704,18 +2148,93 @@ class JarvisWakeService : Service() {
         // callback fired by stop() is ignored.
         state = State.REPLY
         stopCommandSession()
+        // v49: koi bhi asal baat mili — khamoshi wali
+        // ghadi band (session ho ya na ho, ghadi sirf
+        // session me hi chalti hai)।
+        disarmSessionIdle()
+        // v49: ye khidki "আর কিছু?" wale prompt ke
+        // turant baad wali thi kya — sirf usi haal me
+        // saaf "না" session band karega (neeche
+        // wala bandobast)। Nishan yahin pakdo, phir
+        // saaf kar do — agli khidki apna nishan khud
+        // layegi।
+        val wasAwaitingMore = sessionActive && sessionAwaitingMore
+        sessionAwaitingMore = false
+        // v49: SESSION ME SHUTDOWN SABSE PEHLE —
+        // "সিস্টেম শাটডাউন" har baat par, har
+        // jaanch se pehle pakda jata hai (user ka
+        // pakka hukm)। Latka hua pushti-sawal ho to
+        // use saaf "না" dekar agent ko turant
+        // chhodo (dwaar fail-closed hi rahega),
+        // phir session apni vida-line bolkar band —
+        // gola gayab, wake sunna chaloo (poori
+        // service band NAHI hoti)।
+        if (sessionActive && SessionCommands.isShutdownCommand(text)) {
+            if (ScreenConfirm.hasPending()) {
+                ScreenConfirm.deliverAnswer(SESSION_DENY_ANSWER)
+            }
+            endSessionWithClosingLine(
+                SESSION_END_SHUTDOWN, sessionShutdownText()
+            )
+            return
+        }
         // v37: screen-agent ka sawal latka ho (send ki
         // pushti / ask_user) to ye baat USI ka jawab hai —
         // naya command nahi. Jawab pul ko saunp kar wapas
         // wake sunne par jao; agent apni daud wahi se aage
         // badhayega ya imaandaari se rok dega.
         if (ScreenConfirm.deliverAnswer(text)) {
+            if (sessionActive) {
+                // v49: taana session ke andar ka jawab
+                // hai — chain yahan NAHI tootti: service
+                // REPLY me hi intezaar karegi, agent
+                // apni daud aage badhayega, uska jawab
+                // bola jayega aur phir "আর কিছু?" wala
+                // prompt aayega (onTtsFinished wala
+                // bandobast)। Wake sunna yahan NAHI
+                // chalega — session ki khidki hi iska
+                // raasta hai।
+                setStatus("Screen wale kaam ka jawab mil gaya — kaam aage badh raha hai")
+                return
+            }
             setStatus("Screen wale kaam ka jawab mil gaya")
             // v48: ye baat ek mukammal len-den thi —
             // ant yahin band karo; kuch bolna NAHI hai
             // (bolna pushti wale pul ko bigaad dega)।
             endSession(SESSION_END_SCREEN_CONFIRM)
             startWakeSession()
+            return
+        }
+        // v49: "আর কিছু?" ke jawab me saaf NA / bas —
+        // session vinamrata se band (aam boli wali
+        // vida, gola thaharkar gayab, wake sunna
+        // chaloo)। Sirf prompt ke turant baad wali
+        // baat par hai — beech kaam me "না" aam
+        // hukm hi rehta hai।
+        if (wasAwaitingMore && SessionCommands.isNoMoreAnswer(text)) {
+            endSessionDone()
+            return
+        }
+        // v49: SEEKHNE WALE PAKKE HUKM — session ke
+        // andar bhi, bahar bhi (saamne wali screen
+        // wala hi ek object, [LearnCommands])।
+        // "মনে রেখো" (aakhiri safal kaam bandho —
+        // asafal par imaandaar manaahi), "শিখে
+        // নাও: …", "কী কী শিখেছ", naam wala
+        // "ভুলে যাও"। Jawab shaksiyat ki pakki
+        // bhasha me bola jata hai; session chal
+        // raha ho to jawab ke baad prompt phir
+        // aayega (aam boli wala bandobast), na ho
+        // to chain aam taur par band hogi।
+        LearnCommands.tryHandle(
+            applicationContext, text, personaSpokenLang()
+        )?.let { learnLine ->
+            setStatus("Seekhne wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(learnLine)
+            armReplyFallback(learnLine)
+            orbOverlay.setReply(learnLine)
             return
         }
         // v48: DUSRI BHASHA PAR VINAMRA MOD — Maya ke
@@ -1740,6 +2259,12 @@ class JarvisWakeService : Service() {
             return
         }
         addaNoSpeechCount = 0
+        // v49: asal hukm ki koshish shuru — lagatar
+        // na-samajhne ki ginati yahan se taaza (ye
+        // hukm jud jaye to ginati zero hi rahegi;
+        // na jude to handleSessionNotUnderstood use
+        // yahin se aage badhayega)।
+        sessionMissCount = 0
         // v36 (C): device wala hukm (torch / mobile data)
         // suna gaya ho to uska KACHHA text jarvis_diag me
         // band karo — Vosk ne asal me suna kya tha, woh
@@ -1770,7 +2295,37 @@ class JarvisWakeService : Service() {
         // service ke main-executor se aata hai, isliye
         // yahan latch par intezaar surakshit hai)।
         if (commandEngine.isScreenshotCommand(text)) {
-            finishCommandResult(text, commandEngine.runScreenshotCommand(text))
+            val shotResult = commandEngine.runScreenshotCommand(text)
+            // v49: SCREEN-KAAM chala — taana session
+            // yahin se shuru (ya chal raha ho to aage
+            // badha)। Tasveer asal me bach gayi ho
+            // (runScreenshotCommand ki apni report
+            // "-> OK" ho) to usi pal ki taaza tasveer
+            // session ki godam me bhi bandh jaye —
+            // baad me "ওই স্ক্রিনশটটা পাঠাও" par
+            // share wala auzaar NAII tasveer lene ke
+            // bajay yahi lega। Naya screenshot purane
+            // ko badal deta hai (humesha sabse taaza
+            // pakki wali rehti hai)।
+            enterContinuousSession()
+            val shotDiag = try {
+                getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                    .getString("last_screenshot_command", null)
+            } catch (t: Throwable) {
+                null
+            }
+            if (shotDiag != null && shotDiag.trimEnd().endsWith("OK")) {
+                val freshShot = try {
+                    JarvisAccessibilityService.instance?.lastCleanScreenshot
+                } catch (t: Throwable) {
+                    null
+                }
+                if (freshShot != null) {
+                    SessionShot.bitmap = freshShot
+                    sessionShotTaken = true
+                }
+            }
+            finishCommandResult(text, shotResult)
             return
         }
         // v36: play-iraade wala sanyojit hukm ("YouTube
@@ -1795,6 +2350,9 @@ class JarvisWakeService : Service() {
         // jaisa suna waisa hi jayega.
         val urlTask = UrlIntent.extractUrlTask(text)
         if (urlTask != null) {
+            // v49: ye bhi screen-kaam hai — taana
+            // session yahin se shuru/aage।
+            enterContinuousSession()
             runDirectScreenTask(text, urlTask)
             return
         }
@@ -1819,7 +2377,14 @@ class JarvisWakeService : Service() {
         // chalegi (uski har line Hindi hai; Tara ke
         // session me Hindi bolna sakht-bhasha wale
         // hukm ke khilaaf hoga)।
-        if (sessionPersona == Persona.MAYA && addaEngine.shouldHandle(text)) {
+        // v49: taana session ke andar bhi adda NAHI
+        // chalega — session kaam ki haalat hai, uske
+        // andar har baat hukm hi hai (mastishk uplabdh
+        // ho to wahi baatchit bhi sambhalta hai)।
+        // Session ke bahar adda bilkul pehle jaisa।
+        if (sessionPersona == Persona.MAYA && !sessionActive &&
+            addaEngine.shouldHandle(text)
+        ) {
             handleAddaHeard(text)
             return
         }
@@ -1835,6 +2400,15 @@ class JarvisWakeService : Service() {
      * REPLY ho aur command session band ho chuka ho.
      */
     private fun finishCommandResult(text: String, rawResult: CommandResult) {
+        // v49: taana session ke andar suna-par-na-juda
+        // hukm — v48 wala retry/vida jaap yahan NAHI
+        // chalega: session apne sawal wale raaste par
+        // jayega (pehle sawal, phir imaandaar line,
+        // phir wapas "আর কিছু?" — session zinda)।
+        if (sessionActive && !rawResult.handled) {
+            handleSessionNotUnderstood()
+            return
+        }
         // v38: system recognizer se aaya hukm suna to gaya
         // par kisi kaam se nahi juda — purana do-retry
         // wala "বুঝতে পারিনি" jaap is raaste par nahi
@@ -1879,6 +2453,10 @@ class JarvisWakeService : Service() {
         // raaste ise bolne ke baad apni wajah se
         // badal sakte hain — onAgentBrainAnswer dekho)।
         pendingEndReason = SESSION_END_COMPLETED
+        // v49: taana session chal raha ho to ye hukm
+        // uske sandarbh me bandh jaye (agle hukm ke
+        // ishare isiliye judte hain)।
+        noteSessionOutcome(text, result.responseText)
         // v16: jawab bolna shuru — screen-wake ka samay badhao,
         // taaki jawab ke dauraan aur uske baad wale intezaar me
         // screen jala rahe.
@@ -1943,13 +2521,33 @@ class JarvisWakeService : Service() {
         val tools = AgentTools(
             applicationContext, commandEngine, fromBackgroundService = true
         )
+        // v49: session wale bandhan auzaaron tak —
+        // (a) hukm me saaf bhejne ka aadesh ho AUR
+        // hum session ke andar hon to woh aadesh
+        // screen-kaam tak jayega (Send pehle-se-
+        // pusht); session ke bahar kabhi nahi।
+        // (b) hukm purani session-tasveer ki taraf
+        // ishara kare to share wala auzaar wahi
+        // lega। (c) session sandarbh mastishk +
+        // screen-kaam dono ko milega।
+        // Auzaar-tukdi bandh rakho — jawab aane par
+        // uske screenWorkUsed nishan se session
+        // banega (onAgentBrainAnswer dekho)।
+        tools.userDirectedSend = sessionActive &&
+            SessionCommands.isSendInstruction(text)
+        tools.reuseSessionScreenshot = sessionActive && sessionShotTaken &&
+            SessionCommands.refersToEarlierScreenshot(text)
+        val contextForRun = sessionContextText()
+        tools.sessionContext = contextForRun
+        lastBrainTools = tools
         // v48: is chain ki shaksiyat ka bhasha-bandhan
         // agent tak jata hai — Maya ke session me har
         // boli Hindi, Tara ke session me har boli
         // Bangla, user kisi bhi bhasha me bole.
         AgentBrain.run(
             applicationContext, geminiHistory.toList(), text, tools::execute,
-            replyLanguage = personaSpokenLang()
+            replyLanguage = personaSpokenLang(),
+            sessionContext = contextForRun
         ) { reply ->
             executor.execute { onAgentBrainAnswer(text, reply, playQueryFallback) }
         }
@@ -1972,6 +2570,19 @@ class JarvisWakeService : Service() {
         // Beech me service band ho gayi ho ya flow aage badh
         // gaya ho to der se aaya jawab chup-chaap chhod do.
         if (destroyed || state != State.REPLY) return
+        // v49: is daud me mastishk ne screen-kaam
+        // (screen_task / share_screenshot) chalaya
+        // tha to ye SCREEN-KAAM wali baat thi — taana
+        // session yahin se shuru hoga: jawab bola
+        // jayega, phir aam ant ki jagah "আর কিছু?"
+        // wala prompt aayega (onTtsFinished wala
+        // bandobast)। Daud asafal model-haar par
+        // giri ho (reply null, koi auzaar chala hi
+        // nahi) to nishan false hi rahega — session
+        // nahi banega, purana raasta chalega।
+        if (lastBrainTools?.screenWorkUsed == true) {
+            enterContinuousSession()
+        }
         if (reply == null) {
             // v36: play wala hukm tha aur mastishk nahi mila —
             // gaana seedhe auzaar se bajega, offline engine
@@ -1982,7 +2593,9 @@ class JarvisWakeService : Service() {
             }
             // v48: adda sirf MAYA ke session me (Hindi
             // baatchit) — Tara me kabhi nahi.
-            if (sessionPersona == Persona.MAYA &&
+            // v49: taana session ke andar bhi nahi
+            // (onCommandHeard wala hi niyam)।
+            if (sessionPersona == Persona.MAYA && !sessionActive &&
                 addaEngine.shouldHandle(text)
             ) {
                 handleAddaHeard(text)
@@ -2036,6 +2649,9 @@ class JarvisWakeService : Service() {
         // v48: agent ka jawab bola ja raha hai — ant
         // "completed" band karo.
         pendingEndReason = SESSION_END_COMPLETED
+        // v49: session chal raha ho to ye len-den
+        // uske sandarbh me bhi bandh jaye।
+        noteSessionOutcome(text, safeReply)
         // v16 wala screen-wake refresh, aam jawab ki tarah.
         lightScreenOnWake()
         speaker.speak(safeReply)
@@ -2081,6 +2697,10 @@ class JarvisWakeService : Service() {
                 setStatus("Seedha jawab mila — bol rahi hoon")
                 updateNotification("Jarvis jawab de raha hai...")
                 pendingEndReason = SESSION_END_COMPLETED
+                // v49: session chal raha ho to gaane
+                // wala len-den bhi sandarbh me bandhe
+                // (prompt iske baad aam taur par aayega)।
+                noteSessionOutcome(text, line)
                 lightScreenOnWake()
                 speaker.speak(line)
                 armReplyFallback(line)
@@ -2110,6 +2730,14 @@ class JarvisWakeService : Service() {
             val tools = AgentTools(
                 applicationContext, commandEngine, fromBackgroundService = true
             )
+            // v49: bulane wale ne session pehle hi
+            // shuru kar diya hai (URL wala screen-kaam
+            // session banata hai) — hukm ka bhejne
+            // wala aadesh aur session sandarbh auzaar
+            // tak jayein (askAgentBrain wala hi niyam)।
+            tools.userDirectedSend = sessionActive &&
+                SessionCommands.isSendInstruction(text)
+            tools.sessionContext = sessionContextText()
             val result = try {
                 tools.execute("screen_task", JSONObject().put("task", task))
             } catch (t: Throwable) {
@@ -2122,6 +2750,9 @@ class JarvisWakeService : Service() {
                 setStatus("Screen wale kaam ka jawab mila — bol rahi hoon")
                 updateNotification("Jarvis jawab de raha hai...")
                 pendingEndReason = SESSION_END_COMPLETED
+                // v49: session ke sandarbh me ye
+                // len-den bhi bandh jaye।
+                noteSessionOutcome(text, line)
                 lightScreenOnWake()
                 speaker.speak(line)
                 armReplyFallback(line)
@@ -2270,6 +2901,15 @@ class JarvisWakeService : Service() {
     private fun handleCommandMiss(fromRecognizerError: Boolean = false) {
         if (destroyed) return
         stopCommandSession()
+        if (sessionActive) {
+            // v49: taana session me khaali/error wali
+            // khidki maut NAHI hai — khidki phir kholo
+            // (handleSystemCommandMiss wala hi niyam)।
+            // Band sirf idle ghadi (15 minute ki
+            // khamoshi) ya user ke apne hukm se hoga।
+            reopenSessionWindow()
+            return
+        }
         if (addaEngine.isActive) {
             // v13: adda me "फिर से बोलिए" wala v12 retry nahi
             // chalega. Pehla khaali/error session chup-chaap ek aur
@@ -2388,6 +3028,16 @@ class JarvisWakeService : Service() {
                     // v13: TTS completion callback kabhi kho jaye to
                     // bhi adda wahi se aage badhe, wake par na gire.
                     startCommandSession()
+                } else if (sessionActive && ScreenConfirm.hasPending()) {
+                    // v49: onTtsFinished wala hi session
+                    // niyam — latke sawal ka jawab session
+                    // ki apni khidki se aayega।
+                    startCommandSession()
+                } else if (sessionActive) {
+                    // v49: onTtsFinished wala hi session
+                    // niyam — jawab bola mana gaya, ab
+                    // "আর কিছু?" wala prompt chalega।
+                    promptSessionMore()
                 } else {
                     // v48: jawab bola mana gaya (TTS-finish
                     // callback kho gaya tha) — ant yahin
@@ -2893,6 +3543,55 @@ class JarvisWakeService : Service() {
         private const val SESSION_END_SCREEN_CONFIRM = "screen-confirm"
         private const val SESSION_END_ADDA_SILENT = "adda-silent"
         private const val SESSION_END_WEDGED = "wedged-recovered"
+
+        /** v49: taana session ke ant ki wajahen (usi report me). */
+        private const val SESSION_END_SHUTDOWN = "session-shutdown"
+        private const val SESSION_END_DONE = "session-done"
+        private const val SESSION_END_IDLE = "session-idle"
+
+        /**
+         * v49: shutdown ke pal latke pushti-sawal ko
+         * diya jaane wala saaf inkaar — dwaar hamesha
+         * fail-closed (haan kabhi nahi banta)।
+         */
+        private const val SESSION_DENY_ANSWER = "না"
+
+        /** v49: session me itni poori khamoshi (15 min) par chetaavni + band। */
+        private const val SESSION_IDLE_MS = 15 * 60 * 1000L
+
+        /** v49: khaali khidki phir kholne ka chhota antar (spin-rok). */
+        private const val SESSION_REOPEN_DELAY_MS = 600L
+
+        /** v49: session sandarbh me aakhiri itne len-den rehte hain। */
+        private const val SESSION_CONTEXT_MAX_LINES = 10
+
+        /** v49: sandarbh ki ek line me hukm ka kata hua aakar। */
+        private const val SESSION_CONTEXT_CMD_CHARS = 50
+
+        /** v49: sandarbh ki ek line me natije ka kata hua aakar। */
+        private const val SESSION_CONTEXT_OUTCOME_CHARS = 70
+
+        /** v49: session wali boli linein — har shaksiyat ki apni bhasha me। */
+        private const val SESSION_MORE_TEXT_BN = "আর কিছু করতে হবে?"
+        private const val SESSION_MORE_TEXT_HI = "और कुछ करना है?"
+        private const val SESSION_CLARIFY_TEXT_BN =
+            "ঠিক বুঝলাম না — কোনটা বলতে চাইছো?"
+        private const val SESSION_CLARIFY_TEXT_HI =
+            "ठीक समझ नहीं आया — आप क्या कहना चाह रहे हैं?"
+        private const val SESSION_NOT_UNDERSTOOD_TEXT_BN =
+            "এটা আমি ঠিক বুঝতে পারলাম না।"
+        private const val SESSION_NOT_UNDERSTOOD_TEXT_HI =
+            "यह मैं ठीक से समझ नहीं पाई।"
+        private const val SESSION_SHUTDOWN_TEXT_BN =
+            "ঠিক আছে, সেশন বন্ধ করলাম।"
+        private const val SESSION_SHUTDOWN_TEXT_HI =
+            "ठीक है, सेशन बंद कर दिया।"
+        private const val SESSION_DONE_TEXT_BN = "ঠিক আছে।"
+        private const val SESSION_DONE_TEXT_HI = "ठीक है।"
+        private const val SESSION_IDLE_TEXT_BN =
+            "অনেকক্ষণ কোনো কথা হলো না — সেশন বন্ধ করছি।"
+        private const val SESSION_IDLE_TEXT_HI =
+            "काफ़ी देर से कोई बात नहीं हुई — सेशन बंद कर रही हूँ।"
 
         /** v33: ek command ko kul itne retry milenge. */
         private const val MAX_COMMAND_RETRIES = 2
