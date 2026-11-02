@@ -245,6 +245,17 @@
             android:text="Quota hisaab (aaj): total 0 | main 0 | lite 0"
             android:textSize="12sp" />
 
+        <!-- v48: aakhiri background session ki shaksiyat
+             (Maya-Hindi / Tara-Bangla) aur uska ant kis
+             wajah se hua — wake service ki report. -->
+        <TextView
+            android:id="@+id/personaText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Persona (aakhiri): abhi tak koi session nahi"
+            android:textSize="12sp" />
+
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
              dikhao — galat setting ek nazar me pakdi jaye. -->
         <TextView
