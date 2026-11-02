@@ -208,6 +208,14 @@ class JarvisAccessibilityService : AccessibilityService() {
         val elements: List<ScreenElement>
     )
 
+    /**
+     * v45: poori-screen ungli-swipe ki disha — ungli ki
+     * harkat ki disha hai (LEFT = ungli bayein or, samagri
+     * bayein or sarkegi: gallery/carousel me aam taur par
+     * AGLE page ki chaal)।
+     */
+    enum class SwipeDirection { UP, DOWN, LEFT, RIGHT }
+
     private val worker = Executors.newSingleThreadExecutor()
 
     // v23: panel-scan report ki kacchi jankari — sirf worker
@@ -584,6 +592,81 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * v45: screen par [text] naam wali cheez ko DER tak
+     * dabaye rakho (long-press, ~600 ms ungli-jaisa
+     * gesture; woh na chale to ACTION_LONG_CLICK) —
+     * context menu / message-options jaisi cheezon ke
+     * liye jo aam tap se nahi khulti. Khoj [tapScreenText]
+     * wali hi hai (hubahu pehle, warna naam rakhne wala
+     * sabse chhota label, clickable purvaj ke saath)।
+     */
+    fun longPressScreenText(text: String, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runLongPressText(text) }
+    }
+
+    /** v45: screen par seedha (x, y) par long-press gesture. */
+    fun longPressScreenPoint(x: Int, y: Int, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) {
+            longPressAtPoint(x.toFloat(), y.toFloat())
+        }
+    }
+
+    /**
+     * v45: poori screen par ungli-swipe — screen ki ~65%
+     * chaudi/unchai ka safar, ~300 ms. Ye [scrollScreen]
+     * se alag ASAL gesture hai: gallery, story, carousel
+     * aur aade (horizontal) liston par kaam karta hai,
+     * jahan node-scroll kuch nahi karta. Disha ungli ki
+     * harkat ki hai — LEFT matlab ungli bayein or gayi
+     * (aam taur par agli tasveer/page)।
+     */
+    fun swipeScreen(direction: SwipeDirection, callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runSwipeScreen(direction) }
+    }
+
+    /**
+     * v45: NAAM wale khane me likho — [label] se milta
+     * editable khana dhoondho (uske apne naam/hint se,
+     * warna sabse paas wale label se), use focus karo aur
+     * [typeScreenText] wali hi mashinari (ACTION_SET_TEXT,
+     * woh na chale to clipboard + paste) se [text] bharo.
+     * Milta-julta khana hi na mile to imaandaar false.
+     */
+    fun typeIntoScreenText(
+        label: String,
+        text: String,
+        callback: (Boolean) -> Unit
+    ) {
+        runOnWorker(callback, false) { runTypeIntoText(label, text) }
+    }
+
+    /**
+     * v45: is pal focus wale khane par IME ka enter
+     * dabao (ACTION_IME_ENTER) — search/form wale khane
+     * me likhne ke baad "chalao" wala kadam. Focus wala
+     * khana na mile, ya woh khana ye action deta hi na
+     * ho (purana Android / khane ki marzi), to
+     * imaandaar false — bulane wala tab dikhai dene wale
+     * Search/Go/Done batan ki or jata hai.
+     */
+    fun submitFocusedField(callback: (Boolean) -> Unit) {
+        runOnWorker(callback, false) { runSubmitFocusedField() }
+    }
+
+    /**
+     * v45: screen par dikhai dene wala Search / Go / Done
+     * matlab ka sabse achha batan (bn/hi/en naam) — mile
+     * to uska ASAL dikhai dene wala naam, warna null.
+     * Ye sirf DHOONDHTA hai, dabata nahi: dabane se pehle
+     * pushti-dwaar (ScreenAgent) apni jaanch chalata hai,
+     * isliye hassas naam (Send waghera) bina pushti ke
+     * kabhi nahi dabta.
+     */
+    fun findSubmitButton(callback: (String?) -> Unit) {
+        runOnWorker(callback, null) { runFindSubmitButton() }
+    }
+
+    /**
      * v37: screen wale saare kaam ek hi bandobosto se —
      * worker thread par chalao, gadbad ho to [fallback]
      * wala sachha natija, callback kabhi atakta nahi.
@@ -703,10 +786,20 @@ class JarvisAccessibilityService : AccessibilityService() {
      * na ho to uske clickable purvaj par ([findClickableAncestor]
      * khud se shuru hota hai, isliye dono haal sambhalta hai)।
      */
-    private fun runTapText(wantedRaw: String): Boolean {
+    /**
+     * v45: [runTapText] ki khoj alag bandhi hui — naam se
+     * sabse achha dabane-layak nishana (clickable purvaj
+     * ke saath)। Document order me: hubahu (exact) milan
+     * sabse pehle, warna naam me woh shabd rakhne wala
+     * sabse chhota label. Tap aur long-press dono isiko
+     * istemal karte hain, taaki dono ki khoj bilkul ek ho.
+     */
+    private fun findLabeledTarget(
+        wantedRaw: String
+    ): AccessibilityNodeInfo? {
         val wanted = wantedRaw.trim().lowercase(Locale.ROOT)
-        if (wanted.isEmpty()) return false
-        val root = foregroundRoot() ?: return false
+        if (wanted.isEmpty()) return null
+        val root = foregroundRoot() ?: return null
         var best: AccessibilityNodeInfo? = null
         var bestExact = false
         var bestLabelLength = Int.MAX_VALUE
@@ -736,7 +829,11 @@ class JarvisAccessibilityService : AccessibilityService() {
                 bestLabelLength = label.length
             }
         }
-        val target = best ?: return false
+        return best
+    }
+
+    private fun runTapText(wantedRaw: String): Boolean {
+        val target = findLabeledTarget(wantedRaw) ?: return false
         val bounds = Rect()
         try {
             target.getBoundsInScreen(bounds)
@@ -753,6 +850,109 @@ class JarvisAccessibilityService : AccessibilityService() {
             target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } catch (t: Throwable) {
             false
+        }
+    }
+
+    /**
+     * v45: naam se der-dabana — khoj [runTapText] wali
+     * hi ([findLabeledTarget]); dabana: nishane ke beech
+     * par ~600 ms ka ungli-gesture, woh na chale to
+     * node par ACTION_LONG_CLICK.
+     */
+    private fun runLongPressText(wantedRaw: String): Boolean {
+        val target = findLabeledTarget(wantedRaw) ?: return false
+        val bounds = Rect()
+        try {
+            target.getBoundsInScreen(bounds)
+        } catch (t: Throwable) {
+            // Ped badal gaya: bounds khaali rahenge, node wala
+            // raasta phir bhi aazmaya jayega.
+        }
+        if (bounds.width() > 0 && bounds.height() > 0) {
+            if (longPressAtPoint(
+                    bounds.centerX().toFloat(),
+                    bounds.centerY().toFloat()
+                )
+            ) {
+                return true
+            }
+        }
+        return try {
+            target.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v45: (x, y) par der tak dabaye rakhne wala gesture —
+     * [tapAtPoint] wala hi bandha intezaar, bas stroke
+     * [LONG_PRESS_DURATION_MS] tak ek hi jagah thaharta hai.
+     */
+    private fun longPressAtPoint(x: Float, y: Float): Boolean {
+        return try {
+            val path = Path()
+            path.moveTo(x, y)
+            val gesture = GestureDescription.Builder()
+                .addStroke(
+                    GestureDescription.StrokeDescription(
+                        path, 0, LONG_PRESS_DURATION_MS
+                    )
+                )
+                .build()
+            val latch = CountDownLatch(1)
+            val accepted = AtomicBoolean(false)
+            val ok = dispatchGesture(
+                gesture,
+                object : GestureResultCallback() {
+                    override fun onCompleted(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        accepted.set(true)
+                        latch.countDown()
+                    }
+
+                    override fun onCancelled(
+                        gestureDescription: GestureDescription?
+                    ) {
+                        latch.countDown()
+                    }
+                },
+                null
+            )
+            if (ok) {
+                latch.await(1600, TimeUnit.MILLISECONDS)
+                accepted.get()
+            } else {
+                false
+            }
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v45: poori-screen swipe ki asal chaal — sirf worker
+     * thread se. Ungli screen ke beech se us disha me
+     * ~65% safar karti hai ([SWIPE_TRAVEL_FRACTION]),
+     * ~300 ms me: gallery/carousel ki tez palat ke liye
+     * kaafi, itna dheema bhi nahi ki drag ban jaye.
+     */
+    private fun runSwipeScreen(direction: SwipeDirection): Boolean {
+        val metrics = resources.displayMetrics
+        val cx = metrics.widthPixels / 2f
+        val cy = metrics.heightPixels / 2f
+        val halfX = metrics.widthPixels * SWIPE_TRAVEL_FRACTION / 2f
+        val halfY = metrics.heightPixels * SWIPE_TRAVEL_FRACTION / 2f
+        return when (direction) {
+            SwipeDirection.UP ->
+                dispatchSwipe(cx, cy + halfY, cx, cy - halfY, SWIPE_DURATION_MS)
+            SwipeDirection.DOWN ->
+                dispatchSwipe(cx, cy - halfY, cx, cy + halfY, SWIPE_DURATION_MS)
+            SwipeDirection.LEFT ->
+                dispatchSwipe(cx + halfX, cy, cx - halfX, cy, SWIPE_DURATION_MS)
+            SwipeDirection.RIGHT ->
+                dispatchSwipe(cx - halfX, cy, cx + halfX, cy, SWIPE_DURATION_MS)
         }
     }
 
@@ -1026,6 +1226,21 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
         val node = target ?: return false
+        return setTextOnNode(node, text)
+    }
+
+    /**
+     * v45: ek chune hue khane par text bharne ki asal
+     * mashinari — [runTypeText] se alag bandhi hui, taaki
+     * naam-wala likhna ([runTypeIntoText]) bhi bilkul
+     * wahi raasta le. Focus ki koshish, phir
+     * ACTION_SET_TEXT; woh mana kar de to clipboard par
+     * rakhkar ACTION_PASTE. Dono ka natija sach.
+     */
+    private fun setTextOnNode(
+        node: AccessibilityNodeInfo,
+        text: String
+    ): Boolean {
         try {
             node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         } catch (t: Throwable) {
@@ -1053,6 +1268,243 @@ class JarvisAccessibilityService : AccessibilityService() {
         } catch (t: Throwable) {
             false
         }
+    }
+
+    /**
+     * v45: kisi khane ka pehchan-naam — dikhne wala text,
+     * varnan (contentDescription) aur hint, ek saath.
+     * Khaali khane par aam taur par hint hi uska naam
+     * hota hai ("Search...", "নাম লিখুন")।
+     */
+    private fun fieldLabel(node: AccessibilityNodeInfo): String =
+        ((nodeLabel(node)) + " " +
+            (try {
+                node.hintText?.toString() ?: ""
+            } catch (t: Throwable) {
+                ""
+            })).trim()
+
+    /**
+     * v45: naam se khana dhoondhkar likhna — sirf worker
+     * thread se. Do chaal:
+     * 1. APNA NAAM: koi dikhai dene wala editable khana
+     *    jiska apna naam/hint mange hue naam se mile
+     *    (hubahu pehle, warna naam rakhne wala sabse
+     *    chhota) — aam taur par yahi kaafi hai.
+     * 2. PAAS WALA NAAM: khane ka apna naam na ho to
+     *    woh label jo mange hue naam se milta ho aur
+     *    uske thik neeche/paas koi editable khana ho
+     *    (formon me label khane ke upar likha rehta hai)।
+     * Dono na mile to imaandaar false — andaze se kisi
+     * bhi khane me nahi likhenge.
+     */
+    private fun runTypeIntoText(labelRaw: String, text: String): Boolean {
+        val wanted = labelRaw.trim().lowercase(Locale.ROOT)
+        if (wanted.isEmpty()) return false
+        val root = foregroundRoot() ?: return false
+        val nodes = collectInDocumentOrder(root)
+        var best: AccessibilityNodeInfo? = null
+        var bestExact = false
+        var bestLabelLength = Int.MAX_VALUE
+        for (node in nodes) {
+            try {
+                if (!node.isEditable || !node.isVisibleToUser) continue
+                val label = fieldLabel(node)
+                if (label.isEmpty()) continue
+                val lower = label.lowercase(Locale.ROOT)
+                val exact = lower == wanted
+                if (!exact && !lower.contains(wanted) &&
+                    !wanted.contains(lower)
+                ) {
+                    continue
+                }
+                val better = when {
+                    exact && !bestExact -> true
+                    exact == bestExact && label.length < bestLabelLength ->
+                        true
+                    else -> false
+                }
+                if (better) {
+                    best = node
+                    bestExact = exact
+                    bestLabelLength = label.length
+                }
+            } catch (t: Throwable) {
+                // Ped badal raha hai: aage badho.
+            }
+        }
+        if (best != null) {
+            return setTextOnNode(best!!, text)
+        }
+        // Chaal 2: paas wala label — uske neeche sabse
+        // paas wala editable khana (bandhi doori ke andar)।
+        val labelBounds = Rect()
+        val fieldBounds = Rect()
+        var bestField: AccessibilityNodeInfo? = null
+        var bestDistance = Long.MAX_VALUE
+        for (node in nodes) {
+            try {
+                if (node.isEditable || !node.isVisibleToUser) continue
+                val label = nodeLabel(node).trim()
+                if (label.isEmpty()) continue
+                val lower = label.lowercase(Locale.ROOT)
+                if (lower != wanted && !lower.contains(wanted)) continue
+                node.getBoundsInScreen(labelBounds)
+                if (labelBounds.width() <= 0) continue
+                for (field in nodes) {
+                    try {
+                        if (!field.isEditable || !field.isVisibleToUser) {
+                            continue
+                        }
+                        field.getBoundsInScreen(fieldBounds)
+                        if (fieldBounds.width() <= 0) continue
+                        // Khana label ke neeche ho (form ki
+                        // aam banawat) ya ek hi kataar me
+                        // dayein — upar/bayein wala khana is
+                        // label ka nahi mana jayega.
+                        val belowGap = fieldBounds.top - labelBounds.bottom
+                        val sameRow = fieldBounds.top < labelBounds.bottom &&
+                            fieldBounds.bottom > labelBounds.top
+                        if (!(belowGap in 0..NEAREST_LABEL_MAX_GAP_PX ||
+                                (sameRow && fieldBounds.left >= labelBounds.left))
+                        ) {
+                            continue
+                        }
+                        val dx = (fieldBounds.centerX() -
+                            labelBounds.centerX()).toLong()
+                        val dy = (fieldBounds.centerY() -
+                            labelBounds.centerY()).toLong()
+                        val distance = dx * dx + dy * dy
+                        if (distance < bestDistance) {
+                            bestDistance = distance
+                            bestField = field
+                        }
+                    } catch (t: Throwable) {
+                        // Ped badal raha hai: aage badho.
+                    }
+                }
+            } catch (t: Throwable) {
+                // Ped badal raha hai: aage badho.
+            }
+        }
+        val field = bestField ?: return false
+        return setTextOnNode(field, text)
+    }
+
+    /**
+     * v45: focus wale khane par IME enter — sirf worker
+     * thread se. Focus wala khana pehle ([runTypeText]
+     * wala hi dhoondhna); phir Android 11+ par hi
+     * ACTION_IME_ENTER aazmana — ye action usse pehle
+     * ke Android me hai hi nahi, aur khana khud use
+     * deta ho tabhi dabana. Na mile / na de to false:
+     * bulane wala dikhai dene wale Search/Go/Done
+     * batan ki or jata hai, teesra koi raasta nahi banta.
+     */
+    private fun runSubmitFocusedField(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return false
+        }
+        var target: AccessibilityNodeInfo? = null
+        for (root in collectRoots()) {
+            try {
+                root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    ?.let { target = it }
+            } catch (t: Throwable) {
+                // Is ped me focus nahi: agli khidki dekho.
+            }
+            if (target != null) break
+        }
+        val node = target ?: return false
+        return performImeEnter(node)
+    }
+
+    /**
+     * v45: ACTION_IME_ENTER asal me dabana — ye chinh
+     * (constant) Android 11 (API 30) se pehle ke
+     * framework me hai hi nahi, isliye iska zikr sirf
+     * is bandhe hue hisse me hai, aur bulane wala
+     * ([runSubmitFocusedField]) SDK jaanch ke baad hi
+     * ise bulata hai. Khane ki action-list me ye
+     * action ho tabhi dabega; natija sach.
+     */
+    private fun performImeEnter(node: AccessibilityNodeInfo): Boolean {
+        val imeAction = try {
+            node.actionList.firstOrNull { info ->
+                info.id ==
+                    AccessibilityNodeInfo.AccessibilityAction
+                        .ACTION_IME_ENTER.id
+            }
+        } catch (t: Throwable) {
+            null
+        } ?: return false
+        return try {
+            node.performAction(imeAction.id)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v45: Search/Go/Done matlab wala naam hai kya —
+     * gair-Latin (Bangla/Devanagari) shabdon par
+     * "naam me hai" kaafi hai; Latin shabdon par
+     * shabd-seema (word boundary) chahiye, warna
+     * "Google" me "go" aur "abandoned" me "done"
+     * galti se mil jayega.
+     */
+    private fun isSubmitLabel(label: String): Boolean {
+        val lower = label.lowercase(Locale.ROOT).trim()
+        if (lower.isEmpty()) return false
+        if (SUBMIT_EXACT_WORDS.any { lower == it }) return true
+        if (SUBMIT_CONTAIN_WORDS.any { lower.contains(it) }) return true
+        return SUBMIT_LATIN_PATTERN.containsMatchIn(lower)
+    }
+
+    /**
+     * v45: dikhai dene wala sabse achha submit batan
+     * dhoondho — sirf worker thread se. Dikhai dene
+     * wala, naam wala, dabane-layak (khud clickable ya
+     * clickable purvaj wala) hissa jiska naam
+     * [isSubmitLabel] se mile: hubahu naam pehle,
+     * warna sabse chhota naam. Mile to uska ASAL naam;
+     * dabana bulane wale (ScreenAgent) ka kaam hai —
+     * pushti-dwaar wahin lagta hai.
+     */
+    private fun runFindSubmitButton(): String? {
+        val root = foregroundRoot() ?: return null
+        var best: String? = null
+        var bestExact = false
+        var bestLabelLength = Int.MAX_VALUE
+        for (node in collectInDocumentOrder(root)) {
+            val label = try {
+                if (!node.isVisibleToUser) continue
+                nodeLabel(node).trim()
+            } catch (t: Throwable) {
+                continue
+            }
+            if (label.isEmpty()) continue
+            if (!isSubmitLabel(label)) continue
+            val target = try {
+                findClickableAncestor(node)
+            } catch (t: Throwable) {
+                null
+            } ?: continue
+            val exact = SUBMIT_EXACT_WORDS.any {
+                label.lowercase(Locale.ROOT) == it
+            }
+            val better = when {
+                exact && !bestExact -> true
+                exact == bestExact && label.length < bestLabelLength -> true
+                else -> false
+            }
+            if (better) {
+                best = label
+                bestExact = exact
+                bestLabelLength = label.length
+            }
+        }
+        return best
     }
 
     /** Panel khoj ka natija: panel dikha tha ya nahi, tile, aur dabane wala node. */
@@ -2051,6 +2503,90 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.screenGlobalAction(action, callback)
         }
 
+        /** v45: kahin se bhi naam wali cheez der-dabao — service band ho to turant false. */
+        fun longPressScreenText(
+            context: Context,
+            text: String,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.longPressScreenText(text, callback)
+        }
+
+        /** v45: kahin se bhi (x, y) par long-press — service band ho to turant false. */
+        fun longPressScreenPoint(
+            context: Context,
+            x: Int,
+            y: Int,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.longPressScreenPoint(x, y, callback)
+        }
+
+        /** v45: kahin se bhi poori-screen swipe — service band ho to turant false. */
+        fun swipeScreen(
+            context: Context,
+            direction: SwipeDirection,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.swipeScreen(direction, callback)
+        }
+
+        /** v45: kahin se bhi naam wale khane me likho — service band ho to turant false. */
+        fun typeIntoScreenText(
+            context: Context,
+            label: String,
+            text: String,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.typeIntoScreenText(label, text, callback)
+        }
+
+        /** v45: kahin se bhi focus wale khane par IME enter — service band ho to turant false. */
+        fun submitFocusedField(
+            context: Context,
+            callback: (Boolean) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(false)
+                return
+            }
+            service.submitFocusedField(callback)
+        }
+
+        /** v45: kahin se bhi submit batan ka naam dhoondho — service band ho to turant null. */
+        fun findSubmitButton(
+            context: Context,
+            callback: (String?) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(null)
+                return
+            }
+            service.findSubmitButton(callback)
+        }
+
         private const val SYSTEMUI_PACKAGE = "com.android.systemui"
         // v23: 2.5s se 8s — vivo ka panel sajne me der lagata
         // hai; tile ped par chadhne se pehle khoj khatm ho jati
@@ -2088,6 +2624,31 @@ class JarvisAccessibilityService : AccessibilityService() {
         // par pichhli tasveer hi laut-ti hai (system ka
         // interval error ~1 s ke aas-paas aata hai).
         private const val SHOT_MIN_INTERVAL_MS = 1_200L
+        // v45: long-press ka ungli-thahrna (~600 ms — aam
+        // Android long-press seema ke aas-paas), poori-screen
+        // swipe ka safar (screen ka 65%) aur samay (~300 ms),
+        // aur naam-wale likhne me label se khane ki adhiktam
+        // doori (label ke neeche wala khana, px).
+        private const val LONG_PRESS_DURATION_MS = 600L
+        private const val SWIPE_DURATION_MS = 300L
+        private const val SWIPE_TRAVEL_FRACTION = 0.65f
+        private const val NEAREST_LABEL_MAX_GAP_PX = 600
+        // v45: submit (Search/Go/Done) wale naam — hubahu
+        // walon ko pehchan me aage rakha jata hai; gair-Latin
+        // shabd "naam me hai" se, Latin shabd seema-bandh
+        // pattern se milte hain ("Google" ka "go" galat
+        // milan na bane)।
+        private val SUBMIT_EXACT_WORDS = setOf(
+            "search", "go", "done",
+            "সার্চ", "খুঁজুন", "অনুসন্ধান", "সম্পন্ন",
+            "खोजें", "खोजो", "सर्च"
+        )
+        private val SUBMIT_CONTAIN_WORDS = listOf(
+            "সার্চ", "খুঁজুন", "অনুসন্ধান", "সম্পন্ন",
+            "खोजें", "खोजो", "सर्च", "खोज"
+        )
+        private val SUBMIT_LATIN_PATTERN =
+            Regex("""(^|[^a-z])(search|go|done)([^a-z]|$)""")
         private val WHITESPACE_RUN = Regex("""\s+""")
         private const val REREAD_ATTEMPTS = 3
         private const val REREAD_INTERVAL_MS = 200L
