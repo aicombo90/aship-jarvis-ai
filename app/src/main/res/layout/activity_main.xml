@@ -256,6 +256,16 @@
             android:text="Persona (aakhiri): abhi tak koi session nahi"
             android:textSize="12sp" />
 
+        <!-- v49: seekhe hue kaamon (routines) ki kul
+             ginati — naam bolkar sunne par milte hain. -->
+        <TextView
+            android:id="@+id/learnedText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="শেখা কাজ (mot): 0"
+            android:textSize="12sp" />
+
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
              dikhao — galat setting ek nazar me pakdi jaye. -->
         <TextView
