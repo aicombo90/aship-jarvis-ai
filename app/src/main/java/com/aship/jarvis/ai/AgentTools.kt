@@ -141,12 +141,70 @@ import java.util.concurrent.TimeUnit
  * wahi kehta hai. screen_task me gallery-trash wala
  * kaam pehchane jane par [TrashPlaybook] ka bandha
  * suraksha text bhi ScreenAgent ke saath judta hai.
+ *
+ * v49: TAANA SESSION + SEEKHI CHAAL ke teen nishan/
+ * bandhan is tukdi par hain — [screenWorkUsed]
+ * (screen-kaam chala, wake service session banati
+ * hai), [userDirectedSend] + [sessionContext]
+ * (session ke andar ke screen-kaam tak jate hain),
+ * aur [reuseSessionScreenshot] (share_screenshot
+ * session ki bandhi purani tasveer hi leta hai)।
+ * Screen-kaam par playbook ki taartib ab hai:
+ * trash (sabse pehle, bilkul pehle jaisa) ->
+ * seekhi chaal ([LearnedRoutines]) -> pack
+ * ([Playbooks]) — user ki apni bandhi chaal aam
+ * hidayat par bhaari padti hai।
  */
 class AgentTools(
     private val context: Context,
     private val commandEngine: CommandEngine,
     private val fromBackgroundService: Boolean
 ) {
+
+    /**
+     * v49: is tukdi (instance) ne screen wala kaam
+     * (screen_task / share_screenshot) chalaya kya —
+     * wake service is nishan se pehchanti hai ki
+     * baat taana (continuous) session me badalni
+     * hai (screen-kaam chala = session shuru)।
+     * Sirf padhne ke liye; auzaar khud bandhte hain।
+     */
+    @Volatile
+    var screenWorkUsed: Boolean = false
+        private set
+
+    /**
+     * v49: user ke apne session-hukm ne bhejne ka
+     * saaf aadesh diya tha kya — wake service
+     * session ke andar [SessionCommands] se
+     * pehchankar bandhti hai। ScreenAgent tak
+     * jata hai: us daud ka SEND tap pehle-se-pusht
+     * mana jayega (baaki dwaar bilkul pehle jaise)।
+     * Session ke bahar hamesha false।
+     */
+    @Volatile
+    var userDirectedSend: Boolean = false
+
+    /**
+     * v49: share_screenshot is baar session me
+     * pehle li gayi bandhi tasveer ([SessionShot])
+     * hi istemal kare, nayi na le — wake service
+     * tab bandhti hai jab hukm purani tasveer ki
+     * taraf saaf ishara kare ("ওই স্ক্রিনশটটা")।
+     * Bandhi tasveer ho hi na to aam taaza capture
+     * hi chalega (purana vyavhaar)।
+     */
+    @Volatile
+    var reuseSessionScreenshot: Boolean = false
+
+    /**
+     * v49: taana session ka sandarbh (pichhle
+     * hukm/natije + screenshot sanket) — screen_task
+     * ki daud me [ScreenAgent] tak jata hai। Session
+     * ke bahar null; sandesh bilkul pehle jaisa।
+     */
+    @Volatile
+    var sessionContext: String? = null
 
     /** Ek auzaar ka natija: asal me hua ya nahi, aur kya hua. */
     data class ToolResult(val ok: Boolean, val text: String)
@@ -223,6 +281,9 @@ class AgentTools(
         if (task.isEmpty()) {
             return ToolResult(false, "No task text was given.")
         }
+        // v49: screen-kaam chala — bulane wale (wake
+        // service) ke liye taana session ka nishan।
+        screenWorkUsed = true
         // v40: gallery ke trash / recently-deleted ko
         // khaali karne wala kaam ho to bandha suraksha
         // playbook (ginati + pakapaki chetaavni + pushti)
@@ -232,18 +293,41 @@ class AgentTools(
         val outcome = if (trashPlaybook != null) {
             // Trash wala raasta pehle bhi sabse pehla
             // tha, aaj bhi bilkul waisa hi hai (v47)।
-            ScreenAgent(context, fromBackgroundService)
-                .runTask(task, trashPlaybook)
+            // v49: session sandarbh wahan bhi jata hai
+            // (sandarbh suraksha chaal ko nahi badalta)।
+            ScreenAgent(context, fromBackgroundService, userDirectedSend)
+                .runTask(task, trashPlaybook, null, sessionContext)
         } else {
-            // v47: trash na mile to app-wise pack
-            // (WhatsApp / Chrome / Gallery — [Playbooks])
-            // jaancha jata hai; mile to uski hidayat +
-            // naam (kataar/audit wali "playbook:" line
-            // ke liye) saath jata hai. Dono hi haal me
-            // ek kaam par ek hi playbook lagta hai।
-            val pack = Playbooks.forTask(task)
-            ScreenAgent(context, fromBackgroundService)
-                .runTask(task, pack?.text, pack?.name)
+            // v49: SEEKHI CHAAL pack se pehle — user
+            // ne jo kaam sikha rakha hai, usi kaam par
+            // uski apni bandhi chaal aam pack wali
+            // hidayat par bhaari padti hai (usi ke
+            // liye to seekha tha: dobara samjhane ki
+            // zaroorat nahi)। Mile to kadam playbook
+            // bankar jate hain ("playbook: learned:
+            // <naam>" kataar/audit me bhi band hota
+            // hai) aur istemal ginati badhti hai।
+            val learned = LearnedRoutines.matchForTask(context, task)
+            if (learned != null) {
+                LearnedRoutines.incrementUsed(context, learned.name)
+                ScreenAgent(context, fromBackgroundService, userDirectedSend)
+                    .runTask(
+                        task,
+                        LearnedRoutines.playbookText(learned),
+                        "learned:" + learned.name,
+                        sessionContext
+                    )
+            } else {
+                // v47: trash na mile to app-wise pack
+                // (WhatsApp / Chrome / Gallery — [Playbooks])
+                // jaancha jata hai; mile to uski hidayat +
+                // naam (kataar/audit wali "playbook:" line
+                // ke liye) saath jata hai. Dono hi haal me
+                // ek kaam par ek hi playbook lagta hai।
+                val pack = Playbooks.forTask(task)
+                ScreenAgent(context, fromBackgroundService, userDirectedSend)
+                    .runTask(task, pack?.text, pack?.name, sessionContext)
+            }
         }
         return ToolResult(outcome.ok, outcome.text)
     }
@@ -274,6 +358,9 @@ class AgentTools(
      * thread se hi chalta hai.
      */
     private fun shareScreenshot(appRaw: String): ToolResult {
+        // v49: share bhi screen-kaam hai — taana
+        // session ke nishan ke liye।
+        screenWorkUsed = true
         if (!JarvisAccessibilityService.isEnabled(context)) {
             return ToolResult(
                 false,
@@ -283,12 +370,35 @@ class AgentTools(
                     "Nothing was shared."
             )
         }
-        val bitmap = ScreenshotStore.captureFresh(context)
+        // v49: session ke andar hukm purani tasveer
+        // ki taraf ishara kare ("ওই স্ক্রিনশটটা
+        // পাঠাও") aur woh bandhi bhi ho, to NAII
+        // tasveer NAHI li jati — [SessionShot] wali
+        // wahi purani chipkayi jati hai (bulane wale
+        // ne [reuseSessionScreenshot] bandha tha)।
+        // Bandhi tasveer na ho to aam taaza capture
+        // hi chalega. Suraksha jaanch (neeche wali)
+        // purani tasveer par bhi bilkul waisi hi
+        // lagti hai।
+        val storedShot = if (reuseSessionScreenshot) {
+            SessionShot.bitmap
+        } else {
+            null
+        }
+        val bitmap = storedShot ?: ScreenshotStore.captureFresh(context)
             ?: return ToolResult(
                 false,
                 "FAILED — the screenshot could not be captured " +
                     "right now. Nothing was shared."
             )
+        // Bola jaane wala varnan: tasveer is session
+        // me pehle li gayi thi ya abhi taaza hai —
+        // mastishk user ko galat samay na bataye।
+        val shotDesc = if (storedShot != null) {
+            "The screenshot taken earlier in this session"
+        } else {
+            "The screenshot"
+        }
         if (ScreenshotStore.screenLooksSecure(context, bitmap)) {
             return ToolResult(
                 false,
@@ -331,7 +441,7 @@ class AgentTools(
                 dispatchShareIntent(targeted)?.let { return it }
                 return ToolResult(
                     true,
-                    "The screenshot is attached and $targetLabel's " +
+                    "$shotDesc is attached and $targetLabel's " +
                         "share screen has been OPENED for the user. " +
                         "The image has NOT been sent — the user must " +
                         "still pick the contact or chat and tap Send " +
@@ -349,7 +459,8 @@ class AgentTools(
                 true,
                 "PARTIAL — $targetLabel was not found on this phone, " +
                     "so the general share sheet has been OPENED with " +
-                    "the screenshot attached instead. The image has " +
+                    shotDesc.replaceFirstChar { it.lowercase(Locale.ROOT) } +
+                    " attached instead. The image has " +
                     "NOT been sent — the user picks the app/contact " +
                     "and taps Send. Tell the user honestly."
             )
@@ -359,8 +470,9 @@ class AgentTools(
         dispatchShareIntent(chooser)?.let { return it }
         return ToolResult(
             true,
-            "The share sheet has been OPENED with the screenshot " +
-                "attached. The image has NOT been sent — the user " +
+            "The share sheet has been OPENED with " +
+                shotDesc.replaceFirstChar { it.lowercase(Locale.ROOT) } +
+                " attached. The image has NOT been sent — the user " +
                 "picks the app/contact and taps Send themselves. " +
                 "Tell the user exactly that."
         )
