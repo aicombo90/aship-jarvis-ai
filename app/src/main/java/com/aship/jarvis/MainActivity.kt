@@ -28,6 +28,7 @@ import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.QuotaManager
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
@@ -121,6 +122,12 @@ class MainActivity : Activity() {
     private lateinit var banglaModelButton: Button
     private lateinit var banglaAsrText: TextView
     private lateinit var banglaModelManager: BanglaModelManager
+
+    // v43: aaj ke Gemini kota-hisaab ki line —
+    // QuotaManager app ki apni ginati rakhta hai
+    // (kis model par kitni koshish, main khatm hai
+    // kya); yahan sirf usi ka jod dikhta hai.
+    private lateinit var quotaText: TextView
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -294,6 +301,7 @@ class MainActivity : Activity() {
         banglaModelStatusText = findViewById(R.id.banglaModelStatusText)
         banglaModelButton = findViewById(R.id.banglaModelButton)
         banglaAsrText = findViewById(R.id.banglaAsrText)
+        quotaText = findViewById(R.id.quotaText)
         banglaModelButton.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
@@ -1321,6 +1329,20 @@ class MainActivity : Activity() {
                 } else {
                     "Bangla ASR (aakhiri): $bangla"
                 }
+            }
+            // v43: aaj ka kota-hisaab — QuotaManager ki
+            // apni ginati (Google ka official bacha-hua
+            // kota NAHI; app ne khud kitni koshish ki).
+            // Mukhya model aaj 429 se khatm ho to line
+            // ke aakhir me uska nishan bhi judta hai.
+            if (::quotaText.isInitialized) {
+                val c = QuotaManager.counts(this)
+                var line = "Quota hisaab (aaj): total ${c.total}" +
+                    " | main ${c.main} | lite ${c.lite}"
+                if (c.mainExhausted) {
+                    line += " | main aaj sesh (429)"
+                }
+                quotaText.text = line
             }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
