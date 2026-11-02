@@ -21,6 +21,7 @@ import android.speech.SpeechRecognizer
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
@@ -33,7 +34,10 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.UrlIntent
+import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.update.UpdateChecker
 import com.aship.jarvis.update.UpdateDownloader
@@ -135,6 +139,14 @@ class MainActivity : Activity() {
     // (kis model par kitni koshish, main khatm hai
     // kya); yahan sirf usi ka jod dikhta hai.
     private lateinit var quotaText: TextView
+
+    // v48: aakhiri background session ki shaksiyat +
+    // uska ant — wake service "last_persona" aur
+    // "last_session_end" bandhta hai (maya-hindi /
+    // tara-bengali, aur ant ki wajah: completed /
+    // not-understood / redirect-bn ...). Yahan sirf
+    // dono ka jod dikhta hai.
+    private lateinit var personaText: TextView
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -310,6 +322,7 @@ class MainActivity : Activity() {
         banglaModelButton = findViewById(R.id.banglaModelButton)
         banglaAsrText = findViewById(R.id.banglaAsrText)
         quotaText = findViewById(R.id.quotaText)
+        personaText = findViewById(R.id.personaText)
         banglaModelButton.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
@@ -731,12 +744,22 @@ class MainActivity : Activity() {
             return
         }
         recognizedText.text = "Aapne kaha: $text"
+        // v48: baat kisi shaksiyat ko NAAM lekar shuru
+        // ho ("মায়া, ..." / "তারা, ...") to naam
+        // hatakar asal hukm par chalo, aur is baar ke
+        // online jawab ki bhasha usi shaksiyat ki
+        // pakki bhasha rahegi (Maya = Hindi, Tara =
+        // Bangla; neeche askAgentBrain tak yahi jata
+        // hai). Naam na mile to sab bilkul pehle jaisa.
+        val vocative = PersonaVocative.stripVocative(text)
+        val commandText = vocative?.second ?: text
+        val vocativeLang = vocative?.first?.spokenLang()
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
         // swipe karegi; mastishk ke chakkar me nahi padegi,
         // aur likhkar bheja gaya hukm bhi yahi se jata hai.
-        commandEngine.deterministicScrollCommand(text)?.let { scrollResult ->
+        commandEngine.deterministicScrollCommand(commandText)?.let { scrollResult ->
             politeFailureSpokenThisTurn = false
             responseText.text = "Jarvis: ${scrollResult.responseText}"
             speaker.speak(scrollResult.responseText)
@@ -751,8 +774,8 @@ class MainActivity : Activity() {
         // koshish background executor par chalti hai
         // (runDirectScreenshot dekho), natija mainHandler
         // se wapas aakar bola/dikhaya jata hai.
-        if (commandEngine.isScreenshotCommand(text)) {
-            runDirectScreenshot(text)
+        if (commandEngine.isScreenshotCommand(commandText)) {
+            runDirectScreenshot(commandText)
             return
         }
         // v36: play-iraade wala sanyojit hukm sabse pehle —
@@ -764,9 +787,24 @@ class MainActivity : Activity() {
         // handlePlayRequest dekho. Query khaali ho ("YouTube
         // chalao") to aam raasta hi chalega (sirf app
         // khulega, pehle jaisa).
-        val playQuery = PlayIntent.extractPlayQuery(text)
+        val playQuery = PlayIntent.extractPlayQuery(commandText)
         if (!playQuery.isNullOrEmpty()) {
-            handlePlayRequest(text, playQuery)
+            handlePlayRequest(commandText, playQuery, vocativeLang)
+            return
+        }
+        // v48: LINK wala kaam (URL + kholne/browser ka
+        // iraada) baatchit nahi hai — pakka screen_task
+        // hai. Live test me poora GitHub URL bolne par
+        // baatchit wala mastishk sirf baat banakar reh
+        // gaya tha, screen chali hi nahi thi. Isliye
+        // agent se pehle ye pakki jaanch (PlayIntent
+        // ke baad — gaane wala iraada pehle jeetta
+        // hai): kaam seedha screen_task auzaar ko,
+        // user ke apne shabdon me, URL akshar-akshar
+        // jaisa suna waisa hi (UrlIntent dekho).
+        val urlTask = UrlIntent.extractUrlTask(commandText)
+        if (urlTask != null) {
+            runDirectScreenTask(commandText, urlTask, vocativeLang)
             return
         }
         // v25: online brain uplabdh ho (mode Offline na ho,
@@ -780,10 +818,10 @@ class MainActivity : Activity() {
         // raasta bilkul pehle jaisa chalega.
         if (geminiBrainAllowed()) {
             responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
-            askAgentBrain(text)
+            askAgentBrain(commandText, vocativeLang)
             return
         }
-        processCommandOffline(text)
+        processCommandOffline(commandText, vocativeLang = vocativeLang)
     }
 
     /**
@@ -799,7 +837,11 @@ class MainActivity : Activity() {
      * mila) — taaki neeche wala agent-raasta use dobara na
      * bulaye (loop nahi bane).
      */
-    private fun processCommandOffline(text: String, agentAlreadyTried: Boolean = false) {
+    private fun processCommandOffline(
+        text: String,
+        agentAlreadyTried: Boolean = false,
+        vocativeLang: PlayIntent.SpokenLang? = null
+    ) {
         // v13: adda trigger ya is screen par chalu adda ho to pehle
         // Maya ka AddaEngine — uski state is activity instance me
         // har tap ke beech bani rehti hai. CommandEngine baad me.
@@ -840,7 +882,7 @@ class MainActivity : Activity() {
         // rukna hi dead end tha.
         if (!agentAlreadyTried && geminiBrainAllowed()) {
             responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
-            askAgentBrain(text)
+            askAgentBrain(text, vocativeLang)
             return
         }
         // v36: agent is baat par gaya tha aur saare model
@@ -1024,10 +1066,13 @@ class MainActivity : Activity() {
      */
     private fun askAgentBrain(
         text: String,
+        replyLanguage: PlayIntent.SpokenLang? = null,
         onAgentUnavailable: (() -> Unit)? = null
     ) {
         val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
-        AgentBrain.run(this, geminiHistory.toList(), text, tools::execute) { reply ->
+        AgentBrain.run(
+            this, geminiHistory.toList(), text, tools::execute, replyLanguage
+        ) { reply ->
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 if (reply == null) {
@@ -1036,7 +1081,11 @@ class MainActivity : Activity() {
                     } else {
                         // v35: agent is baat par ja chuka hai — offline
                         // raasta use dobara nahi bulayega.
-                        processCommandOffline(text, agentAlreadyTried = true)
+                        processCommandOffline(
+                            text,
+                            agentAlreadyTried = true,
+                            vocativeLang = replyLanguage
+                        )
                     }
                     return@post
                 }
@@ -1045,8 +1094,10 @@ class MainActivity : Activity() {
                 // uski "say" line jayegi, kaccha payload kabhi
                 // nahi (v41 ke live test wala leak). Yaad me
                 // bhi wahi saaf roop bandhta hai.
+                // v48: naam-pukar wali baat ho to haar-line
+                // ki bhasha bhi usi shaksiyat ki hogi.
                 val safeReply = ReplyGuard.sanitize(
-                    reply, PlayIntent.requestLanguage(text)
+                    reply, replyLanguage ?: PlayIntent.requestLanguage(text)
                 )
                 geminiHistory.add("user" to text)
                 geminiHistory.add("model" to safeReply)
@@ -1069,10 +1120,14 @@ class MainActivity : Activity() {
      * model 429 samet), to seedha youtube_play auzaar —
      * gaana bajna Gemini ke jeene par kabhi nahi atkega.
      */
-    private fun handlePlayRequest(text: String, query: String) {
+    private fun handlePlayRequest(
+        text: String,
+        query: String,
+        replyLanguage: PlayIntent.SpokenLang? = null
+    ) {
         if (geminiBrainAllowed()) {
             responseText.text = "Maya soch rahi hai — gaana chala rahi hai..."
-            askAgentBrain(text) { runDirectYouTubePlay(text, query) }
+            askAgentBrain(text, replyLanguage) { runDirectYouTubePlay(text, query) }
             return
         }
         runDirectYouTubePlay(text, query)
@@ -1099,6 +1154,44 @@ class MainActivity : Activity() {
             PlayIntent.saveDirectPlayDiag(this, query, result)
             val line = PlayIntent.playOutcomeReply(
                 result, query, PlayIntent.requestLanguage(text)
+            )
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $line"
+                speaker.speak(line)
+            }
+        }
+    }
+
+    /**
+     * v48: bina mastishk ke seedha screen_task — LINK
+     * wala kaam ([UrlIntent]) pakke taur par yahin
+     * aata hai: kaam user ke apne shabdon me (URL
+     * akshar-akshar jaisa suna waisa) screen_task
+     * auzaar ko, apne background thread par (kadmon
+     * ke bandhe intezaar UI ko nahi rokte). Bola
+     * jaane wala saar [UrlIntent.spokenSummary] se —
+     * screen agent ke apne shabd milein to wohi,
+     * warna natije ki imaandaar bandhi line; poora
+     * varnan "Screen chaal" report me bandhta hai.
+     */
+    private fun runDirectScreenTask(
+        text: String,
+        task: String,
+        vocativeLang: PlayIntent.SpokenLang?
+    ) {
+        responseText.text = "Maya: link wala kaam screen par kar rahi hoon..."
+        background.execute {
+            val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+            val result = try {
+                tools.execute("screen_task", JSONObject().put("task", task))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            UrlIntent.saveRouteDiag(this, result.ok)
+            val line = UrlIntent.spokenSummary(
+                result, vocativeLang ?: PlayIntent.requestLanguage(text)
             )
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
@@ -1360,8 +1453,29 @@ class MainActivity : Activity() {
                     " | main ${c.main} | lite ${c.lite}"
                 if (c.mainExhausted) {
                     line += " | main aaj sesh (429)"
+                } else if (c.mainCoolingDown) {
+                    // v48: din-bhar khatm NAHI — sirf thand
+                    // (429 ke baad 10 minute ki rok); thand
+                    // beet-te hi model phir aazmaya jayega.
+                    line += " | main ektu pore (cooldown)"
                 }
                 quotaText.text = line
+            }
+            // v48: aakhiri background session ki
+            // shaksiyat + ant — wake service bandhta
+            // hai ("maya-hindi" / "tara-bengali" aur
+            // ant ki wajah, jaise completed /
+            // not-understood / redirect-bn)।
+            if (::personaText.isInitialized) {
+                val persona = diag.getString("last_persona", null)
+                val sessionEnd = diag.getString("last_session_end", null)
+                personaText.text = if (persona.isNullOrBlank()) {
+                    "Persona (aakhiri): abhi tak koi session nahi"
+                } else if (sessionEnd.isNullOrBlank()) {
+                    "Persona (aakhiri): $persona"
+                } else {
+                    "Persona (aakhiri): $persona · $sessionEnd"
+                }
             }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
@@ -1468,8 +1582,46 @@ class MainActivity : Activity() {
             .setPositiveButton("Download karo") { _, _ ->
                 startUpdateDownload(info.downloadUrl)
             }
+            // v48: BEECH wala batan (teen batan wale
+            // sanvaad me neutral batan beech me hi
+            // dikhta hai) — update karne se PEHLE is
+            // sanskaran me naya kya hai, wohi Bangla
+            // varnan jo release ke saath aaya hai.
+            // Update ki baaki mashinari bilkul waisi hi.
+            .setNeutralButton("এই আপডেটে কী আছে") { _, _ ->
+                showReleaseNotes(info)
+            }
             .setNegativeButton("Baad me", null)
             .setOnDismissListener { updateDialogShowing = false }
+            .show()
+    }
+
+    /**
+     * v48: "এই আপডেটে কী আছে" — latest release ka
+     * varnan (GitHub release body, [UpdateChecker]
+     * usi releases/latest jawab se laata hai) ek
+     * scroll hone wale sanvaad me dikhao. Varnan
+     * khaali ho ya fetch me na aaya ho to imaandaar
+     * Bangla line: বিবরণ পাওয়া যায়নি।
+     */
+    private fun showReleaseNotes(info: UpdateChecker.UpdateInfo) {
+        if (isFinishing || isDestroyed) return
+        val notes = info.notes.trim()
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val notesView = TextView(this).apply {
+            text = if (notes.isEmpty()) {
+                "এই আপডেটের বিবরণ পাওয়া যায়নি।"
+            } else {
+                notes
+            }
+            textSize = 15f
+            setPadding(padding, padding / 2, padding, padding / 2)
+        }
+        val scrollView = ScrollView(this).apply { addView(notesView) }
+        AlertDialog.Builder(this)
+            .setTitle("এই আপডেটে কী আছে")
+            .setView(scrollView)
+            .setPositiveButton("ঠিক আছে", null)
             .show()
     }
 
