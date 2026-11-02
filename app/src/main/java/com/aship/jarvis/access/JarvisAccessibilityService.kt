@@ -98,6 +98,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * gadbad (interval-wali bhi) par null — bulane wala us
  * kadam par bina tasveer aage badhta hai.
  *
+ * v42: paanchva ghoshit sudhaar — pakke scroll hukm
+ * ([scrollCommandEx]) ab DO mashinariyon wala hai: pehle
+ * sakriya khidki ke sabse bade lambai-scrollable hisse par
+ * ACTION_SCROLL_FORWARD/BACKWARD (kai satahen ungli-wala
+ * swipe nazar-andaaz karke yahi sunti hain), woh na chale
+ * to purana beech-wala swipe, woh bhi radd ho to ek baar
+ * lamba-dheema swipe. Natija [ScrollReport] me bandhta
+ * hai — kaun si mashinari chali, chali to kis hisse par,
+ * nahi chali to kyun — taaki report andaze par na tike.
+ * Screen-agent wala [scrollScreen] bilkul aparivartit hai.
+ *
  * Saara kaam service ke apne ek background thread par hota hai;
  * bulane wala kabhi nahi rukta, natija callback se milta hai.
  * Kul intezaar ~8 second se bandha hai.
@@ -525,6 +536,34 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * v42: pakke scroll hukm ki poori report wala roop —
+     * [ScrollReport] (mashinari + tafseel ke saath)। Mashinari
+     * [runScrollCommandEx] me hai: node wala action pehle,
+     * phir swipe, phir lamba-dheema swipe dobara.
+     */
+    fun scrollCommandEx(down: Boolean, callback: (ScrollReport) -> Unit) {
+        runOnWorker(
+            callback,
+            ScrollReport(false, MECHANISM_NONE, "worker band/gadbad")
+        ) { runScrollCommandEx(down) }
+    }
+
+    /**
+     * v42: ek scroll-hukm koshish ka sachha hisaab —
+     * [ok] asal me scroll hua ya nahi (node action manzoor
+     * hua, ya swipe poora hua), [mechanism] kaun si
+     * mashinari chali ([MECHANISM_NODE] / [MECHANISM_GESTURE]
+     * / [MECHANISM_GESTURE_RETRY] / [MECHANISM_NONE]), aur
+     * [detail] chhoti tafseel (node wala class + aakaar, ya
+     * haar ki wajah) — bolne ke liye NAHI, sirf report ke liye.
+     */
+    data class ScrollReport(
+        val ok: Boolean,
+        val mechanism: String,
+        val detail: String
+    )
+
+    /**
      * v37: is pal focus wale (ya pehle dikhai dene wale
      * editable) khane me [text] likho — ACTION_SET_TEXT,
      * woh na chale to clipboard + paste wala raasta.
@@ -728,11 +767,180 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     /** v38: hukm wale scroll ka swipe — 0.80 <-> 0.20, yani screen ki ~60% unchai ka safar. */
     private fun runScrollCommand(down: Boolean): Boolean {
+        return runScrollCommandEx(down).ok
+    }
+
+    /**
+     * v42: hukm wale scroll ki asal mashinari — sirf worker
+     * thread se. Kram bandha hua hai:
+     * 1. NODE: sakriya khidki ke sabse bade lambai-scrollable
+     *    hisse par ACTION_SCROLL_FORWARD (down) /
+     *    ACTION_SCROLL_BACKWARD (up). Kai satahen (khaas taur
+     *    par asal list/scroll wale hisse) ungli-swipe ko
+     *    nazar-andaaz kar deti hain par ye action turant
+     *    sunti hain; aur ye swipe ki "poora hua" wali jhoothi
+     *    kamyabi se bhi bacha hai — action mana ho to sach
+     *    me FAIL hai.
+     * 2. GESTURE: v38 wala beech-beech swipe (0.80 <-> 0.20,
+     *    ~60% unchai, [SCROLL_COMMAND_DURATION_MS]) — node
+     *    wala hissa na mile ya action na chale to.
+     * 3. GESTURE-RETRY: wahi swipe ek baar aur, lamba aur
+     *    dheema ([SCROLL_COMMAND_RETRY_DURATION_MS]) — kuch
+     *    satahen tez-chhota swipe beech me kaat deti hain.
+     * Teeno ka natija [ScrollReport] me sach bandhta hai.
+     */
+    private fun runScrollCommandEx(down: Boolean): ScrollReport {
+        val nodeDetail = performNodeScroll(down)
+        if (nodeDetail != null) {
+            return ScrollReport(true, MECHANISM_NODE, nodeDetail)
+        }
         val metrics = resources.displayMetrics
         val cx = metrics.widthPixels / 2f
         val yFrom = metrics.heightPixels * if (down) 0.80f else 0.20f
         val yTo = metrics.heightPixels * if (down) 0.20f else 0.80f
-        return dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_COMMAND_DURATION_MS)
+        if (dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_COMMAND_DURATION_MS)) {
+            return ScrollReport(
+                true, MECHANISM_GESTURE,
+                "swipe ${SCROLL_COMMAND_DURATION_MS}ms (node nahi mila/chala nahi)"
+            )
+        }
+        if (dispatchSwipe(cx, yFrom, cx, yTo, SCROLL_COMMAND_RETRY_DURATION_MS)) {
+            return ScrollReport(
+                true, MECHANISM_GESTURE_RETRY,
+                "swipe ${SCROLL_COMMAND_RETRY_DURATION_MS}ms dobara (pehla radd hua tha)"
+            )
+        }
+        return ScrollReport(
+            false, MECHANISM_NONE,
+            "node-scroll nahi hua aur swipe do baar radd"
+        )
+    }
+
+    /**
+     * v42: sabse achhe lambai-scrollable hisse par node wala
+     * scroll action dabao — chal jaye to us hisse ka chhota
+     * varnan (class + aakaar), warna null. Chuna hua hissa
+     * khud mana kar de to uske scrollable purvajon par bhi
+     * ek-ek karke koshish hoti hai (kabhi-kabhi scrollable
+     * jhande wala hissa andar ka hota hai, asal ghumne wala
+     * uska baap)। Sirf worker thread se.
+     */
+    private fun performNodeScroll(down: Boolean): String? {
+        val action = if (down) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        } else {
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        }
+        var node: AccessibilityNodeInfo? = bestScrollableNode() ?: return null
+        var hops = 0
+        while (node != null && hops <= MAX_CLICK_ANCESTORS) {
+            val current = node
+            val acted = try {
+                current.isScrollable && current.performAction(action)
+            } catch (t: Throwable) {
+                false
+            }
+            if (acted) {
+                val bounds = Rect()
+                try {
+                    current.getBoundsInScreen(bounds)
+                } catch (t: Throwable) {
+                    // Ped badal gaya: aakaar bina naam kaafi hai.
+                }
+                val name = try {
+                    current.className?.toString()
+                } catch (t: Throwable) {
+                    null
+                } ?: "scrollable"
+                return name + " " + bounds.width() + "x" + bounds.height()
+            }
+            node = try {
+                current.parent
+            } catch (t: Throwable) {
+                null
+            }
+            hops++
+        }
+        return null
+    }
+
+    /**
+     * v42: scroll hukm ke liye sabse achha scrollable hissa
+     * chuno. Khidkiyon ka kram: pehle saamne wali asal app
+     * ([foregroundRoot]), phir baaki gair-SystemUI khidkiyan,
+     * aakhir me SystemUI (panel khula ho to wohi saamne hai —
+     * ye usi ka aakhiri sahara hai, pehla nahi)। Har khidki
+     * me sabse BADA woh hissa jo sach me scrollable hai,
+     * dikhai de raha hai, aur ya to FORWARD/BACKWARD action
+     * deta hai ya aakaar se lambai-scrollable lagta hai
+     * (unchai chaudi ki kam se kam dedh-guni)। Pehli khidki
+     * ka ummeedwaar screen ke [SCROLL_NODE_MIN_AREA_FRACTION]
+     * hisse se bada ho tabhi wahi pakka — Jarvis khud saamne
+     * ho to uski apni ScrollView is jaanch me pehle aati
+     * hai (saamne wali khidki usi ki hai), isliye app ke
+     * andar wala scroll bhi node wale raaste se hota hai.
+     * Kuch na mile to null — bulane wala swipe par girega.
+     */
+    private fun bestScrollableNode(): AccessibilityNodeInfo? {
+        val metrics = resources.displayMetrics
+        val screenArea =
+            metrics.widthPixels.toLong() * metrics.heightPixels.toLong()
+        val minArea = (screenArea * SCROLL_NODE_MIN_AREA_FRACTION).toLong()
+        val roots = ArrayList<AccessibilityNodeInfo>()
+        try {
+            foregroundRoot()?.let { roots.add(it) }
+        } catch (t: Throwable) {
+            // Saamne wali khidki is pal nahi: neeche wali kataar.
+        }
+        val allRoots = try {
+            collectRoots()
+        } catch (t: Throwable) {
+            emptyList()
+        }
+        for (root in allRoots) {
+            val pkg = try {
+                root.packageName?.toString()
+            } catch (t: Throwable) {
+                null
+            }
+            if (pkg != SYSTEMUI_PACKAGE && roots.none { it === root }) {
+                roots.add(root)
+            }
+        }
+        for (root in allRoots) {
+            if (roots.none { it === root }) roots.add(root)
+        }
+        for (root in roots) {
+            var best: AccessibilityNodeInfo? = null
+            var bestArea = 0L
+            for (node in collectInDocumentOrder(root)) {
+                try {
+                    if (!node.isScrollable || !node.isVisibleToUser) continue
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    if (bounds.width() <= 0 || bounds.height() <= 0) continue
+                    val hasVerticalAction = node.actionList.any { info ->
+                        info.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ||
+                            info.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                    }
+                    if (!hasVerticalAction &&
+                        bounds.height() * 3 < bounds.width() * 2
+                    ) {
+                        continue
+                    }
+                    val area =
+                        bounds.width().toLong() * bounds.height().toLong()
+                    if (area > bestArea) {
+                        best = node
+                        bestArea = area
+                    }
+                } catch (t: Throwable) {
+                    // Ped badal raha hai: aage badho.
+                }
+            }
+            if (best != null && bestArea >= minArea) return best
+        }
+        return null
     }
 
     /** v37: (x1, y1) se (x2, y2) tak ungli-jaisa swipe — [tapAtPoint] wala hi bandha intezaar. */
@@ -1789,6 +1997,32 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.scrollCommand(down, callback)
         }
 
+        /**
+         * v42: kahin se bhi pakka scroll hukm report ke saath
+         * (node pehle, phir swipe) — service band ho to turant
+         * [MECHANISM_NONE] wali haar report.
+         */
+        fun scrollCommandEx(
+            context: Context,
+            down: Boolean,
+            callback: (ScrollReport) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(
+                    ScrollReport(false, MECHANISM_NONE, "service band hai")
+                )
+                return
+            }
+            service.scrollCommandEx(down, callback)
+        }
+
+        /** v42: scroll report ki mashinari ke naam — report me yahi bandhte hain. */
+        const val MECHANISM_NODE = "node"
+        const val MECHANISM_GESTURE = "gesture"
+        const val MECHANISM_GESTURE_RETRY = "gesture-retry"
+        const val MECHANISM_NONE = "none"
+
         /** v37: kahin se bhi focus wale khane me likho — service band ho to turant false. */
         fun typeScreenText(
             context: Context,
@@ -1844,6 +2078,12 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val SCROLL_DURATION_MS = 320L
         // v38: hukm wale scroll ka swipe samay (~60% unchai ka safar).
         private const val SCROLL_COMMAND_DURATION_MS = 350L
+        // v42: pehla swipe radd ho to dobara wala lamba-dheema
+        // swipe; aur node wale ummeedwaar ka kam se kam aakaar
+        // (poori screen ka hissa) — chhote tukde (chip kataar,
+        // seek bar) scroll hukm ke nishaane nahi hain.
+        private const val SCROLL_COMMAND_RETRY_DURATION_MS = 550L
+        private const val SCROLL_NODE_MIN_AREA_FRACTION = 0.08
         // v39: tasveer ki dar-seema — isse jaldi dusri maang
         // par pichhli tasveer hi laut-ti hai (system ka
         // interval error ~1 s ke aas-paas aata hai).
