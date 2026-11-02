@@ -4,6 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.os.SystemClock
 import com.aship.jarvis.access.JarvisAccessibilityService
+import com.aship.jarvis.actions.LaunchOutcome
+import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.PlayIntent
 import org.json.JSONObject
 import java.util.Locale
@@ -46,8 +49,8 @@ import java.util.concurrent.TimeUnit
  * 0–1000 wale nakse par tap_point deta hai. Ek kaam
  * me zyada se zyada [MAX_VISION_CALLS] tasveer-kadam
  * — kota ki hifazat; khatm hon to kaam node-raaste
- * par hi aage badhta hai aur report me "vision n/10"
- * band hota hai.
+ * par hi aage badhta hai aur report me "vision n/15"
+ * band hota hai (v45 se seema 10 -> 15).
  *
  * Surakshit screen (bank/lock — FLAG_SECURE) par
  * tasveer kaali aati hai aur node bhi khaali hote
@@ -82,6 +85,31 @@ import java.util.concurrent.TimeUnit
  * jhulti screen par nahi jalta. wait aur ask_user
  * wale kadam atke me nahi gine jate — woh jaanboojh
  * ka intezaar / user ka samay hai, atka nahi.
+ *
+ * v45: TAQAAT-PACK — bandhe badhe aur haath lambe.
+ * Kadam-seema 15 -> [MAX_ROUNDS] (30), samay-seema
+ * ~150 s -> ~[TOTAL_BUDGET_MS] ms (300 s), tasveer
+ * kota 10 -> [MAX_VISION_CALLS] (15): lambe,
+ * kai-app wale kaam (Chrome -> ... -> WhatsApp
+ * jaise) ab beech me hi khazaana khatm karke nahi
+ * rukenge — v43 wali kota-sambhaal (node kadam
+ * Lite par, tasveer mukhya par) is kharche ko
+ * sambhav banati hai. Naye kadam: open_app (naam/
+ * package se app kholo ya badlo — AgentTools ke
+ * open_app wali hi mashinari), long_press_*
+ * (tap wali hi khoj + wahi pushti-dwaar, ~600 ms
+ * dabaye rakhna), swipe (poori-screen ungli ki
+ * chaal — gallery/story/carousel ke liye),
+ * type_into (NAAM wale khane me likho), submit
+ * (focus wale khane ka enter dabao — IME enter,
+ * woh na mile to dikhai dene wala Search/Go/Done
+ * batan, pushti-dwaar se hokar), wait_for (koi
+ * likhai screen par aane tak bandha intezaar —
+ * dheeme network par andaza-wale wait ki jagah)।
+ * Har naya kadam v44 ki jaanch me bilkul purane
+ * kadmon ki tarah judta hai; wait_for bhi wait ki
+ * tarah jaancha jata hai par atke me nahi ginta —
+ * uska apna FOUND/TIMEOUT hi uski report hai.
  *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
@@ -118,17 +146,30 @@ import java.util.concurrent.TimeUnit
  * bulana (AgentBrain ka executor hi woh thread hai —
  * kadmon ke bandhe intezaar UI ko nahi rokte).
  */
-class ScreenAgent(private val context: Context) {
+class ScreenAgent(
+    private val context: Context,
+    /**
+     * v45: ye daud peeche wali service (wake/orb) se aayi
+     * hai kya — sirf [ScreenAction.OpenApp] ke launch
+     * raaste ke liye: saamne se aam startActivity,
+     * peeche se wahi OverlayLauncher wala pul jo
+     * [AgentTools] ka open_app leta hai. Bulane wala
+     * (AgentTools) apna jhanda deta hai; na de to
+     * saamne wala roop (purana bartao)।
+     */
+    private val fromBackgroundService: Boolean = false
+) {
 
     /** Daud ka kul natija: mastishk (AgentBrain) ke liye sachha varnan. */
     data class Outcome(val ok: Boolean, val text: String)
 
     /**
      * v39: is daud me kitni tasveer-kadam (vision call)
-     * hue — [saveDiag] report me "vision n/10" bankar
-     * jata hai. ScreenAgent ek kaam ke liye ek banta
-     * hai, isliye ye khet (field) daud-bhar ka hai;
-     * [runTask] shuru me use saaf karta hai.
+     * hue — [saveDiag] report me "vision n/15" bankar
+     * jata hai (v45 se kota 15). ScreenAgent ek kaam
+     * ke liye ek banta hai, isliye ye khet (field)
+     * daud-bhar ka hai; [runTask] shuru me use saaf
+     * karta hai.
      */
     private var visionUsed = 0
 
@@ -266,12 +307,17 @@ class ScreenAgent(private val context: Context) {
                         if (pending.targetKey != null) {
                             tapStrikes.remove(pending.targetKey)
                         }
-                        history.add(
-                            "↳ result: foreground app changed to " +
-                                snapshot.packageName
-                                    .ifEmpty { "(unknown)" } +
-                                " after " + pending.desc
-                        )
+                        // v45: khamosh kadam (wait_for) ka apna
+                        // natija hi uski report hai — dusri
+                        // "↳ result" line nahi judti.
+                        if (!pending.silentVerdict) {
+                            history.add(
+                                "↳ result: foreground app changed to " +
+                                    snapshot.packageName
+                                        .ifEmpty { "(unknown)" } +
+                                    " after " + pending.desc
+                            )
+                        }
                     }
                     ChangeVerdict.CHANGED -> {
                         sameStreak = 0
@@ -279,10 +325,12 @@ class ScreenAgent(private val context: Context) {
                         if (pending.targetKey != null) {
                             tapStrikes.remove(pending.targetKey)
                         }
-                        history.add(
-                            "↳ result: screen changed after " +
-                                pending.desc
-                        )
+                        if (!pending.silentVerdict) {
+                            history.add(
+                                "↳ result: screen changed after " +
+                                    pending.desc
+                            )
+                        }
                     }
                     ChangeVerdict.SAME -> {
                         val strikes = if (pending.targetKey != null) {
@@ -293,22 +341,24 @@ class ScreenAgent(private val context: Context) {
                         } else {
                             0
                         }
-                        history.add(
-                            if (strikes >= DEAD_TARGET_STRIKES &&
-                                pending.targetLabel != null
-                            ) {
-                                "↳ result: SCREEN DID NOT CHANGE " +
-                                    "after " + pending.desc +
-                                    " — target \"" +
-                                    pending.targetLabel +
-                                    "\" has had NO effect " + strikes +
-                                    " times in this task; choose a " +
-                                    "different element or approach"
-                            } else {
-                                "↳ result: SCREEN DID NOT CHANGE " +
-                                    "after " + pending.desc
-                            }
-                        )
+                        if (!pending.silentVerdict) {
+                            history.add(
+                                if (strikes >= DEAD_TARGET_STRIKES &&
+                                    pending.targetLabel != null
+                                ) {
+                                    "↳ result: SCREEN DID NOT CHANGE " +
+                                        "after " + pending.desc +
+                                        " — target \"" +
+                                        pending.targetLabel +
+                                        "\" has had NO effect " + strikes +
+                                        " times in this task; choose a " +
+                                        "different element or approach"
+                                } else {
+                                    "↳ result: SCREEN DID NOT CHANGE " +
+                                        "after " + pending.desc
+                                }
+                            )
+                        }
                         // wait wale kadam (countable = false)
                         // atke me nahi gine jate — woh jaanboojh
                         // ka intezaar hai. ask_user yahan aata
@@ -822,6 +872,277 @@ class ScreenAgent(private val context: Context) {
                     )
                     settle(deadline)
                 }
+                is ScreenAction.OpenApp -> {
+                    // v45: app kholna/badlo — mashinari wahi
+                    // jo AgentTools ka open_app leta hai
+                    // (openAppSync): kai-app wale kaam ab
+                    // home-screen par aikon dhoondhne me
+                    // kadam nahi jalate.
+                    val ok = openAppSync(action.value)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. open_app \"" + action.value +
+                            "\" -> " + if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        "opening app \"" + action.value + "\"",
+                        null, null, true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.LongPressText -> {
+                    // v45: der-dabana — tap_text wala hi
+                    // pushti-dwaar (hassas naam ho to pehle
+                    // pushti), wahi be-asar ginati.
+                    val kind = sensitiveKind(action.value)
+                        ?: snapshotKindForText(snapshot, action.value)
+                    val refusal = checkConfirmation(
+                        kind, labelKey(action.value), lang, task,
+                        stepsDone, history, confirmedTargets, deadline
+                    )
+                    if (refusal != null) return refusal
+                    val ok = longPressTextSync(action.value)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. long_press_text \"" +
+                            action.value + "\" -> " +
+                            if (ok) {
+                                "OK"
+                            } else {
+                                "FAILED (not found / not pressable)"
+                            }
+                    )
+                    pendingVerify = PendingVerify(
+                        "long-pressing \"" + action.value + "\"",
+                        "t:" + labelKey(action.value),
+                        action.value,
+                        true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.LongPressMark -> {
+                    // v45: nambar wala der-dabana — tap_mark
+                    // wala hi hisaab, wahi pushti-dwaar.
+                    val element = stepMarked.getOrNull(action.mark - 1)
+                    stepsDone++
+                    if (element == null) {
+                        history.add(
+                            "$stepsDone. long_press_mark " +
+                                action.mark +
+                                " -> FAILED (no such mark on this " +
+                                "step — marks exist only on steps " +
+                                "where an image was sent)"
+                        )
+                        pendingVerify = PendingVerify(
+                            "long_press_mark " + action.mark +
+                                " (no such mark)",
+                            null, null, true
+                        )
+                    } else {
+                        val kind = sensitiveKind(element.text)
+                        val refusal = checkConfirmation(
+                            kind, labelKey(element.text), lang, task,
+                            stepsDone, history, confirmedTargets, deadline
+                        )
+                        if (refusal != null) return refusal
+                        val ok = longPressPointSync(
+                            element.centerX, element.centerY
+                        )
+                        history.add(
+                            "$stepsDone. long_press_mark " +
+                                action.mark + " (\"" + element.text +
+                                "\") -> " +
+                                if (ok) "OK" else "FAILED"
+                        )
+                        pendingVerify = PendingVerify(
+                            "long-pressing \"" + element.text +
+                                "\" (mark " + action.mark + ")",
+                            if (element.text.isNotEmpty()) {
+                                "t:" + labelKey(element.text)
+                            } else {
+                                "xy:" + element.centerX + "," +
+                                    element.centerY
+                            },
+                            element.text.ifEmpty {
+                                "(" + element.centerX + ", " +
+                                    element.centerY + ")"
+                            },
+                            true
+                        )
+                    }
+                    settle(deadline)
+                }
+                is ScreenAction.LongPressPoint -> {
+                    // v45: khaake wala der-dabana — tap_point
+                    // wala hi badlaav (0–1000 -> asal px),
+                    // wahi paas-wale naam ki pushti-jaanch.
+                    val metrics = context.resources.displayMetrics
+                    val realX = (action.x * metrics.widthPixels / 1000)
+                        .coerceIn(0, (metrics.widthPixels - 1).coerceAtLeast(0))
+                    val realY = (action.y * metrics.heightPixels / 1000)
+                        .coerceIn(0, (metrics.heightPixels - 1).coerceAtLeast(0))
+                    val label = nearestLabel(snapshot, realX, realY)
+                    val kind = label?.let { sensitiveKind(it) }
+                    val refusal = checkConfirmation(
+                        kind,
+                        label?.let { labelKey(it) } ?: "",
+                        lang, task, stepsDone, history,
+                        confirmedTargets, deadline
+                    )
+                    if (refusal != null) return refusal
+                    val ok = longPressPointSync(realX, realY)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. long_press_point (" + action.x +
+                            ", " + action.y + ") -> " +
+                            if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        if (label != null) {
+                            "long-pressing \"" + label + "\""
+                        } else {
+                            "long-pressing point (" + action.x +
+                                ", " + action.y + ")"
+                        },
+                        label?.let { "t:" + labelKey(it) }
+                            ?: ("pt:" + action.x + "," + action.y),
+                        label ?: ("(" + action.x + ", " + action.y + ")"),
+                        true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.Swipe -> {
+                    // v45: poori-screen ungli chaal — scroll
+                    // (node-wali chaal) se alag; gallery,
+                    // story, carousel aur aade liston ke liye.
+                    val ok = swipeSync(action.direction)
+                    stepsDone++
+                    val dirName = action.direction.name
+                        .lowercase(Locale.ROOT)
+                    history.add(
+                        "$stepsDone. swipe $dirName -> " +
+                            if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        "swiping $dirName", null, null, true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.TypeInto -> {
+                    // Likhna (type ki tarah) apne-aap me
+                    // bhejna nahi hai — pushti yahan nahi
+                    // lagti; bhejne wala kadam (submit/tap)
+                    // apni jaanch khud rakhta hai.
+                    val ok = typeIntoSync(action.label, action.text)
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. type_into \"" + action.label +
+                            "\" -> " +
+                            if (ok) {
+                                "OK"
+                            } else {
+                                "FAILED (no matching editable field)"
+                            }
+                    )
+                    pendingVerify = PendingVerify(
+                        "typing into \"" + action.label + "\"",
+                        null, null, true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.Submit -> {
+                    // v45: submit — bandha kram, teesra koi
+                    // raasta nahi: (1) focus wale khane ka
+                    // IME enter; (2) woh na mile to dikhai
+                    // dene wala Search/Go/Done batan —
+                    // pushti-dwaar se hokar (uska naam
+                    // hassas ho to pehle pushti); (3) dono
+                    // na hon to imaandaar FAILED.
+                    var ok = submitImeSync()
+                    var how = "enter key"
+                    if (!ok) {
+                        val buttonLabel = findSubmitButtonSync()
+                        if (buttonLabel != null) {
+                            val kind = sensitiveKind(buttonLabel)
+                            val refusal = checkConfirmation(
+                                kind, labelKey(buttonLabel), lang,
+                                task, stepsDone, history,
+                                confirmedTargets, deadline
+                            )
+                            if (refusal != null) return refusal
+                            ok = tapTextSync(buttonLabel)
+                            how = "button \"" + buttonLabel + "\""
+                        } else {
+                            how = "no enter key, no search/go button"
+                        }
+                    }
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. submit -> " +
+                            if (ok) {
+                                "OK ($how)"
+                            } else {
+                                "FAILED ($how)"
+                            }
+                    )
+                    pendingVerify = PendingVerify(
+                        "submitting",
+                        null, null, true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.WaitFor -> {
+                    // v45: likhai aane ka bandha intezaar —
+                    // wait wala hi bartao (jaanch hogi, atke
+                    // me ginati nahi), bas iska apna
+                    // FOUND/TIMEOUT hi iski report hai,
+                    // isliye jaanch khamosh (silentVerdict)।
+                    // Kul samay-seema (deadline) ka samman:
+                    // intezaar use paar nahi jata.
+                    val timeoutMs = action.timeoutMs.coerceIn(
+                        MIN_WAIT_FOR_MS, MAX_WAIT_FOR_MS
+                    )
+                    val startedAt = SystemClock.uptimeMillis()
+                    var found = false
+                    while (true) {
+                        val snap = captureSync()
+                        if (snap != null &&
+                            snapshotHasText(snap, action.text)
+                        ) {
+                            found = true
+                            break
+                        }
+                        val elapsed =
+                            SystemClock.uptimeMillis() - startedAt
+                        if (elapsed >= timeoutMs) break
+                        if (SystemClock.uptimeMillis() > deadline) break
+                        sleepQuietly(
+                            minOf(
+                                WAIT_FOR_POLL_MS,
+                                (timeoutMs - elapsed).toLong()
+                            )
+                        )
+                    }
+                    val waitedMs =
+                        SystemClock.uptimeMillis() - startedAt
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. wait_for \"" + action.text +
+                            "\" -> " +
+                            if (found) {
+                                "FOUND (" +
+                                    formatSeconds(waitedMs) + ")"
+                            } else {
+                                "TIMEOUT (" +
+                                    formatSeconds(waitedMs) + ")"
+                            }
+                    )
+                    pendingVerify = PendingVerify(
+                        "waiting for \"" + action.text + "\"",
+                        null, null, false,
+                        silentVerdict = true
+                    )
+                }
             }
         }
         saveDiag(task, "FAILED (kadam khatm)", stepsDone)
@@ -1048,6 +1369,32 @@ class ScreenAgent(private val context: Context) {
         class TapPoint(val x: Int, val y: Int) : ScreenAction()
         class Scroll(val down: Boolean) : ScreenAction()
         class Type(val value: String) : ScreenAction()
+
+        /** v45: naam ya package se app kholo / usi me jao. */
+        class OpenApp(val value: String) : ScreenAction()
+
+        /** v45: naam wale hisse ko der tak dabaye rakho. */
+        class LongPressText(val value: String) : ScreenAction()
+
+        /** v45: tasveer ke nambar wale hisse ko der-dabao. */
+        class LongPressMark(val mark: Int) : ScreenAction()
+
+        /** v45: 0–1000 khaake par der-dabao — khaali sat-hon ke liye. */
+        class LongPressPoint(val x: Int, val y: Int) : ScreenAction()
+
+        /** v45: poori-screen ungli-swipe (gallery/carousel ke liye). */
+        class Swipe(
+            val direction: JarvisAccessibilityService.SwipeDirection
+        ) : ScreenAction()
+
+        /** v45: NAAM wale khane me likho (focus wala [Type] se alag). */
+        class TypeInto(val label: String, val text: String) : ScreenAction()
+
+        /** v45: focus wale khane ko submit karo (enter / Search batan). */
+        object Submit : ScreenAction()
+
+        /** v45: koi likhai screen par aane tak bandha intezaar. */
+        class WaitFor(val text: String, val timeoutMs: Int) : ScreenAction()
         object Back : ScreenAction()
         object Home : ScreenAction()
         class Wait(val ms: Int) : ScreenAction()
@@ -1103,6 +1450,80 @@ class ScreenAgent(private val context: Context) {
             "type" -> obj.optString("value")
                 .takeIf { it.isNotEmpty() }
                 ?.let { ScreenAction.Type(it) }
+            // v45: app kholna — kunji "app" pasandeeda,
+            // "value" bhi chalegi (doosre kadmon wali aadat).
+            "open_app" -> {
+                val name = obj.optString("app").trim()
+                    .ifEmpty { obj.optString("value").trim() }
+                if (name.isNotEmpty()) {
+                    ScreenAction.OpenApp(name)
+                } else {
+                    null
+                }
+            }
+            "long_press_text" -> obj.optString("value").trim()
+                .takeIf { it.isNotEmpty() }
+                ?.let { ScreenAction.LongPressText(it) }
+            "long_press_mark" -> {
+                val mark = obj.optInt("mark", -1)
+                if (mark >= 1) ScreenAction.LongPressMark(mark) else null
+            }
+            "long_press_point" -> {
+                val x = obj.optInt("x", -1)
+                val y = obj.optInt("y", -1)
+                if (x in 0..1000 && y in 0..1000) {
+                    ScreenAction.LongPressPoint(x, y)
+                } else {
+                    null
+                }
+            }
+            "swipe" -> when (
+                obj.optString("direction").trim().lowercase(Locale.ROOT)
+            ) {
+                "up" -> ScreenAction.Swipe(
+                    JarvisAccessibilityService.SwipeDirection.UP
+                )
+                "down" -> ScreenAction.Swipe(
+                    JarvisAccessibilityService.SwipeDirection.DOWN
+                )
+                "left" -> ScreenAction.Swipe(
+                    JarvisAccessibilityService.SwipeDirection.LEFT
+                )
+                "right" -> ScreenAction.Swipe(
+                    JarvisAccessibilityService.SwipeDirection.RIGHT
+                )
+                else -> null
+            }
+            // v45: naam wale khane me likhna — khana
+            // "label" (warna "target"), likhai "value"
+            // (warna "text")।
+            "type_into" -> {
+                val field = obj.optString("label").trim()
+                    .ifEmpty { obj.optString("target").trim() }
+                val text = obj.optString("value")
+                    .ifEmpty { obj.optString("text") }
+                if (field.isNotEmpty() && text.isNotEmpty()) {
+                    ScreenAction.TypeInto(field, text)
+                } else {
+                    null
+                }
+            }
+            "submit" -> ScreenAction.Submit
+            // v45: likhai aane ka intezaar — muddat
+            // "timeout" (warna "ms", warna bandhi ~12 s);
+            // bandhiyan chalane wale hisse me lagti hain.
+            "wait_for" -> {
+                val text = obj.optString("value").trim()
+                    .ifEmpty { obj.optString("text").trim() }
+                val timeout = obj.optInt("timeout", -1)
+                    .takeIf { it > 0 }
+                    ?: obj.optInt("ms", DEFAULT_WAIT_FOR_MS)
+                if (text.isNotEmpty()) {
+                    ScreenAction.WaitFor(text, timeout)
+                } else {
+                    null
+                }
+            }
             "back" -> ScreenAction.Back
             "home" -> ScreenAction.Home
             "wait" -> ScreenAction.Wait(obj.optInt("ms", 1000))
@@ -1275,7 +1696,17 @@ class ScreenAgent(private val context: Context) {
         /** Chetaavni note me dikhane wala nishane ka naam. */
         val targetLabel: String?,
         /** false = jaanboojh ka intezaar (wait) — jaanch hogi, atke me ginati nahi. */
-        val countable: Boolean
+        val countable: Boolean,
+        /**
+         * v45: true = is kadam ka apna natija hi uski report
+         * hai (wait_for ka FOUND/TIMEOUT) — jaanch phir bhi
+         * hogi (badlav par atke ki kataar saaf hogi), par
+         * "↳ result:" wali dusri line nahi judti, warna woh
+         * kadam ke apne sach se takra sakti hai (likhai
+         * aakar chali gayi ho to hastakshar SAME dikhega,
+         * jabki wait_for use FOUND keh chuka hoga)।
+         */
+        val silentVerdict: Boolean = false
     )
 
     private enum class ChangeVerdict { SAME, CHANGED, PACKAGE_CHANGED }
@@ -1409,6 +1840,117 @@ class ScreenAgent(private val context: Context) {
             JarvisAccessibilityService.screenGlobalAction(context, action, callback)
         }
 
+    // ------------------------------------------------------------------
+    // v45: naye kadmon ke bandhe raaste
+    // ------------------------------------------------------------------
+
+    private fun longPressTextSync(text: String): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.longPressScreenText(
+                context, text, callback
+            )
+        }
+
+    private fun longPressPointSync(x: Int, y: Int): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.longPressScreenPoint(
+                context, x, y, callback
+            )
+        }
+
+    private fun swipeSync(
+        direction: JarvisAccessibilityService.SwipeDirection
+    ): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.swipeScreen(
+                context, direction, callback
+            )
+        }
+
+    private fun typeIntoSync(label: String, text: String): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.typeIntoScreenText(
+                context, label, text, callback
+            )
+        }
+
+    private fun submitImeSync(): Boolean =
+        opSync { callback ->
+            JarvisAccessibilityService.submitFocusedField(context, callback)
+        }
+
+    /** Submit batan ka naam — [captureSync] wala hi latch andaaz. */
+    private fun findSubmitButtonSync(): String? {
+        val latch = CountDownLatch(1)
+        var label: String? = null
+        var delivered = false
+        try {
+            JarvisAccessibilityService.findSubmitButton(context) { result ->
+                label = result
+                delivered = true
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        awaitLatch(latch)
+        return if (delivered) label else null
+    }
+
+    /**
+     * v45: app kholne ka bandha (sync) raasta — mashinari
+     * bilkul wahi jo [AgentTools] ka open_app auzaar leta
+     * hai, taaki naam-pehchan aur launch ke bartao me
+     * zara bhi farq na ho:
+     * - manga naam package-naam ke nakse par utre to
+     *   seedha [PhoneActions] se launch (saamne se aam
+     *   raasta, peeche se OverlayLauncher wala pul —
+     *   [fromBackgroundService] ke hisaab se)।
+     * - warna bol-chaal ka naam hai: [CommandEngine.tryOpenApp]
+     *   (bandhi list, phir launcher ke label, galat-suna
+     *   naam sudhaar ke saath) — uska handled hi asal
+     *   safalta hai (khula = true; nahi mila / permission /
+     *   lock = false)।
+     * Ye call isi thread par turant hoti hai (auzaar
+     * wala raasta bhi aisa hi hai) — koi intezaar nahi.
+     */
+    private fun openAppSync(name: String): Boolean {
+        val value = name.trim()
+        if (value.isEmpty()) return false
+        return try {
+            if (PACKAGE_NAME_PATTERN.matches(value)) {
+                if (fromBackgroundService) {
+                    PhoneActions.openAppFromBackground(
+                        context, value
+                    ) == LaunchOutcome.LAUNCHED
+                } else {
+                    PhoneActions.openApp(context, value)
+                }
+            } else {
+                CommandEngine(context, fromBackgroundService)
+                    .tryOpenApp(value).handled
+            }
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** wait_for ki jaanch: kisi hisse ke naam me [text] hai kya (bade-chhote akshar bina). */
+    private fun snapshotHasText(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        text: String
+    ): Boolean {
+        val needle = text.trim()
+        if (needle.isEmpty()) return false
+        return snapshot.elements.any { element ->
+            element.text.contains(needle, ignoreCase = true)
+        }
+    }
+
+    /** wait_for ki report ke liye samay ka chhota roop — "3.2s" jaisa. */
+    private fun formatSeconds(ms: Long): String =
+        String.format(Locale.US, "%.1fs", ms / 1000.0)
+
     /** Ek Boolean wale service-kaam ka bandha intezaar. */
     private fun opSync(
         start: ((Boolean) -> Unit) -> Unit
@@ -1461,7 +2003,7 @@ class ScreenAgent(private val context: Context) {
      * Daud ki report "jarvis_diag" me "last_screen_run"
      * par band karo — AgentBrain wali report wala hi
      * andaaz: <kaam (kata hua)> — <natija> (<n> steps,
-     * vision <v>/10, nochange <nc>, recovery <r>)।
+     * vision <v>/15, nochange <nc>, recovery <r>)।
      * Likhe hue sandeshon ka text ya tasveer ka data
      * isme kabhi nahi aata — sirf tasveer-kadmon ki
      * GINATI jaati hai (v39) aur jaanch ki ginati
@@ -1484,11 +2026,17 @@ class ScreenAgent(private val context: Context) {
     }
 
     companion object {
-        /** Ek kaam ke liye zyada se zyada itne kadam-faisle. */
-        private const val MAX_ROUNDS = 15
+        /**
+         * Ek kaam ke liye zyada se zyada itne kadam-faisle.
+         * v45: 15 -> 30 — lambe kai-app wale kaam (Chrome ->
+         * ... -> WhatsApp) beech me khazaana khatm karke na
+         * ruken; v43 ki kota-sambhaal (node kadam Lite par)
+         * is badhotri ka kharcha sambhav banati hai.
+         */
+        private const val MAX_ROUNDS = 30
 
-        /** Ek kaam ki kul samay-seema (~150 s). */
-        private const val TOTAL_BUDGET_MS = 150_000L
+        /** Ek kaam ki kul samay-seema (~300 s; v45: ~150 s se badhakar). */
+        private const val TOTAL_BUDGET_MS = 300_000L
 
         /** Kadam ke baad screen thaharne ki saans. */
         private const val SETTLE_MS = 1_200L
@@ -1536,8 +2084,36 @@ class ScreenAgent(private val context: Context) {
          * zyada tasveerein bhejna ek kaam ko poora kota
          * kha jayega. Seema khatm hone par kaam node-raaste
          * par aage badhta hai.
+         * v45: 10 -> 15 — lambi daud (30 kadam) ke saath
+         * tasveeri kadmon ki gunjaish bhi badhi; mukhya
+         * model par sirf tasveer-kadam hi jate hain
+         * (v43), isliye badhotri naapi-tuli hai.
          */
-        private const val MAX_VISION_CALLS = 10
+        private const val MAX_VISION_CALLS = 15
+
+        /**
+         * v45: wait_for ki bandhiyan — aam muddat
+         * (~12 s), adhiktam (~20 s), kam se kam (~1 s),
+         * aur screen dobara dekhne ka antar (~800 ms)।
+         * Dheeme network par page sajne ka asal intezaar
+         * yahi se hota hai; har jaanch usi capture se
+         * hoti hai jo aam kadam bhi leta hai.
+         */
+        private const val DEFAULT_WAIT_FOR_MS = 12_000
+        private const val MAX_WAIT_FOR_MS = 20_000
+        private const val MIN_WAIT_FOR_MS = 1_000
+        private const val WAIT_FOR_POLL_MS = 800L
+
+        /**
+         * v45: open_app me package-naam pehchanne ka
+         * naksha — bindu (dot) se jude hisse, har hissa
+         * akshar se shuru. Is nakse par utarne wala
+         * manga hua naam package mana jata hai (seedha
+         * launch); baaki sab bol-chaal ke naam hain jo
+         * CommandEngine ki pakki khoj se guzarte hain.
+         */
+        private val PACKAGE_NAME_PATTERN =
+            Regex("""^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$""")
 
         /**
          * v39: node-saar me kaam ke hisse isse kam hon to
@@ -1643,6 +2219,27 @@ class ScreenAgent(private val context: Context) {
                 "{\"action\":\"scroll\",\"direction\":\"down\"|\"up\"}\n" +
                 "{\"action\":\"type\",\"value\":\"<text to type into " +
                 "the focused input field>\"}\n" +
+                "{\"action\":\"open_app\",\"app\":\"<app name or " +
+                "package>\"} — open an app or switch to it mid-task\n" +
+                "{\"action\":\"long_press_text\",\"value\":\"<visible " +
+                "label>\"} — long-press (context menus, message " +
+                "options)\n" +
+                "{\"action\":\"long_press_mark\",\"mark\":<mark number " +
+                "from the attached image>}\n" +
+                "{\"action\":\"long_press_point\",\"x\":<0-1000>," +
+                "\"y\":<0-1000>}\n" +
+                "{\"action\":\"swipe\",\"direction\":\"left\"|" +
+                "\"right\"|\"up\"|\"down\"} — full-screen finger " +
+                "swipe (galleries, stories, carousels, horizontal " +
+                "lists)\n" +
+                "{\"action\":\"type_into\",\"label\":\"<label of " +
+                "the input field>\",\"value\":\"<text>\"} — type " +
+                "into a NAMED field\n" +
+                "{\"action\":\"submit\"} — submit the focused " +
+                "field (enter / search) after typing\n" +
+                "{\"action\":\"wait_for\",\"value\":\"<text that " +
+                "should appear>\",\"timeout\":<ms up to 20000>} — " +
+                "wait until text appears on screen\n" +
                 "{\"action\":\"back\"}\n" +
                 "{\"action\":\"home\"}\n" +
                 "{\"action\":\"wait\",\"ms\":<milliseconds up to 5000>}\n" +
@@ -1670,14 +2267,40 @@ class ScreenAgent(private val context: Context) {
                 "- Work ONLY from what the screen list actually shows. " +
                 "If the target is not visible, scroll to look for it. " +
                 "Never invent elements, labels or results.\n" +
-                "- If the needed app is not open yet, use home and tap " +
-                "the app's name on the home screen; if you cannot get " +
-                "into the app, fail honestly.\n" +
-                "- Taps on Send / Pay / Confirm / Delete are NOT " +
-                "executed immediately: the app first asks the user " +
-                "for confirmation, and the task stops if the user " +
-                "does not clearly say yes. Choose such a tap only " +
-                "when the task is truly ready for it.\n" +
+                "- You have up to 30 steps and about 5 minutes per " +
+                "task; image (vision) steps are limited, so spend " +
+                "steps carefully and do not repeat actions that the " +
+                "history shows had no effect.\n" +
+                "- To open an app or switch apps mid-task, use " +
+                "open_app with the app's name — do NOT go home and " +
+                "hunt for its icon. If open_app fails, say so " +
+                "honestly.\n" +
+                "- scroll moves a scrollable list; swipe is a raw " +
+                "finger swipe — use swipe for galleries, stories, " +
+                "carousels and horizontal lists where scroll does " +
+                "nothing. Direction is the FINGER's direction: " +
+                "swipe left usually shows the NEXT photo/page.\n" +
+                "- Long-press (long_press_text / long_press_mark / " +
+                "long_press_point) opens context menus and message " +
+                "options that a normal tap does not. It follows the " +
+                "same confirmation rule as taps.\n" +
+                "- \"type\" fills the field that is ALREADY focused. " +
+                "Use type_into with the field's label when the field " +
+                "is not focused or the screen has several fields. " +
+                "After typing into a search or form field, use " +
+                "submit to run the search / submit the form.\n" +
+                "- This phone's connection is SLOW. After opening " +
+                "an app or tapping something that loads a page, " +
+                "prefer wait_for with the text you expect to see " +
+                "(a heading, a name, a result) over repeated plain " +
+                "wait actions — it returns as soon as the text " +
+                "appears and reports TIMEOUT honestly if it never " +
+                "does.\n" +
+                "- Taps and long-presses on Send / Pay / Confirm / " +
+                "Delete are NOT executed immediately: the app first " +
+                "asks the user for confirmation, and the task stops " +
+                "if the user does not clearly say yes. Choose such " +
+                "an action only when the task is truly ready for it.\n" +
                 "- Use ask_user only when a real choice belongs to " +
                 "the user (e.g. several matching contacts). If no " +
                 "answer comes back, do not guess — fail honestly.\n" +
