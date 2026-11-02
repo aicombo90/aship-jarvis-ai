@@ -86,6 +86,18 @@ import java.util.concurrent.Executors
  * jaye (saamne wali screen ka aam raasta) to bartav
  * bilkul v47 wala hi hai.
  *
+ * v49: do aur sandarbh-block instruction me judte
+ * hain — SEEKHE KAAM ([LearnedRoutines] ke bandhe
+ * naamon ki compact suchi, taaki milan wala hukm
+ * screen_task par jaye aur app uski bandhi chaal
+ * khud jod sake) aur, taana session ke andar ki
+ * daud ho to, SESSION SANDARBH (bulane wale ka
+ * diya [run] ka sessionContext: pichhle hukm/
+ * natije + pehle liye gaye screenshot ka sanket)।
+ * Dono bhasha-bandhan wale override block se
+ * PEHLE aate hain — woh sabse aakhir me hi rehta
+ * hai, bilkul v48 jaisa।
+ *
  * Callback is class ke apne executor thread par aata
  * hai — bulane wala apne thread par le jaye (bilkul
  * GeminiBrain.chat ki tarah). Auzaar bhi isi thread
@@ -110,12 +122,16 @@ object AgentBrain {
         userText: String,
         toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
         replyLanguage: PlayIntent.SpokenLang? = null,
+        sessionContext: String? = null,
         callback: (String?) -> Unit
     ) {
         val appContext = context.applicationContext
         executor.execute {
             val reply = try {
-                runLoop(appContext, history, userText, toolExecutor, replyLanguage)
+                runLoop(
+                    appContext, history, userText, toolExecutor,
+                    replyLanguage, sessionContext
+                )
             } catch (t: Throwable) {
                 // Andar ki anjaani gadbad: round 1 wali
                 // imaandari — bulane wala offline gir jaye.
@@ -132,7 +148,8 @@ object AgentBrain {
         history: List<Pair<String, String>>,
         userText: String,
         toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
-        replyLanguage: PlayIntent.SpokenLang?
+        replyLanguage: PlayIntent.SpokenLang?,
+        sessionContext: String? = null
     ): String? {
         // Baatchit: purane turn + nayi baat; har round ke
         // baad model ka kaccha jawab aur auzaar ka natija
@@ -145,7 +162,10 @@ object AgentBrain {
         // aakhir me sandarbh bankar judti hai.
         // v48: shaksiyat-bhasha ka bandhan ho to woh
         // override block sabke aakhir me judta hai.
-        val instruction = buildInstruction(context, replyLanguage)
+        // v49: seekhe kaamon ke naam + (session ho to)
+        // uska sandarbh bhi usi kataar me judte hain —
+        // bhasha-bandhan phir bhi sabse aakhir me.
+        val instruction = buildInstruction(context, replyLanguage, sessionContext)
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
@@ -218,13 +238,31 @@ object AgentBrain {
      */
     private fun buildInstruction(
         context: Context,
-        replyLanguage: PlayIntent.SpokenLang? = null
+        replyLanguage: PlayIntent.SpokenLang? = null,
+        sessionContext: String? = null
     ): String {
         var text = AGENT_INSTRUCTION
         MayaMemory.contextBlock(context)?.let { block ->
             text += "\n\nMEMORY — the user has asked you to remember " +
                 "these things; use them to answer personal " +
                 "questions directly, with NO tool call:\n" + block
+        }
+        // v49: SEEKHE KAAM — bandhe routines ke
+        // sirf naam (kadam app khud screen_task me
+        // jodta hai); mastishk in naamon se milan
+        // karke screen_task bulaye।
+        LearnedRoutines.instructionBlock(context)?.let { block ->
+            text += "\n\n" + block
+        }
+        // v49: TAANA SESSION ka sandarbh — session
+        // ke pichhle hukm/natije aur pehle liye
+        // gaye screenshot ka sanket, taaki "তিন
+        // নম্বরটা" / "ওই স্ক্রিনশটটা" jaise ishare
+        // peeche wali baat se judein। Session ke
+        // bahar ye block aata hi nahi।
+        if (!sessionContext.isNullOrBlank()) {
+            text += "\n\nCONTINUOUS SESSION CONTEXT:\n" +
+                sessionContext.trim()
         }
         // v48: shaksiyat ka bhasha-bandhan — ye block
         // instruction ke sabse aakhir me rehta hai aur
