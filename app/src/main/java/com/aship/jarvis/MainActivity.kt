@@ -25,6 +25,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
@@ -1023,14 +1024,22 @@ class MainActivity : Activity() {
                     }
                     return@post
                 }
+                // v42: prastuti wali chauki — jawab protocol
+                // JSON bankar aaya ho to screen/TTS par sirf
+                // uski "say" line jayegi, kaccha payload kabhi
+                // nahi (v41 ke live test wala leak). Yaad me
+                // bhi wahi saaf roop bandhta hai.
+                val safeReply = ReplyGuard.sanitize(
+                    reply, PlayIntent.requestLanguage(text)
+                )
                 geminiHistory.add("user" to text)
-                geminiHistory.add("model" to reply)
+                geminiHistory.add("model" to safeReply)
                 while (geminiHistory.size > MAX_GEMINI_HISTORY_ENTRIES) {
                     geminiHistory.removeAt(0)
                     geminiHistory.removeAt(0)
                 }
-                responseText.text = "Maya: $reply"
-                speaker.speak(reply)
+                responseText.text = "Maya: $safeReply"
+                speaker.speak(safeReply)
             }
         }
     }
