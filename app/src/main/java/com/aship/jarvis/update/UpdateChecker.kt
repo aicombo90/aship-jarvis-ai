@@ -26,6 +26,12 @@ import java.util.concurrent.Executors
  *
  * Any network / HTTP / parse problem becomes [Result.Failed]; the
  * caller stays silent for the automatic check.
+ *
+ * v48: release ka varnan (GitHub release ka "body") bhi saath aata
+ * hai ([UpdateInfo.notes]) — update wale sanvaad ka beech wala
+ * batan "এই আপডেটে কী আছে" usi ko dikhata hai. Varnan khaali ho
+ * to UI apni imaandaar line dikhati hai; update ki baaki
+ * mashinari bilkul aparivartit hai.
  */
 object UpdateChecker {
 
@@ -33,7 +39,9 @@ object UpdateChecker {
     data class UpdateInfo(
         val versionCode: Int,
         val tagName: String,
-        val downloadUrl: String
+        val downloadUrl: String,
+        /** v48: release ka varnan (GitHub "body"); na mile to khaali. */
+        val notes: String = ""
     )
 
     sealed interface Result {
@@ -90,6 +98,9 @@ object UpdateChecker {
         if (remoteCode <= BuildConfig.VERSION_CODE) {
             return Result.UpToDate
         }
+        // v48: release ka varnan bhi saath bandho —
+        // "এই আপডেটে কী আছে" wala batan yahi dikhayega.
+        val notes = json.optString("body", "")
         val assets = json.optJSONArray("assets") ?: return Result.Failed
         // v17: asset ka naam versioned hai — pehle usi tag wale
         // naam ko pasand karo; na mile to koi bhi ".apk" asset
@@ -102,7 +113,7 @@ object UpdateChecker {
             val url = asset.optString("browser_download_url", "")
             if (url.isBlank()) continue
             if (asset.optString("name") == expectedName) {
-                return Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, url))
+                return Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, url, notes))
             }
             if (fallbackUrl.isEmpty() &&
                 asset.optString("name").endsWith(".apk")
@@ -111,7 +122,7 @@ object UpdateChecker {
             }
         }
         return if (fallbackUrl.isNotEmpty()) {
-            Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, fallbackUrl))
+            Result.UpdateAvailable(UpdateInfo(remoteCode, tagName, fallbackUrl, notes))
         } else {
             Result.Failed
         }
