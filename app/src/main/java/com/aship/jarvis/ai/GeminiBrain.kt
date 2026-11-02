@@ -28,7 +28,7 @@ import java.util.concurrent.Executors
  * callback(null) ban jati hai — bulane wala apne purane offline
  * raaste par gir jata hai, user ko koi error nahi dikhta.
  *
- * v23: baatchit ke liye modelon ki kataar hai ([MODELS]) —
+ * v23: baatchit ke liye modelon ki kataar hai ([MAIN_MODELS]) —
  * naye key ke liye gemini-2.5-flash generateContent par 404
  * deta hai (models list me ab bhi dikhta hai, isliye key
  * jaanch pass hokar bhi jawab nahi aata tha). Pehla model
@@ -64,6 +64,16 @@ import java.util.concurrent.Executors
  * failed) alag band hota hai ([lastChainWasQuota]), taaki
  * saare model 429 par marein to bulane wala jhootha aam
  * jawab ki jagah imaandaar "online seema khatm" bol sake.
+ *
+ * v43: KOTA MANAGER jud gaya ([QuotaManager]). Har
+ * koshish ab ek VARG ([RequestClass]) ke saath aati
+ * hai: TEXT (baatchit, agent round, screen ke node-
+ * kadam) pehle saste Lite modelon se guzarti hai aur
+ * mukhya kataar uski aakhiri sharan hai; VISION
+ * (tasveer wale kadam) seedha mukhya kataar par rehti
+ * hai. Jo model aaj 429 de chuka hai ya is project
+ * ke liye hai hi nahi (Lite 404), use kataar din bhar
+ * phir nahi thokti — ginati QuotaManager rakhta hai.
  */
 object GeminiBrain {
 
@@ -153,7 +163,7 @@ object GeminiBrain {
     }
 
     /**
-     * v23: [MODELS] ki kataar me ek-ek karke koshish — pehla
+     * v23: [MAIN_MODELS] ki kataar me ek-ek karke koshish — pehla
      * model 404 (naye key par band) / 503 (bheed) de ya 200
      * par khaali jawab nikle to agla; net gadbad (-1) par bhi
      * agle ko ek mauka. 400/401/403 jaisi key/request wali
@@ -173,11 +183,22 @@ object GeminiBrain {
         userText: String
     ): String? {
         val body = buildRequestBody(history, userText).toString()
-        return requestWithChain(context, key, body)
+        // v43: baatchit TEXT varg hai — Lite kataar pehle.
+        return requestWithChain(context, key, body, RequestClass.TEXT)
     }
 
     /**
-     * v25: [MODELS] ki kataar par ek taiyaar-shuda body
+     * v43: koshish ka varg. TEXT = bina tasveer wala
+     * kaam (baatchit, agent round, screen ke node-
+     * kadam) — saste Lite model pehle, mukhya kataar
+     * aakhir me. VISION = tasveer wala kadam — seedha
+     * mukhya kataar, kyunki tasveer samajhne ka kaam
+     * mukhya modelon ke zimme hi rakha gaya hai.
+     */
+    enum class RequestClass { TEXT, VISION }
+
+    /**
+     * v25: [MAIN_MODELS] ki kataar par ek taiyaar-shuda body
      * chalao — chat aur agent dono raaston ki ek hi jagah,
      * taaki kataar ke niyam (404/503/khaali par agla model,
      * 400/401/403 par rok, net gadbad par bhi ek mauka) aur
@@ -190,20 +211,71 @@ object GeminiBrain {
     private fun requestWithChain(
         context: Context,
         key: String,
-        body: String
+        body: String,
+        requestClass: RequestClass
     ): String? {
+        // v43: varg ke hisaab se kataar banti hai.
+        // TEXT pehle Lite modelon se guzregi, mukhya
+        // kataar uske peeche; VISION seedha mukhya.
+        val fullChain = when (requestClass) {
+            RequestClass.TEXT -> LITE_MODELS + MAIN_MODELS
+            RequestClass.VISION -> MAIN_MODELS
+        }
+        // v43: jo model aaj 429 de chuka hai (khatm) ya
+        // is project ke liye hai hi nahi (uplabdh-nahi),
+        // use shuru se hi chhod do — din bhar ek hi
+        // deewaar par sir phodna kota ki barbadi hai.
+        // 429 par bikhre hue modelon ki ginti alag
+        // rakho: kataar ka "quota" nateeja (v36) unpar
+        // bhi imandaar rahe (neeche dekho).
+        var skippedExhausted = 0
+        val chain = fullChain.filter { model ->
+            when {
+                QuotaManager.isExhausted(context, model) -> {
+                    skippedExhausted++
+                    false
+                }
+                QuotaManager.isUnavailable(context, model) -> false
+                else -> true
+            }
+        }
         val attempts = mutableListOf<String>()
         val codes = mutableListOf<Int>()
         var result: String? = null
-        for (model in MODELS) {
+        for (model in chain) {
+            // v43: har asal HTTP koshish ginati me likho —
+            // safal ho ya fail, kota wahin kharch hota hai.
+            QuotaManager.recordAttempt(context, model)
             val startedAtMs = System.currentTimeMillis()
             val attempt = tryModel(key, model, body)
             val seconds = (System.currentTimeMillis() - startedAtMs) / 1000
             attempts.add("$model: ${attempt.outcome} (${seconds}s)")
             codes.add(attempt.code)
+            // v43: 429 aaya to model aaj ke liye khatm —
+            // agli daud ise shuru se chhod degi.
+            if (attempt.code == 429) {
+                QuotaManager.record429(context, model)
+            }
             if (attempt.code == HttpURLConnection.HTTP_OK && attempt.reply != null) {
                 result = attempt.reply
                 break
+            }
+            // v43: Lite model ka 404 (ya "model not found"
+            // wala 400) matlab woh is project ke liye hai
+            // hi nahi — jaise naye keyon par 2.5-flash
+            // 404 deta tha. Use aaj ke liye uplabdh-nahi
+            // nishan lagao aur CHUP-CHAAP aage badho:
+            // user ki koshish ek Lite ke peeche kabhi
+            // nahi marti; saare Lite na milein to kataar
+            // mukhya modelon par waise hi chalti hai
+            // jaise v42 tak chalti thi.
+            if (model in LITE_MODELS &&
+                (attempt.code == HttpURLConnection.HTTP_NOT_FOUND ||
+                    (attempt.code == HttpURLConnection.HTTP_BAD_REQUEST &&
+                        attempt.modelNotFound))
+            ) {
+                QuotaManager.recordUnavailable(context, model)
+                continue
             }
             // v36: 429 (quota / rate-limit) aur 500 bhi "agle
             // model par jao" wali gadbadiyan hain. v35 tak 429
@@ -229,9 +301,15 @@ object GeminiBrain {
         // model 429) se hui ya kisi aur wajah se, taaki
         // Maya jhootha aam jawab dene ke bajaye sach bol
         // sake ki online seema khatm hai (lastChainWasQuota).
+        // v43: aaj pehle se khatm (429) hone ki wajah se
+        // chhode gaye model bhi is hisaab me 429 hi
+        // maane jate hain — warna poori kataar bikhri
+        // hone par bhi nateeja "failed" aata aur imaandaar
+        // kota wali boli kabhi bolti hi nahi.
+        val chainCodes = codes + List(skippedExhausted) { 429 }
         val outcome = when {
             result != null -> CHAIN_OUTCOME_OK
-            codes.isNotEmpty() && codes.all { it == 429 } -> CHAIN_OUTCOME_QUOTA
+            chainCodes.isNotEmpty() && chainCodes.all { it == 429 } -> CHAIN_OUTCOME_QUOTA
             else -> CHAIN_OUTCOME_FAILED
         }
         saveChainOutcome(context, outcome)
@@ -284,12 +362,16 @@ object GeminiBrain {
     internal fun requestAgentRound(
         context: Context,
         systemInstruction: String,
-        contents: List<Pair<String, String>>
+        contents: List<Pair<String, String>>,
+        requestClass: RequestClass = RequestClass.TEXT
     ): String? {
         val appContext = context.applicationContext
         val key = getKey(appContext) ?: return null
         val body = buildAgentRequestBody(systemInstruction, contents).toString()
-        return requestWithChain(appContext, key, body)
+        // v43: bina tasveer wala round TEXT varg hai
+        // (peeche se bulane par bhi yahi) — Lite kataar
+        // pehle, mukhya kataar kota bachati hai.
+        return requestWithChain(appContext, key, body, requestClass)
     }
 
     /**
@@ -306,17 +388,24 @@ object GeminiBrain {
         context: Context,
         systemInstruction: String,
         contents: List<Pair<String, String>>,
-        imageJpegBase64: String?
+        imageJpegBase64: String?,
+        requestClass: RequestClass = RequestClass.VISION
     ): String? {
         if (imageJpegBase64.isNullOrEmpty()) {
-            return requestAgentRound(context, systemInstruction, contents)
+            // Tasveer hai hi nahi to ye saade TEXT round
+            // jaisa hai (v43: Lite kataar wala raasta).
+            return requestAgentRound(
+                context, systemInstruction, contents, RequestClass.TEXT
+            )
         }
         val appContext = context.applicationContext
         val key = getKey(appContext) ?: return null
         val body = buildAgentRequestBody(
             systemInstruction, contents, imageJpegBase64
         ).toString()
-        return requestWithChain(appContext, key, body)
+        // v43: tasveer wala round VISION varg — mukhya
+        // kataar hi chalegi, Lite par tasveer nahi jati.
+        return requestWithChain(appContext, key, body, requestClass)
     }
 
     /**
@@ -392,8 +481,20 @@ object GeminiBrain {
         }
     }
 
-    /** Ek model koshish ka nateeja (v24: report ke liye outcome bhi saath). */
-    private class AttemptResult(val code: Int, val outcome: String, val reply: String?)
+    /**
+     * Ek model koshish ka nateeja (v24: report ke liye
+     * outcome bhi saath). v43: [modelNotFound] — server
+     * ki galti wali body me "model not found / not
+     * supported" ka sanket mila kya; kataar sirf isi se
+     * Lite ke 400 ko "model hai hi nahi" samajhti hai.
+     * Body khud kahin band (save) NAHI hoti.
+     */
+    private class AttemptResult(
+        val code: Int,
+        val outcome: String,
+        val reply: String?,
+        val modelNotFound: Boolean = false
+    )
 
     /**
      * Ek model par ek koshish. Net gadbad par code -1 —
@@ -426,11 +527,31 @@ object GeminiBrain {
             } else {
                 null
             }
+            // v43: galti wali body ka ek chhota tukda sirf
+            // ye jaanchne ke liye padho ki kahin "model
+            // not found" to nahi likha — Lite kataar ka
+            // 400 isi se pehchana jata hai. Body kahin
+            // band nahi hoti, log bhi nahi hoti.
+            val modelNotFound = if (code != HttpURLConnection.HTTP_OK) {
+                try {
+                    val hint = connection.errorStream
+                        ?.bufferedReader()?.use { it.readText() }
+                        ?.take(600)
+                    hint != null &&
+                        (hint.contains("not found", ignoreCase = true) ||
+                            hint.contains("not supported", ignoreCase = true))
+                } catch (e: Exception) {
+                    false
+                }
+            } else {
+                false
+            }
             // Safal jawab par "OK", warna seedha HTTP code.
             AttemptResult(
                 code,
                 if (reply != null) "OK" else code.toString(),
-                reply
+                reply,
+                modelNotFound
             )
         } catch (e: SocketTimeoutException) {
             AttemptResult(-1, "timeout", null)
@@ -496,11 +617,30 @@ object GeminiBrain {
      * gemini-flash-latest (kabhi 503 bheed deta hai, isliye
      * beech me); aakhir me purana 2.5-flash — purane keyon
      * par woh ab bhi chalta hai.
+     *
+     * v43: ye ab MUKHYA (main) kataar hai — VISION kadam
+     * aur TEXT ki aakhiri sharan. [QuotaManager] bhi
+     * ginati ke liye yahi soochi padhta hai.
      */
-    private val MODELS = listOf(
+    val MAIN_MODELS = listOf(
         "gemini-3-flash-preview",
         "gemini-flash-latest",
         "gemini-2.5-flash"
+    )
+
+    /**
+     * v43: Lite kataar — TEXT varg ki pehli pasandeed.
+     * Lite modelon ki free seema mukhya modelon se
+     * kahin zyada hoti hai, isliye roz ka saade-text
+     * kaam inse nikalta hai aur mukhya kota vision aur
+     * mushkil kadmon ke liye bachta hai. Koi Lite is
+     * project par na mile (404) to kataar use aaj ke
+     * liye chhodkar mukhya par chali jati hai —
+     * bartav v42 se kabhi badtar nahi hota.
+     */
+    val LITE_MODELS = listOf(
+        "gemini-2.5-flash-lite",
+        "gemini-flash-lite-latest"
     )
 
     /** v22: key jaanch ke liye models list wala pata. */
