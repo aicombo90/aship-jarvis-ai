@@ -1392,6 +1392,38 @@ class CommandEngine(
     }
 
     /**
+     * v46: [tryOpenApp] wali hi pehchan, bina khole —
+     * bola gaya naam asal me kis package par utrega,
+     * sirf woh batao (na utre to null). ScreenAgent ka
+     * suraksha-parda (ScreenSafety) open_app wale kadam
+     * se pehle isiliye istemal karta hai: banking/payment
+     * wali app khulne se pehle hi ruk jaye. tryOpenApp
+     * ka bartao isse bilkul nahi badla — ye usi khoj ka
+     * sirf-padhne wala roop hai (bandhi kataar, phir
+     * launcher naam, phir galat-suna sudhaar)।
+     */
+    fun resolveAppPackage(spokenName: String): String? {
+        val name = stripFillers(
+            normalize(spokenName.lowercase(Locale.ROOT).trim())
+        )
+        if (name.isEmpty()) return null
+        for ((keyword, target) in appTargets) {
+            if (name.contains(keyword)) {
+                return if (target.kind == TargetKind.PACKAGE) {
+                    target.packageName
+                } else {
+                    null
+                }
+            }
+        }
+        val match = findLauncherApp(name)
+            ?: findLauncherApp(
+                stripFillers(normalize(fuzzyCorrect(name)))
+            )
+        return match?.packageName
+    }
+
+    /**
      * [openTarget] ki hi koshish, shart ek: jawab ke
      * saath handled me asal safalta (khula = true; nahi
      * mila / permission / lock = false). Aam raasta
