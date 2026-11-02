@@ -74,6 +74,20 @@ import java.util.concurrent.Executors
  * hai. Jo model aaj 429 de chuka hai ya is project
  * ke liye hai hi nahi (Lite 404), use kataar din bhar
  * phir nahi thokti — ginati QuotaManager rakhta hai.
+ *
+ * v48: do badlaav. (1) Naya varg VISION_LITE —
+ * ScreenAgent ke tasveer-kadmon ki dusri sharan:
+ * mukhya kataar kota/thand se mari ho to tasveer
+ * Lite modelon ko jati hai (Lite bhi tasveer samajh
+ * sakte hain; Set-of-Mark nishan tap ko bandhe hisse
+ * par hi rakhte hain). (2) 429 wala niyam QuotaManager
+ * ke naye thand-wale roop se chalta hai: kataar
+ * exhausted ke saath-saath THAND me baithe model ko
+ * bhi chhodti hai, aur safal jawab par us model ka
+ * thand-daag dhul jata hai ([QuotaManager
+ * .recordSuccess]). "Quota" wala kul nateeja ab
+ * tabhi banta hai jab is pal uplabdh har model
+ * 429 / thand / exhausted me ho.
  */
 object GeminiBrain {
 
@@ -194,8 +208,14 @@ object GeminiBrain {
      * aakhir me. VISION = tasveer wala kadam — seedha
      * mukhya kataar, kyunki tasveer samajhne ka kaam
      * mukhya modelon ke zimme hi rakha gaya hai.
+     *
+     * v48: VISION_LITE = tasveer wala kadam, par
+     * kataar sirf Lite modelon ki — ScreenAgent ki
+     * dusri sharan jab mukhya kataar kota/thand se
+     * mari ho (neeche [requestWithChain] aur
+     * ScreenAgent ka v48 wala nota dekho).
      */
-    enum class RequestClass { TEXT, VISION }
+    enum class RequestClass { TEXT, VISION, VISION_LITE }
 
     /**
      * v25: [MAIN_MODELS] ki kataar par ek taiyaar-shuda body
@@ -216,10 +236,12 @@ object GeminiBrain {
     ): String? {
         // v43: varg ke hisaab se kataar banti hai.
         // TEXT pehle Lite modelon se guzregi, mukhya
-        // kataar uske peeche; VISION seedha mukhya.
+        // kataar uske peeche; VISION seedha mukhya;
+        // v48: VISION_LITE sirf Lite kataar.
         val fullChain = when (requestClass) {
             RequestClass.TEXT -> LITE_MODELS + MAIN_MODELS
             RequestClass.VISION -> MAIN_MODELS
+            RequestClass.VISION_LITE -> LITE_MODELS
         }
         // v43: jo model aaj 429 de chuka hai (khatm) ya
         // is project ke liye hai hi nahi (uplabdh-nahi),
@@ -228,10 +250,18 @@ object GeminiBrain {
         // 429 par bikhre hue modelon ki ginti alag
         // rakho: kataar ka "quota" nateeja (v36) unpar
         // bhi imandaar rahe (neeche dekho).
+        // v48: THAND me baitha model bhi yahi chhod
+        // milta hai aur wahi ginti me jata hai — is pal
+        // uplabdh har model 429/thand/exhausted me ho
+        // tabhi kul nateeja "quota" banta hai.
         var skippedExhausted = 0
         val chain = fullChain.filter { model ->
             when {
                 QuotaManager.isExhausted(context, model) -> {
+                    skippedExhausted++
+                    false
+                }
+                QuotaManager.isCoolingDown(context, model) -> {
                     skippedExhausted++
                     false
                 }
@@ -258,6 +288,11 @@ object GeminiBrain {
             }
             if (attempt.code == HttpURLConnection.HTTP_OK && attempt.reply != null) {
                 result = attempt.reply
+                // v48: safal jawab — is model ka thand
+                // wala daag dhul gaya (QuotaManager ka
+                // naya niyam); agli 429 iske liye phir
+                // "pehli" mani jayegi.
+                QuotaManager.recordSuccess(context, model)
                 break
             }
             // v43: Lite model ka 404 (ya "model not found"
@@ -403,8 +438,11 @@ object GeminiBrain {
         val body = buildAgentRequestBody(
             systemInstruction, contents, imageJpegBase64
         ).toString()
-        // v43: tasveer wala round VISION varg — mukhya
-        // kataar hi chalegi, Lite par tasveer nahi jati.
+        // v43: tasveer wala round aam taur par VISION
+        // varg (mukhya kataar) hota hai; v48 se
+        // bulane wala (ScreenAgent) mukhya kataar mari
+        // hone par VISION_LITE bhi bhej sakta hai —
+        // kataar yahan sirf [requestClass] se banti hai.
         return requestWithChain(appContext, key, body, requestClass)
     }
 
