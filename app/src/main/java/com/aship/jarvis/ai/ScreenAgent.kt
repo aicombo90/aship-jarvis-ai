@@ -66,6 +66,23 @@ import java.util.concurrent.TimeUnit
  * Bina us pushti ke pushti-dwaar bilkul pehle jaisa
  * hi sakht hai.
  *
+ * v44: KADAM-JAANCH + ATKE PAR SUDHAAR — har chala
+ * kadam ab andheere me nahi chalta. Agle snapshot ke
+ * bandhe saar se sasta hastakshar (app + hisson ke
+ * naam) bankar pichhle hastakshar se milaya jata
+ * hai: screen badli / bilkul nahi badli / app badal
+ * gayi — natija "↳ result:" bankar itihas me judta
+ * hai, bina kisi extra model-call ya tasveer ke.
+ * Ek hi nishana do baar be-asar rahe to itihas me
+ * saaf chetaavni jaati hai. Lagatar teen bina-badlav
+ * wale kadam = kaam atka: ek bandha khud-Back
+ * (recovery) chalta hai; uske baad bhi do aur waisa
+ * hi kadam rahe to kaam wahin imaandaari se ruk
+ * jata hai (STUCK) — poora kadam/samaye ka khazaana
+ * jhulti screen par nahi jalta. wait aur ask_user
+ * wale kadam atke me nahi gine jate — woh jaanboojh
+ * ka intezaar / user ka samay hai, atka nahi.
+ *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
  * khatm, kaam wahin imaandaari se rukta hai.
@@ -132,6 +149,18 @@ class ScreenAgent(private val context: Context) {
     private var deletePreConfirmed = false
 
     /**
+     * v44: kadam-jaanch ki report-ginati — is daud me
+     * kitne kadmon ke baad screen bilkul nahi badli
+     * (nochange) aur kitni baar atke par khud-Back
+     * wala sudhaar (recovery) chala. [saveDiag] inhe
+     * report me jodti hai; [runTask] shuru me saaf
+     * karta hai. (ScreenAgent ek kaam = ek object,
+     * isliye ye khet bhi daud-bhar ke hain.)
+     */
+    private var verifyNoChange = 0
+    private var recoveryCount = 0
+
+    /**
      * Ek kaam chalao — bandha (sync) call, background
      * thread se hi bulana. [playbook] ho to uski
      * bandhi hidayat har kadam ke sandesh me judti
@@ -174,7 +203,24 @@ class ScreenAgent(private val context: Context) {
         // v40: playbook + uski delete-pushti bhi is daud ke liye saaf.
         playbookText = playbook?.trim()?.takeIf { it.isNotEmpty() }
         deletePreConfirmed = false
+        // v44: jaanch ki ginati bhi har daud ke liye saaf.
+        verifyNoChange = 0
+        recoveryCount = 0
         var visionExhaustedNoted = false
+        // v44: kadam-jaanch ki haalat. [prevSignature]
+        // pichhle snapshot ka hastakshar hai; jo kadam
+        // abhi chala aur agle snapshot se jaancha jayega
+        // woh [pendingVerify] me rehta hai. Ek hi nishane
+        // ke be-asar tap [tapStrikes] me gine jate hain;
+        // [sameStreak] lagatar bina-badlav wale kadam
+        // ginta hai, [sameAfterRecovery] sudhaar-Back ke
+        // baad ke waisa hi kadam.
+        var prevSignature: ScreenSignature? = null
+        var pendingVerify: PendingVerify? = null
+        val tapStrikes = mutableMapOf<String, Int>()
+        var sameStreak = 0
+        var sameAfterRecovery = 0
+        var recoveryDone = false
         while (rounds < MAX_ROUNDS) {
             rounds++
             if (SystemClock.uptimeMillis() > deadline) {
@@ -187,8 +233,8 @@ class ScreenAgent(private val context: Context) {
                         "honestly that the task could not be finished."
                 )
             }
-            val snapshot = captureSync()
-            if (snapshot == null) {
+            val capturedSnapshot = captureSync()
+            if (capturedSnapshot == null) {
                 saveDiag(task, "FAILED (screen nahi mila)", stepsDone)
                 return Outcome(
                     false,
@@ -198,6 +244,176 @@ class ScreenAgent(private val context: Context) {
                         historySummary(history) + "."
                 )
             }
+            var snapshot = capturedSnapshot
+            // v44: Pichhle kadam ki JAANCH — pichhle chakkar
+            // me jo kadam chala tha, uske pehle wale
+            // hastakshar se is snapshot ka hastakshar milao
+            // aur natija itihas me likho: screen badli,
+            // bilkul nahi badli, ya app hi badal gayi.
+            // Mastishk ab andheere me nahi chalta aur
+            // be-asar kadam turant pakda jata hai. Ye
+            // jaanch sirf bandhe hue saar par hoti hai —
+            // na koi extra model-call, na koi tasveer.
+            val pending = pendingVerify
+            val prevSig = prevSignature
+            if (pending != null && prevSig != null) {
+                pendingVerify = null
+                val nowSignature = signatureOf(snapshot)
+                when (classifyChange(prevSig, nowSignature)) {
+                    ChangeVerdict.PACKAGE_CHANGED -> {
+                        sameStreak = 0
+                        sameAfterRecovery = 0
+                        if (pending.targetKey != null) {
+                            tapStrikes.remove(pending.targetKey)
+                        }
+                        history.add(
+                            "↳ result: foreground app changed to " +
+                                snapshot.packageName
+                                    .ifEmpty { "(unknown)" } +
+                                " after " + pending.desc
+                        )
+                    }
+                    ChangeVerdict.CHANGED -> {
+                        sameStreak = 0
+                        sameAfterRecovery = 0
+                        if (pending.targetKey != null) {
+                            tapStrikes.remove(pending.targetKey)
+                        }
+                        history.add(
+                            "↳ result: screen changed after " +
+                                pending.desc
+                        )
+                    }
+                    ChangeVerdict.SAME -> {
+                        val strikes = if (pending.targetKey != null) {
+                            val n = (tapStrikes[pending.targetKey]
+                                ?: 0) + 1
+                            tapStrikes[pending.targetKey] = n
+                            n
+                        } else {
+                            0
+                        }
+                        history.add(
+                            if (strikes >= DEAD_TARGET_STRIKES &&
+                                pending.targetLabel != null
+                            ) {
+                                "↳ result: SCREEN DID NOT CHANGE " +
+                                    "after " + pending.desc +
+                                    " — target \"" +
+                                    pending.targetLabel +
+                                    "\" has had NO effect " + strikes +
+                                    " times in this task; choose a " +
+                                    "different element or approach"
+                            } else {
+                                "↳ result: SCREEN DID NOT CHANGE " +
+                                    "after " + pending.desc
+                            }
+                        )
+                        // wait wale kadam (countable = false)
+                        // atke me nahi gine jate — woh jaanboojh
+                        // ka intezaar hai. ask_user yahan aata
+                        // hi nahi (uska pending banta hi nahi).
+                        if (pending.countable) {
+                            verifyNoChange++
+                            if (!recoveryDone) {
+                                sameStreak++
+                                if (sameStreak >= STUCK_SAME_LIMIT) {
+                                    // ATKA — ek bandha sudhaar:
+                                    // khud Back dabao, saans lo,
+                                    // taaza snapshot lo aur usi
+                                    // se ye chakkar aage badhe.
+                                    recoveryDone = true
+                                    recoveryCount++
+                                    sameStreak = 0
+                                    val backOk = globalActionSync(
+                                        AccessibilityService
+                                            .GLOBAL_ACTION_BACK
+                                    )
+                                    history.add(
+                                        "System note: recovery — " +
+                                            STUCK_SAME_LIMIT +
+                                            " actions in a row changed " +
+                                            "nothing on screen, so " +
+                                            "Back was pressed once " +
+                                            "automatically to try to " +
+                                            "unstick" +
+                                            if (backOk) {
+                                                ""
+                                            } else {
+                                                " (Back itself reported " +
+                                                    "failure)"
+                                            } + "."
+                                    )
+                                    settle(deadline)
+                                    val fresh = captureSync()
+                                    if (fresh != null) {
+                                        history.add(
+                                            if (classifyChange(
+                                                    nowSignature,
+                                                    signatureOf(fresh)
+                                                ) == ChangeVerdict.SAME
+                                            ) {
+                                                "↳ result: SCREEN DID " +
+                                                    "NOT CHANGE after " +
+                                                    "pressing Back " +
+                                                    "(recovery)"
+                                            } else {
+                                                "↳ result: screen " +
+                                                    "changed after " +
+                                                    "pressing Back " +
+                                                    "(recovery)"
+                                            }
+                                        )
+                                        snapshot = fresh
+                                    }
+                                }
+                            } else {
+                                sameAfterRecovery++
+                                if (sameAfterRecovery >=
+                                    STUCK_POST_RECOVERY_LIMIT
+                                ) {
+                                    // Sudhaar ke baad bhi screen
+                                    // wahi — kaam sach me atka hai.
+                                    // Poora khazaana jalane ke
+                                    // bajay yahin imaandaari se ruk.
+                                    saveDiag(
+                                        task,
+                                        "STUCK (screen atki — aage " +
+                                            "nahi badha)",
+                                        stepsDone
+                                    )
+                                    return Outcome(
+                                        false,
+                                        "STOPPED — the screen agent " +
+                                            "got STUCK after " +
+                                            "$stepsDone steps: several " +
+                                            "actions in a row changed " +
+                                            "nothing on the screen, an " +
+                                            "automatic Back did not " +
+                                            "unstick it, and the screen " +
+                                            "still would not move, so " +
+                                            "it stopped early instead " +
+                                            "of using up the whole step " +
+                                            "and time budget. Actions " +
+                                            "taken so far: " +
+                                            historySummary(history) +
+                                            ". Tell the user honestly, " +
+                                            "in their own language, " +
+                                            "that Maya got stuck on " +
+                                            "this screen and cannot " +
+                                            "proceed with this task " +
+                                            "right now; say how far it " +
+                                            "got from the actions above " +
+                                            "and do not claim more " +
+                                            "than they show."
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            prevSignature = signatureOf(snapshot)
             // v39: is kadam par tasveer chahiye kya? Saar
             // kaam ka ho to node-raasta (purana, kota-mukt);
             // screen tasveeri ho to Set-of-Mark tasveer ke
@@ -415,17 +631,29 @@ class ScreenAgent(private val context: Context) {
                     sleepQuietly(ms.toLong())
                     stepsDone++
                     history.add("$stepsDone. wait ${ms}ms -> done")
+                    // v44: intezaar ki jaanch hogi (screen
+                    // badli to not), par atke me ginati nahi —
+                    // countable = false.
+                    pendingVerify = PendingVerify(
+                        "waiting ${ms}ms", null, null, false
+                    )
                 }
                 is ScreenAction.Back -> {
                     val ok = globalActionSync(AccessibilityService.GLOBAL_ACTION_BACK)
                     stepsDone++
                     history.add("$stepsDone. back -> " + if (ok) "OK" else "FAILED")
+                    pendingVerify = PendingVerify(
+                        "pressing Back", null, null, true
+                    )
                     settle(deadline)
                 }
                 is ScreenAction.Home -> {
                     val ok = globalActionSync(AccessibilityService.GLOBAL_ACTION_HOME)
                     stepsDone++
                     history.add("$stepsDone. home -> " + if (ok) "OK" else "FAILED")
+                    pendingVerify = PendingVerify(
+                        "pressing Home", null, null, true
+                    )
                     settle(deadline)
                 }
                 is ScreenAction.Scroll -> {
@@ -435,6 +663,10 @@ class ScreenAgent(private val context: Context) {
                         "$stepsDone. scroll " +
                             (if (action.down) "down" else "up") +
                             " -> " + if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        "scrolling " + if (action.down) "down" else "up",
+                        null, null, true
                     )
                     settle(deadline)
                 }
@@ -446,6 +678,9 @@ class ScreenAgent(private val context: Context) {
                     history.add(
                         "$stepsDone. type (the text you specified) -> " +
                             if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        "typing text", null, null, true
                     )
                     settle(deadline)
                 }
@@ -462,6 +697,12 @@ class ScreenAgent(private val context: Context) {
                     history.add(
                         "$stepsDone. tap_text \"" + action.value + "\" -> " +
                             if (ok) "OK" else "FAILED (not found / not tappable)"
+                    )
+                    pendingVerify = PendingVerify(
+                        "tapping \"" + action.value + "\"",
+                        "t:" + labelKey(action.value),
+                        action.value,
+                        true
                     )
                     settle(deadline)
                 }
@@ -481,6 +722,18 @@ class ScreenAgent(private val context: Context) {
                         "$stepsDone. tap_at (" + action.x + ", " + action.y +
                             ") -> " + if (ok) "OK" else "FAILED"
                     )
+                    pendingVerify = PendingVerify(
+                        if (label != null) {
+                            "tapping \"" + label + "\""
+                        } else {
+                            "tapping at (" + action.x + ", " +
+                                action.y + ")"
+                        },
+                        label?.let { "t:" + labelKey(it) }
+                            ?: ("xy:" + action.x + "," + action.y),
+                        label ?: ("(" + action.x + ", " + action.y + ")"),
+                        true
+                    )
                     settle(deadline)
                 }
                 is ScreenAction.TapMark -> {
@@ -496,6 +749,10 @@ class ScreenAgent(private val context: Context) {
                                 "marks exist only on steps where an " +
                                 "image was sent)"
                         )
+                        pendingVerify = PendingVerify(
+                            "tap_mark " + action.mark + " (no such mark)",
+                            null, null, true
+                        )
                     } else {
                         val kind = sensitiveKind(element.text)
                         val refusal = checkConfirmation(
@@ -508,6 +765,21 @@ class ScreenAgent(private val context: Context) {
                             "$stepsDone. tap_mark " + action.mark +
                                 " (\"" + element.text + "\") -> " +
                                 if (ok) "OK" else "FAILED"
+                        )
+                        pendingVerify = PendingVerify(
+                            "tapping \"" + element.text +
+                                "\" (mark " + action.mark + ")",
+                            if (element.text.isNotEmpty()) {
+                                "t:" + labelKey(element.text)
+                            } else {
+                                "xy:" + element.centerX + "," +
+                                    element.centerY
+                            },
+                            element.text.ifEmpty {
+                                "(" + element.centerX + ", " +
+                                    element.centerY + ")"
+                            },
+                            true
                         )
                     }
                     settle(deadline)
@@ -535,6 +807,18 @@ class ScreenAgent(private val context: Context) {
                         "$stepsDone. tap_point (" + action.x + ", " +
                             action.y + ") -> " +
                             if (ok) "OK" else "FAILED"
+                    )
+                    pendingVerify = PendingVerify(
+                        if (label != null) {
+                            "tapping \"" + label + "\""
+                        } else {
+                            "tapping point (" + action.x + ", " +
+                                action.y + ")"
+                        },
+                        label?.let { "t:" + labelKey(it) }
+                            ?: ("pt:" + action.x + "," + action.y),
+                        label ?: ("(" + action.x + ", " + action.y + ")"),
+                        true
                     )
                     settle(deadline)
                 }
@@ -964,6 +1248,86 @@ class ScreenAgent(private val context: Context) {
         return out.toString()
     }
 
+    // ------------------------------------------------------------------
+    // v44: Kadam-jaanch — hastakshar, badlav ki shreni, pending kadam
+    // ------------------------------------------------------------------
+
+    /**
+     * Ek snapshot ka sasta hastakshar — sirf pehle se bandhe
+     * hue saar se banta hai: saamne wali app + saare hisson
+     * ke naam (kram me bandhe, dohraav ke saath) aur unme se
+     * kaam ke (clickable/editable) hisson ke naam alag se.
+     * Nirdeshank isme nahi — halki hil-dul par hastakshar
+     * nahi badalna chahiye.
+     */
+    private data class ScreenSignature(
+        val packageName: String,
+        val labels: List<String>,
+        val actionableLabels: List<String>
+    )
+
+    /** Jo kadam abhi chala aur agle snapshot se jaancha jayega. */
+    private data class PendingVerify(
+        /** Itihas ki note ke liye kadam ka varnan ("tapping X"). */
+        val desc: String,
+        /** Tap wale nishane ki pehchan (be-asar ginati ke liye); tap na ho to null. */
+        val targetKey: String?,
+        /** Chetaavni note me dikhane wala nishane ka naam. */
+        val targetLabel: String?,
+        /** false = jaanboojh ka intezaar (wait) — jaanch hogi, atke me ginati nahi. */
+        val countable: Boolean
+    )
+
+    private enum class ChangeVerdict { SAME, CHANGED, PACKAGE_CHANGED }
+
+    private fun signatureOf(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot
+    ): ScreenSignature {
+        val labels = snapshot.elements.map {
+            it.text.ifEmpty { it.className }
+        }
+        val actionable = snapshot.elements
+            .filter { it.clickable || it.editable }
+            .map { it.text.ifEmpty { it.className } }
+        return ScreenSignature(
+            snapshot.packageName,
+            labels.sorted(),
+            actionable.sorted()
+        )
+    }
+
+    /**
+     * Pichhle hastakshar ke saamne naye ki shreni:
+     * - app badli -> PACKAGE_CHANGED.
+     * - naam bilkul waisa ke waisa -> SAME.
+     * - naam badle par KAAM ke hisson ke naam phir bhi
+     *   waisa ke waisa -> SAME hi mano: badlav sirf
+     *   ghadi/samaye/typing-sanket jaisi chalti text ka
+     *   hai, asal screen wahi ki wahi hai.
+     * - warna CHANGED.
+     * Jhootha SAME khatarnaak hai (uska bharosa karke
+     * galat sudhaar chal jayega ya kaam galat ruk
+     * jayega); jhootha CHANGED sirf jaanch ko kamzor
+     * karta hai. Isliye niyam jaanboojh kar is or
+     * jhuka hai: kaam ke hisson se bahar ki halchal ko
+     * badlav mat mano, uske andar ki har halchal ko
+     * badlav mano.
+     */
+    private fun classifyChange(
+        prev: ScreenSignature,
+        now: ScreenSignature
+    ): ChangeVerdict {
+        if (prev.packageName != now.packageName) {
+            return ChangeVerdict.PACKAGE_CHANGED
+        }
+        if (prev.labels == now.labels) return ChangeVerdict.SAME
+        return if (prev.actionableLabels == now.actionableLabels) {
+            ChangeVerdict.SAME
+        } else {
+            ChangeVerdict.CHANGED
+        }
+    }
+
     /** Kadmon ka chhota saar — natije ke imaandaar varnan ke liye. */
     private fun historySummary(history: List<String>): String {
         val actions = history.filter { line ->
@@ -1097,15 +1461,19 @@ class ScreenAgent(private val context: Context) {
      * Daud ki report "jarvis_diag" me "last_screen_run"
      * par band karo — AgentBrain wali report wala hi
      * andaaz: <kaam (kata hua)> — <natija> (<n> steps,
-     * vision <v>/10)। Likhe hue sandeshon ka text ya
-     * tasveer ka data isme kabhi nahi aata — sirf
-     * tasveer-kadmon ki GINATI jaati hai (v39).
+     * vision <v>/10, nochange <nc>, recovery <r>)।
+     * Likhe hue sandeshon ka text ya tasveer ka data
+     * isme kabhi nahi aata — sirf tasveer-kadmon ki
+     * GINATI jaati hai (v39) aur jaanch ki ginati
+     * (v44: kitne kadam be-asar rahe, kitni baar
+     * sudhaar chala).
      */
     private fun saveDiag(task: String, outcome: String, steps: Int) {
         try {
             val value = task.take(MAX_DIAG_TASK_CHARS) +
                 " — " + outcome + " (" + steps + " steps, vision " +
-                visionUsed + "/" + MAX_VISION_CALLS + ")"
+                visionUsed + "/" + MAX_VISION_CALLS + ", nochange " +
+                verifyNoChange + ", recovery " + recoveryCount + ")"
             context.getSharedPreferences(DIAG_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_LAST_SCREEN_RUN, value)
@@ -1136,6 +1504,28 @@ class ScreenAgent(private val context: Context) {
 
         /** Lagatar itne kharab jawabon par daud rukti hai. */
         private const val MAX_INVALID_REPLIES = 3
+
+        /**
+         * v44: lagatar itne bina-badlav wale kadmon par
+         * kaam atka mana jata hai aur ek bandha
+         * sudhaar-Back (recovery) chalta hai.
+         */
+        private const val STUCK_SAME_LIMIT = 3
+
+        /**
+         * v44: sudhaar-Back ke baad bhi lagatar itne aur
+         * bina-badlav wale kadam -> kaam wahin
+         * imaandaari se ruk jata hai (STUCK) — poora
+         * kadam/samaye ka khazaana nahi jalta.
+         */
+        private const val STUCK_POST_RECOVERY_LIMIT = 2
+
+        /**
+         * v44: ek hi nishana itni baar be-asar rahe to
+         * itihas me mastishk ko saaf chetaavni jaati
+         * hai — dusra nishana ya dusra raasta chun.
+         */
+        private const val DEAD_TARGET_STRIKES = 2
 
         /** tap_at ki pushti ke liye nishane ki adhiktam doori (px). */
         private const val MAX_NEAREST_DISTANCE_PX = 90
