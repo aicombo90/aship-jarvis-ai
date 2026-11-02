@@ -269,6 +269,8 @@ class ScreenAgent(private val context: Context) {
                 )
             }
             val raw = if (stepImage != null) {
+                // v43: tasveer wala kadam VISION varg —
+                // mukhya model kataar hi chalegi.
                 GeminiBrain.requestAgentRoundWithImage(
                     context,
                     SCREEN_INSTRUCTION,
@@ -277,13 +279,17 @@ class ScreenAgent(private val context: Context) {
                             task, history, snapshot, stepMarked
                         )
                     ),
-                    stepImage
+                    stepImage,
+                    GeminiBrain.RequestClass.VISION
                 )
             } else {
+                // v43: node-only kadam TEXT varg — Lite
+                // kataar pehle, mukhya kota bachega.
                 GeminiBrain.requestAgentRound(
                     context,
                     SCREEN_INSTRUCTION,
-                    listOf("user" to buildStepPrompt(task, history, snapshot))
+                    listOf("user" to buildStepPrompt(task, history, snapshot)),
+                    GeminiBrain.RequestClass.TEXT
                 )
             }
             if (raw == null) {
