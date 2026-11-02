@@ -1074,12 +1074,40 @@ class CommandEngine(
      * imaandaar jawab user ki bhasha me — jhootha "ho
      * gaya" kabhi nahi. Natija sync chahiye, isliye
      * mobile data wala hi bandha latch intezaar.
+     *
+     * v42: pehchan aur mashinari dono mazboot. Bangla
+     * recognizer "স্ক্রল" ko aksar স্কুল / স্ক্রোল /
+     * ইস্ক্রল / স্‌ক্রল sunta hai — woh saare garble roop
+     * ab sanketon me hain, milaana KACHHE text ke saath
+     * [normalize] hue roop par bhi hota hai (bikhre
+     * swar-chinh ek roop me aate hain), aur Latin "school"
+     * shabd jaan-boojh kar scroll NAHI hai (guard suchi)।
+     * Asal scroll ab service ka do-mashinari wala
+     * [JarvisAccessibilityService.scrollCommandEx] hai —
+     * node wala ACTION_SCROLL pehle, swipe baad me — aur
+     * report me suna hua hukm + disha + mashinari + natija
+     * chaaron bandhte hain.
      */
     fun deterministicScrollCommand(rawText: String): CommandResult? {
         val raw = rawText.lowercase(Locale.ROOT).trim()
         if (raw.isEmpty()) return null
-        val up = SCROLL_UP_MARKERS.any { raw.contains(it) }
-        val down = SCROLL_DOWN_MARKERS.any { raw.contains(it) }
+        // v42: milaane ke liye do satahein — kachha text aur
+        // normalize hua roop (Bangla ke bikhre swar-chinh
+        // ek-codepoint bante hain, jaise স্ক্রোল ka bikhra
+        // roop)। Sanket kisi me bhi mile to mila hua maano.
+        val haystacks = listOf(raw, normalize(raw))
+        fun matched(markers: List<String>): Boolean =
+            markers.any { m -> haystacks.any { it.contains(m) } }
+        // v42: "school" wala vakya scroll NAHI hai — Latin
+        // me school aaye aur scroll ka koi aur pakka sanket
+        // na ho to pakka hukm bilkul nahi banta.
+        if (SCROLL_SCHOOL_GUARD_MARKERS.any { raw.contains(it) } &&
+            !matched(SCROLL_WORD_MARKERS)
+        ) {
+            return null
+        }
+        val up = matched(SCROLL_UP_MARKERS)
+        val down = matched(SCROLL_DOWN_MARKERS)
         val scrollDown: Boolean = when {
             up && down -> return null
             up -> false
@@ -1092,26 +1120,35 @@ class CommandEngine(
                 // Lamba vakya bina kriya ke scroll par
                 // sawaal/baatchit ho sakta hai — aam
                 // raaste par chhod do.
-                if (!SCROLL_WORD_MARKERS.any { raw.contains(it) }) return null
+                if (!matched(SCROLL_WORD_MARKERS)) return null
                 val tokenCount = raw.split(Regex("""\s+""")).size
-                val hasDoVerb = SCROLL_DO_VERBS.any { raw.contains(it) }
+                val hasDoVerb = matched(SCROLL_DO_VERBS)
                 if (tokenCount > 4 && !hasDoVerb) return null
                 true
             }
         }
         val lang = PlayIntent.requestLanguage(rawText)
         if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveScrollDiag(
+                rawText, scrollDown, false,
+                JarvisAccessibilityService.MECHANISM_NONE,
+                "accessibility band"
+            )
             return CommandResult(scrollNeedsAccessibilityReply(lang), true)
         }
         val latch = CountDownLatch(1)
-        var swiped = false
+        var report: JarvisAccessibilityService.ScrollReport? = null
         try {
-            JarvisAccessibilityService.scrollCommand(context, scrollDown) { done ->
-                swiped = done
+            JarvisAccessibilityService.scrollCommandEx(context, scrollDown) { r ->
+                report = r
                 latch.countDown()
             }
         } catch (t: Throwable) {
-            saveScrollDiag(rawText, scrollDown, false)
+            saveScrollDiag(
+                rawText, scrollDown, false,
+                JarvisAccessibilityService.MECHANISM_NONE,
+                "bulane me gadbad: " + t.javaClass.simpleName
+            )
             return CommandResult(scrollFailedReply(lang), true)
         }
         val completed = try {
@@ -1119,8 +1156,13 @@ class CommandEngine(
         } catch (e: InterruptedException) {
             false
         }
-        val done = completed && swiped
-        saveScrollDiag(rawText, scrollDown, done)
+        val result = report
+        val done = completed && result != null && result.ok
+        saveScrollDiag(
+            rawText, scrollDown, done,
+            result?.mechanism ?: JarvisAccessibilityService.MECHANISM_NONE,
+            result?.detail ?: "intezaar poora, report nahi aayi"
+        )
         return if (done) {
             CommandResult(scrollDoneReply(lang), true)
         } else {
@@ -1153,8 +1195,21 @@ class CommandEngine(
                 "Scrolling needs Accessibility — please open the app and turn it on."
         }
 
-    /** v38: scroll koshish ki report jarvis_diag me — suna hua hukm, disha, natija. */
-    private fun saveScrollDiag(rawText: String, down: Boolean, ok: Boolean) {
+    /**
+     * v38+v42: scroll koshish ki report jarvis_diag me —
+     * suna hua hukm, disha, kaun si mashinari chali
+     * (node/gesture/gesture-retry/none), natija aur wajah।
+     * Agli nakaami par andaza nahi lagana padega: report
+     * khud batayegi ki pehchan mili thi ya nahi, aur mili
+     * thi to scroll kis mashinari se hua ya kyun nahi hua.
+     */
+    private fun saveScrollDiag(
+        rawText: String,
+        down: Boolean,
+        ok: Boolean,
+        mechanism: String,
+        detail: String
+    ) {
         try {
             context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
                 .edit()
@@ -1162,7 +1217,9 @@ class CommandEngine(
                     "last_scroll_command",
                     (if (down) "down" else "up") + ": " +
                         rawText.trim().take(40) +
-                        " -> " + (if (ok) "OK" else "FAIL")
+                        " [" + mechanism + "]" +
+                        " -> " + (if (ok) "OK" else "FAIL") +
+                        " (" + detail.take(60) + ")"
                 )
                 .apply()
         } catch (t: Throwable) {
@@ -1487,28 +1544,63 @@ class CommandEngine(
         /** v17: Accessibility toggle ke natije ka adhiktam intezaar. */
         const val DATA_COMMAND_WAIT_MS = 4_000L
 
-        /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). */
-        const val SCROLL_COMMAND_WAIT_MS = 2_500L
+        /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
+        const val SCROLL_COMMAND_WAIT_MS = 5_000L
 
-        /** v38: scroll-down ke pakke sanket — kachhe text par contains milaane ke liye. */
+        /**
+         * v38 + v42: scroll-down ke pakke sanket — kachhe text
+         * par contains milaane ke liye. v42 me Bangla
+         * recognizer ke jaane-pehchane garble roop jude:
+         * স্কুল / ইস্ক্রল / স্‌ক্রল / এস্ক্রল ("স্ক্রল" ka
+         * galat suna roop — user khud "স্কুল ডাউন" likhkar
+         * bhej chuka hai) aur Roman "iskrol/escroll"।
+         */
         val SCROLL_DOWN_MARKERS = listOf(
-            "scroll down", "স্ক্রল ডাউন", "স্ক্রোল ডাউন", "স্ক্রল ডাউন",
+            "scroll down", "iskrol down", "escroll down",
+            "স্ক্রল ডাউন", "স্ক্রোল ডাউন", "স্ক্রল ডাউন",
+            "স্কুল ডাউন", "স্কুল নামাও", "স্কুল করো",
+            "ইস্ক্রল ডাউন", "এস্ক্রল ডাউন", "স্ক্রল ডাউন",
             "स्क्रॉल डाउन", "स्क्रोल डाउन",
             "নিচে নামাও", "নিচে নামা", "নিচে যাও", "নিচে করো", "নিচে কর",
             "नीचे करो", "नीचे कर", "neeche karo", "neeche kar", "niche karo"
         )
 
-        /** v38: scroll-up ke pakke sanket. */
+        /** v38 + v42: scroll-up ke pakke sanket (v42: wahi garble roop upar ke liye). */
         val SCROLL_UP_MARKERS = listOf(
-            "scroll up", "স্ক্রল আপ", "স্ক্রোল আপ", "স্ক্রল আপ",
+            "scroll up", "iskrol up", "escroll up",
+            "স্ক্রল আপ", "স্ক্রোল আপ", "স্ক্রল আপ",
+            "স্কুল আপ", "স্কুল তোলো", "স্কুল ওঠো",
+            "ইস্ক্রল আপ", "এস্ক্রল আপ", "স্ক্রল আপ",
             "स्क्रॉल अप", "स्क्रोल अप",
             "উপরে তোলো", "উপরে তোল", "উপরে ওঠো", "উপরে ওঠ", "উপরে করো",
             "ऊपर करो", "ऊपर कर", "upar karo", "upore tolo"
         )
 
-        /** v38: nanga scroll shabd — disha ka sanket na mile to neeche wala iraada. */
+        /**
+         * v38 + v42: nanga scroll shabd — disha ka sanket na
+         * mile to neeche wala iraada. v42: garble roop bhi —
+         * স্কুল / ইস্ক্রল / স্ক্রল / এস্ক্রল aur Roman
+         * iskrol/escroll/skrol.
+         */
         val SCROLL_WORD_MARKERS = listOf(
-            "scroll", "স্ক্রল", "স্ক্রোল", "স্ক্রল", "स्क्रॉल", "स्क्रोल"
+            "scroll", "iskrol", "escroll", "skrol",
+            "স্ক্রল", "স্ক্রোল", "স্ক্রল",
+            "স্কুল", "ইস্ক্রল", "এস্ক্রল", "স্ক্রল",
+            "स्क्रॉल", "स्क्रोल"
+        )
+
+        /**
+         * v42: Latin "school" scroll NAHI hai — ye shabd
+         * aaye aur scroll ka koi aur pakka sanket na mile
+         * to pakka hukm nahi banta. (Bangla wala স্কুল
+         * isse alag hai: woh upar garble suchi me
+         * jaan-boojh kar rakha hai — Bangla boli me
+         * "স্ক্রল" ka suna roop wahi banta hai, aur
+         * "স্কুল ডাউন করো" bolne wala school nahi,
+         * scroll hi chahta hai.)
+         */
+        val SCROLL_SCHOOL_GUARD_MARKERS = listOf(
+            "school"
         )
 
         /** v38: nange scroll shabd ke saath hukm wali kriya hai kya. */
