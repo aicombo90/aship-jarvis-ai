@@ -121,6 +121,9 @@ object ScreenAudit {
      *   nahi mili, khud-sudhaar (recovery), suraksha
      *   rok — sab jaisi hain (inme kabhi likha hua
      *   text nahi hota);
+     * - "playbook:" line (v47) = is daud me laga
+     *   app-wise playbook ka naam (whatsapp/chrome/
+     *   gallery) — jaisi hai waisi;
      * - "You asked the user:" lines KABHI jaisi hain
      *   waisi nahi jaati (sawaal aur jawab dono user/
      *   model ki baat hai) — sirf "jawab aaya / nahi
@@ -142,6 +145,7 @@ object ScreenAudit {
                 line.firstOrNull()?.isDigit() == true -> events.add(line)
                 line.startsWith("↳ result:") -> events.add(line)
                 line.startsWith("System note:") -> events.add(line)
+                line.startsWith("playbook:") -> events.add(line)
             }
         }
         return events
