@@ -228,9 +228,23 @@ class AgentTools(
         // playbook (ginati + pakapaki chetaavni + pushti)
         // screen wale mastishk ke saath jud jata hai —
         // kaam ka apna text bilkul nahi badalta.
-        val playbook = TrashPlaybook.forTask(task)
-        val outcome = ScreenAgent(context, fromBackgroundService)
-            .runTask(task, playbook)
+        val trashPlaybook = TrashPlaybook.forTask(task)
+        val outcome = if (trashPlaybook != null) {
+            // Trash wala raasta pehle bhi sabse pehla
+            // tha, aaj bhi bilkul waisa hi hai (v47)।
+            ScreenAgent(context, fromBackgroundService)
+                .runTask(task, trashPlaybook)
+        } else {
+            // v47: trash na mile to app-wise pack
+            // (WhatsApp / Chrome / Gallery — [Playbooks])
+            // jaancha jata hai; mile to uski hidayat +
+            // naam (kataar/audit wali "playbook:" line
+            // ke liye) saath jata hai. Dono hi haal me
+            // ek kaam par ek hi playbook lagta hai।
+            val pack = Playbooks.forTask(task)
+            ScreenAgent(context, fromBackgroundService)
+                .runTask(task, pack?.text, pack?.name)
+        }
         return ToolResult(outcome.ok, outcome.text)
     }
 
