@@ -192,8 +192,9 @@ class ScreenAgent(
     private var visionUsed = 0
 
     /**
-     * v40: is daud ke saath juda bandha playbook (is
-     * samay sirf gallery-trash wala, [TrashPlaybook]) —
+     * v40: is daud ke saath juda bandha playbook
+     * (gallery-trash wala, [TrashPlaybook]; v47 se
+     * app-wise pack wala bhi, [Playbooks]) —
      * ho to har kadam ke sandesh me judta hai. Aur
      * [deletePreConfirmed]: user ne playbook wali
      * ginati-pushti (ask_user) me pakapaki chetaavni
@@ -240,11 +241,15 @@ class ScreenAgent(
      * ek record band hota hai. Kataar (history) isiliye
      * yahan bankar andar jaati hai.
      */
-    fun runTask(taskRaw: String, playbook: String? = null): Outcome {
+    fun runTask(
+        taskRaw: String,
+        playbook: String? = null,
+        playbookName: String? = null
+    ): Outcome {
         val history = mutableListOf<String>()
         auditOutcomeLabel = null
         val outcome = try {
-            runTaskLoop(taskRaw, playbook, history)
+            runTaskLoop(taskRaw, playbook, playbookName, history)
         } catch (t: Throwable) {
             // Daud beech me toot jaye tab bhi record bane;
             // bulane wale ke liye imaandaar FAILED hi
@@ -266,6 +271,7 @@ class ScreenAgent(
     private fun runTaskLoop(
         taskRaw: String,
         playbook: String?,
+        playbookName: String?,
         history: MutableList<String>
     ): Outcome {
         val task = taskRaw.trim()
@@ -303,6 +309,18 @@ class ScreenAgent(
         // v40: playbook + uski delete-pushti bhi is daud ke liye saaf.
         playbookText = playbook?.trim()?.takeIf { it.isNotEmpty() }
         deletePreConfirmed = false
+        // v47: pack wala playbook (WhatsApp/Chrome/
+        // Gallery — [Playbooks]) laga ho to kataar ki
+        // sabse pehli line me uska naam band karo,
+        // taaki v46 wala audit record bhi dikhaye ki
+        // is daud me kaun si bandhi chaal chali thi
+        // ([ScreenAudit] "playbook:" wali lines ko
+        // ghatna bankar rakhta hai)। Trash wale
+        // playbook ka koi naam nahi aata — uski daud
+        // pehle jaisi hi rehti hai।
+        if (playbookName != null) {
+            history.add("playbook: $playbookName")
+        }
         // v44: jaanch ki ginati bhi har daud ke liye saaf.
         verifyNoChange = 0
         recoveryCount = 0
