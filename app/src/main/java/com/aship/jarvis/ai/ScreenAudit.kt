@@ -110,6 +110,48 @@ object ScreenAudit {
         }
     }
 
+    /** Ek bandha hua audit record — [latestRecord] se padha hua roop। */
+    data class Record(
+        val task: String,
+        val outcome: String,
+        val events: List<String>,
+        val ts: Long
+    )
+
+    /**
+     * v49: sabse taaza audit record padho — seekhne
+     * wali mashinari ([LearnedRoutines]) ko aakhiri
+     * daud ka natija + kadam chaahiye hote hain:
+     * safal hui thi ya nahi, yehi uska dwaar hai।
+     * File na ho / aakhiri line bigdi ho to null।
+     * Sirf padhna hai — file kabhi nahi badalti,
+     * aur gadbad par bhi exception nahi aata।
+     */
+    fun latestRecord(context: Context): Record? {
+        return try {
+            val file = File(context.filesDir, FILE_NAME)
+            if (!file.exists()) return null
+            val lastLine = file.readLines()
+                .lastOrNull { it.isNotBlank() } ?: return null
+            val obj = JSONObject(lastLine)
+            val eventsArray = obj.optJSONArray("events")
+            val events = mutableListOf<String>()
+            if (eventsArray != null) {
+                for (i in 0 until eventsArray.length()) {
+                    events.add(eventsArray.optString(i))
+                }
+            }
+            Record(
+                task = obj.optString("task"),
+                outcome = obj.optString("outcome"),
+                events = events,
+                ts = obj.optLong("ts", 0L)
+            )
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     /**
      * Kadam-kataar se audit ghatnayein — kram wahi jo
      * asal me hua tha:
