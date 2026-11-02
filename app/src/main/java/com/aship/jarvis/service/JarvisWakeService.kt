@@ -36,7 +36,10 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.UrlIntent
+import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
@@ -177,6 +180,29 @@ import java.util.concurrent.Executors
  * aaye ya bigde to turn wahi kram par gir jata hai,
  * jaise woh tha hi nahi. Wake-word spotting Vosk Hindi
  * par hi rehta hai — Zipformer keyword-spotter nahi hai.
+ *
+ * v48 DO SHAKSIYAT + CHUP MAUT KA ILAAJ. (1) Shaksiyat
+ * ab WAKE NAAM se bandhi hai: "Jarvis"/"Maya" -> MAYA
+ * (sirf Hindi: kaan hi-IN system recognizer + Vosk,
+ * Zipformer band, boli hamesha Hindi, agent ko Hindi
+ * wala bhasha-bandhan); "তারা"/"Tara" -> TARA (sirf
+ * Bangla: Zipformer -> bn-IN system -> Vosk, boli
+ * hamesha Bangla). Dusri bhasha ki script wali baat
+ * par kaam NAHI hota — ek vinamra mod (redirect)
+ * bolkar session vinamrata se band hota hai. Tara ki
+ * wake-pehchan sthan-bandhi hai (baat ki shuruaat ya
+ * akela naam), kyunki তারা aam Bangla shabd hai.
+ * (2) Session ka ant ab kabhi CHUP nahi hota: jo
+ * raasta bina poora jawab diye band ho, woh shaksiyat
+ * ki apni bhasha me ek vida-line bolkar band hota hai
+ * (adda ke khaali-session wale do chup raaste yahi
+ * sudhre hain); wake sunna har ant par phir chalu
+ * hota hai; aur har ant ki wajah "last_session_end"
+ * report me bandhti hai ("last_persona" ke saath).
+ * (3) Link wala kaam (URL + kholne ka iraada) yahan
+ * bhi pakke taur par screen_task ko jata hai
+ * ([UrlIntent]) — baatchit wala mastishk use baat
+ * banakar nahi taal sakta.
  */
 class JarvisWakeService : Service() {
 
@@ -313,7 +339,7 @@ class JarvisWakeService : Service() {
     @Volatile
     private var commandKind: CommandKind = CommandKind.NONE
 
-    /** System session ki bhasha kataar (v35 wala hi kram: pasand -> bn-IN -> hi-IN). */
+    /** System session ki bhasha kataar (v48: shaksiyat se bandhi — Maya: sirf hi-IN, Tara: sirf bn-IN). */
     @Volatile
     private var systemCascadeLanguages: List<String> = emptyList()
 
@@ -369,6 +395,33 @@ class JarvisWakeService : Service() {
      */
     @Volatile
     private var zipformerBrokenThisChain: Boolean = false
+
+    // ------------------------------------------------------------------
+    // v48: shaksiyat + session ke ant ki report.
+    //
+    // [sessionPersona] har wake par naam se bandhta hai
+    // (onWakeDetected) aur poori chain me wahi rehta hai —
+    // kaan ki bhasha kataar, boli ki bhasha, agent ka
+    // bhasha-bandhan, mod (redirect) wali jaanch, sab
+    // faisle isi ek khet se hote hain.
+    //
+    // [pendingEndReason]: jo aakhiri jawab bola gaya,
+    // uske saath session kis wajah se band mana jayega —
+    // jawab bolne wale raaste ise bolne se pehle bandh
+    // dete hain, aur boli khatm hone par (onTtsFinished /
+    // reply fallback) wahi wajah "last_session_end" me
+    // likhi jati hai. Vida-line (closing) wale ant ke
+    // liye alag [closingReason] hai, kyunki woh ACK
+    // raaste se band hota hai.
+    // ------------------------------------------------------------------
+    @Volatile
+    private var sessionPersona: Persona = Persona.MAYA
+
+    @Volatile
+    private var pendingEndReason: String = SESSION_END_COMPLETED
+
+    @Volatile
+    private var closingReason: String = SESSION_END_NOT_UNDERSTOOD
 
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
@@ -660,6 +713,13 @@ class JarvisWakeService : Service() {
                     // baad bhi purani baatchit chipki rahegi.
                     addaEngine.endSession()
                     addaNoSpeechCount = 0
+                    // v48: ye sudhaar bolta NAHI hai — is pal
+                    // mic saamne wali screen ke paas udhaar
+                    // hai (wakePaused), wahan boli ghusana
+                    // galat hoga; par ant ki wajah report me
+                    // zaroor bandhegi (koi ant bina hisaab ke
+                    // nahi).
+                    endSession(SESSION_END_WEDGED)
                     orbOverlay.hideNow()
                     wakePaused = false
                     disarmAutoResume()
@@ -710,8 +770,10 @@ class JarvisWakeService : Service() {
             if (selfEchoGuardActive()) return
             val partial = parseJsonField(hypothesis, "partial")
             rememberWakePartial(partial)
-            if (containsWakeWord(partial)) {
-                executor.execute { onWakeDetected() }
+            // v48: wake naam se shaksiyat bhi tay hoti
+            // hai — Jarvis/Maya -> MAYA, Tara -> TARA.
+            detectWakePersona(partial)?.let { persona ->
+                executor.execute { onWakeDetected(persona) }
             }
         }
 
@@ -720,8 +782,8 @@ class JarvisWakeService : Service() {
             if (selfEchoGuardActive()) return
             val text = parseJsonField(hypothesis, "text")
             rememberWakeFinal(text)
-            if (containsWakeWord(text)) {
-                executor.execute { onWakeDetected() }
+            detectWakePersona(text)?.let { persona ->
+                executor.execute { onWakeDetected(persona) }
             }
         }
 
@@ -730,8 +792,8 @@ class JarvisWakeService : Service() {
             if (selfEchoGuardActive()) return
             val text = parseJsonField(hypothesis, "text")
             rememberWakeFinal(text)
-            if (containsWakeWord(text)) {
-                executor.execute { onWakeDetected() }
+            detectWakePersona(text)?.let { persona ->
+                executor.execute { onWakeDetected(persona) }
             }
         }
 
@@ -784,8 +846,15 @@ class JarvisWakeService : Service() {
     // Wake -> ack -> command (executor thread)
     // ------------------------------------------------------------------
 
-    private fun onWakeDetected() {
+    private fun onWakeDetected(persona: Persona) {
         if (destroyed || state != State.WAKE || wakePaused) return
+        // v48: is chain ki shaksiyat wake NAAM se bandhi
+        // — "Jarvis"/"Maya" -> MAYA (Hindi), "Tara" ->
+        // TARA (Bangla) — aur report me bhi bandh gayi.
+        sessionPersona = persona
+        savePersonaDiag()
+        pendingEndReason = SESSION_END_COMPLETED
+        closingReason = SESSION_END_NOT_UNDERSTOOD
         // v16: wake hit milte hi sabse pehle screen ki roshni —
         // screen band ho to bhi user ko dikhe ki Maya jaag gayi.
         lightScreenOnWake()
@@ -823,8 +892,97 @@ class JarvisWakeService : Service() {
         orbOverlay.show()
         // Mic is fully released before Jarvis speaks, so it cannot
         // hear its own acknowledgement.
-        speaker.speak(ACK_TEXT)
+        // v48: "haan boliye" bhi shaksiyat ki apni bhasha me.
+        speaker.speak(personaAckText())
         armAckFallback()
+    }
+
+    // ------------------------------------------------------------------
+    // v48: shaksiyat wale bandhe jawab + ant ki report
+    // ------------------------------------------------------------------
+
+    /** Shaksiyat ki boli-bhasha (jawab hamesha isi me). */
+    private fun personaSpokenLang(): PlayIntent.SpokenLang =
+        sessionPersona.spokenLang()
+
+    /** Wake ke baad ki haan — Maya ki Hindi, Tara ki Bangla. */
+    private fun personaAckText(): String = when (sessionPersona) {
+        Persona.MAYA -> ACK_TEXT
+        Persona.TARA -> TARA_ACK_TEXT
+    }
+
+    /** Session ke ant ki vida line — shaksiyat ki apni bhasha me. */
+    private fun personaCloseText(): String = when (sessionPersona) {
+        Persona.MAYA -> MAYA_CLOSE_TEXT
+        Persona.TARA -> TARA_CLOSE_TEXT
+    }
+
+    /** "last_persona" report — kaun si shaksiyat ki chain chal rahi hai. */
+    private fun savePersonaDiag() {
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_persona",
+                    when (sessionPersona) {
+                        Persona.MAYA -> "maya-hindi"
+                        Persona.TARA -> "tara-bengali"
+                    }
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal flow isse nahi rukta.
+        }
+    }
+
+    /**
+     * v48: session ke ant ki wajah "last_session_end"
+     * me band karo (completed / not-understood /
+     * redirect-bn / redirect-hi / recognizer-error /
+     * quota / screen-confirm / wedged-recovered /
+     * adda-silent). Har woh raasta jo session ko
+     * wake sunne par wapas bhejta hai, yahan se
+     * guzarta hai — koi ant bina report ke nahi.
+     */
+    private fun endSession(reason: String) {
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_session_end", reason)
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal flow isse nahi rukta.
+        }
+    }
+
+    /**
+     * v48: dusri bhasha ki script wali baat par vinamra
+     * mod — MAYA session me Bangla-mukhi baat, TARA
+     * session me Devanagari-mukhi baat. Baat par kaam
+     * NAHI hoga; bulane wala ye line bolkar session
+     * vinamrata se band kar dega.
+     *
+     * Jaanch sirf SYSTEM/Zipformer wale kaan ke text
+     * par lagti hai ([currentTurnViaSystem]) — Vosk
+     * hamesha Devanagari lipyantaran deta hai, isliye
+     * uske text me Bangla boli bhi Devanagari hi
+     * dikhegi; wahan script se bhasha pehchanna jhooth
+     * hoga aur sahi Bangla hukm bhi mod kha jayega.
+     * (Ek jaani hui seema: system recognizer kabhi
+     * Bangla boli ko Devanagari me lipyantarit kar de
+     * to Maya use Hindi hi manegi — script hi ekmatra
+     * sanket hai.)
+     */
+    private fun personaRedirectLine(text: String): String? {
+        if (!currentTurnViaSystem) return null
+        val lang = PlayIntent.requestLanguage(text)
+        return when {
+            sessionPersona == Persona.MAYA &&
+                lang == PlayIntent.SpokenLang.BENGALI -> MAYA_REDIRECT_TEXT
+            sessionPersona == Persona.TARA &&
+                lang == PlayIntent.SpokenLang.HINDI -> TARA_REDIRECT_TEXT
+            else -> null
+        }
     }
 
     /**
@@ -863,6 +1021,11 @@ class JarvisWakeService : Service() {
                         updateNotification("Maya adda sun rahi hai — boliye...")
                         startCommandSession()
                     } else {
+                        // v48: jawab bola gaya — session ka ant
+                        // yahin band hota hai (wajah jawab bolne
+                        // wale raaste ne pehle bandh di thi).
+                        endSession(pendingEndReason)
+                        pendingEndReason = SESSION_END_COMPLETED
                         // v1.5: jawab khatm — gola 1.5 s aur dikh kar
                         // dheere se gayab ho jayega.
                         orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
@@ -887,6 +1050,9 @@ class JarvisWakeService : Service() {
         disarmAckFallback()
         if (ackEndsConversation) {
             ackEndsConversation = false
+            // v48: vida-line wala ant — wajah band karo,
+            // phir wake sunna phir chalu (har ant par).
+            endSession(closingReason)
             orbOverlay.hideNow()
             startWakeSession()
         } else {
@@ -908,7 +1074,13 @@ class JarvisWakeService : Service() {
      */
     private fun startCommandSession() {
         if (destroyed) return
-        if (!zipformerBrokenThisChain && isBanglaModelReady()) {
+        // v48: Zipformer SIRF Tara ke liye hai — Maya
+        // (Hindi) ke session me Bangla kaan kabhi nahi
+        // khulega; uska kram seedha system (hi-IN) ->
+        // Vosk hai, bilkul hukm ke hisaab se.
+        if (sessionPersona == Persona.TARA &&
+            !zipformerBrokenThisChain && isBanglaModelReady()
+        ) {
             startZipformerCommandSession()
             return
         }
@@ -953,7 +1125,8 @@ class JarvisWakeService : Service() {
         } catch (t: Throwable) {
             // Mic busy etc.: session shuru hi nahi ho paya — pehli
             // koshish par v12 retry ka mauka, warna wapas wake par.
-            handleCommandMiss()
+            // v48: wajah recognizer-error bandhegi.
+            handleCommandMiss(fromRecognizerError = true)
         }
     }
 
@@ -1019,10 +1192,21 @@ class JarvisWakeService : Service() {
         return true
     }
 
-    /** v38: bhasha kataar taaza karo — v35 wala hi kram (pasand -> bn-IN -> hi-IN, dohraaye bina). */
+    /**
+     * v38: bhasha kataar taaza karo.
+     * v48: kataar ab pasand se NAHI, SHAKSIYAT se
+     * banti hai — Maya ke liye SIRF hi-IN (koi bn-IN
+     * wala dusra mauka nahi) aur Tara ke liye SIRF
+     * bn-IN (koi hi-IN wala dusra mauka nahi)। Ek
+     * bhasha ki kataar khatm ho to session apne
+     * miss-niyam par jata hai, dusri bhasha par
+     * kabhi nahi girta.
+     */
     private fun resetSystemCascade() {
-        systemCascadeLanguages =
-            listOf(prefs.listenLanguage, "bn-IN", "hi-IN").distinct()
+        systemCascadeLanguages = when (sessionPersona) {
+            Persona.MAYA -> listOf("hi-IN")
+            Persona.TARA -> listOf("bn-IN")
+        }
         systemCascadeIndex = 0
     }
 
@@ -1105,7 +1289,9 @@ class JarvisWakeService : Service() {
                         // agli bhasha par wahi session phir
                         // khula hai (v35 wala hi vyavhaar).
                     }
-                    else -> handleSystemCommandMiss()
+                    else -> handleSystemCommandMiss(
+                        SESSION_END_RECOGNIZER_ERROR
+                    )
                 }
             }
         }
@@ -1189,7 +1375,9 @@ class JarvisWakeService : Service() {
      * wala hi vyavhaar) — Maya wahan khud sambhalti hai.
      * Sirf executor thread se bulao.
      */
-    private fun handleSystemCommandMiss() {
+    private fun handleSystemCommandMiss(
+        endReason: String = SESSION_END_NOT_UNDERSTOOD
+    ) {
         if (destroyed) return
         stopSystemCommandSession()
         commandKind = CommandKind.NONE
@@ -1198,10 +1386,15 @@ class JarvisWakeService : Service() {
                 addaNoSpeechCount = 1
                 startCommandSession()
             } else {
+                // v48: adda ka dusra khaali session pehle
+                // CHUP-CHAAP band hota tha — gola hatao
+                // aur seedha wake par, bina ek shabd bole
+                // (user ki shikayat wali "chup maut")। Ab
+                // vida-line bolkar band hoga, shaksiyat ki
+                // apni bhasha me, wajah ke saath.
                 addaEngine.endSession()
                 addaNoSpeechCount = 0
-                orbOverlay.hideNow()
-                startWakeSession()
+                startClosingLine(SESSION_END_ADDA_SILENT)
             }
             return
         }
@@ -1215,16 +1408,15 @@ class JarvisWakeService : Service() {
             speaker.speak(systemRetryPrompt())
             armAckFallback()
         } else {
-            startClosingLine()
+            startClosingLine(endReason)
         }
     }
 
-    /** v38: system raaste ka ek-mauka wala prompt — user ki pasandeeda bhasha me. */
+    /** v38 wala ek-mauka prompt — v48: pasand se nahi, shaksiyat ki bhasha me. */
     private fun systemRetryPrompt(): String =
-        when (prefs.listenLanguage) {
-            "hi-IN" -> "बोलिए, सुन रही हूँ।"
-            "en-IN" -> "Go ahead — I'm listening."
-            else -> "বলুন, শুনছি।"
+        when (sessionPersona) {
+            Persona.MAYA -> "बोलिए, सुन रही हूँ।"
+            Persona.TARA -> "বলুন, শুনছি।"
         }
 
     /**
@@ -1471,7 +1663,8 @@ class JarvisWakeService : Service() {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
                     // v12: bina command ke khatm — retry ya vida.
-                    handleCommandMiss()
+                    // v48: wajah recognizer-error bandhegi.
+                    handleCommandMiss(fromRecognizerError = true)
                 }
             }
         }
@@ -1480,7 +1673,8 @@ class JarvisWakeService : Service() {
             executor.execute {
                 if (!destroyed && state == State.COMMAND) {
                     // v12: bina command ke khatm — retry ya vida.
-                    handleCommandMiss()
+                    // v48: wajah recognizer-error bandhegi.
+                    handleCommandMiss(fromRecognizerError = true)
                 }
             }
         }
@@ -1517,7 +1711,32 @@ class JarvisWakeService : Service() {
         // badhayega ya imaandaari se rok dega.
         if (ScreenConfirm.deliverAnswer(text)) {
             setStatus("Screen wale kaam ka jawab mil gaya")
+            // v48: ye baat ek mukammal len-den thi —
+            // ant yahin band karo; kuch bolna NAHI hai
+            // (bolna pushti wale pul ko bigaad dega)।
+            endSession(SESSION_END_SCREEN_CONFIRM)
             startWakeSession()
+            return
+        }
+        // v48: DUSRI BHASHA PAR VINAMRA MOD — Maya ke
+        // session me Bangla-mukhi baat, Tara ke session
+        // me Devanagari-mukhi baat: uspar koi kaam NAHI
+        // hoga. Ek line bolkar (shaksiyat ki apni
+        // bhasha me) session vinamrata se band — boli
+        // khatm hote hi wake sunna phir chalu hoga
+        // (onTtsFinished wala REPLY raasta)।
+        personaRedirectLine(text)?.let { redirectLine ->
+            pendingEndReason = if (sessionPersona == Persona.MAYA) {
+                SESSION_END_REDIRECT_BN
+            } else {
+                SESSION_END_REDIRECT_HI
+            }
+            setStatus("Dusri bhasha ki baat — vinamra mod de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(redirectLine)
+            armReplyFallback(redirectLine)
+            orbOverlay.setReply(redirectLine)
             return
         }
         addaNoSpeechCount = 0
@@ -1568,6 +1787,17 @@ class JarvisWakeService : Service() {
             }
             return
         }
+        // v48: LINK wala kaam (URL + kholne/browser ka
+        // iraada) — agent se pehle pakka screen_task
+        // raasta (saamne wali screen wala hi niyam,
+        // [UrlIntent])। Kaam ka text user ki baat
+        // bilkul waisi ki waisi — URL akshar-akshar
+        // jaisa suna waisa hi jayega.
+        val urlTask = UrlIntent.extractUrlTask(text)
+        if (urlTask != null) {
+            runDirectScreenTask(text, urlTask)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -1584,7 +1814,12 @@ class JarvisWakeService : Service() {
         // v13: adda trigger ya chalu adda ho to utterance pehle
         // Maya ke AddaEngine ko jata hai — CommandEngine use beech
         // me nigal nahi sakta. Adda ke andar v12 retry nahi lagta.
-        if (addaEngine.shouldHandle(text)) {
+        // v48: adda MAYA ki apni (Hindi) baatchit hai —
+        // Tara ke Bangla session me woh kabhi nahi
+        // chalegi (uski har line Hindi hai; Tara ke
+        // session me Hindi bolna sakht-bhasha wale
+        // hukm ke khilaaf hoga)।
+        if (sessionPersona == Persona.MAYA && addaEngine.shouldHandle(text)) {
             handleAddaHeard(text)
             return
         }
@@ -1639,6 +1874,11 @@ class JarvisWakeService : Service() {
         }
         setStatus("Command mila — jawab de raha hoon")
         updateNotification("Jarvis jawab de raha hai...")
+        // v48: jawab bola ja raha hai — session ka ant
+        // "completed" band karo (quota wale khaas
+        // raaste ise bolne ke baad apni wajah se
+        // badal sakte hain — onAgentBrainAnswer dekho)।
+        pendingEndReason = SESSION_END_COMPLETED
         // v16: jawab bolna shuru — screen-wake ka samay badhao,
         // taaki jawab ke dauraan aur uske baad wale intezaar me
         // screen jala rahe.
@@ -1703,8 +1943,13 @@ class JarvisWakeService : Service() {
         val tools = AgentTools(
             applicationContext, commandEngine, fromBackgroundService = true
         )
+        // v48: is chain ki shaksiyat ka bhasha-bandhan
+        // agent tak jata hai — Maya ke session me har
+        // boli Hindi, Tara ke session me har boli
+        // Bangla, user kisi bhi bhasha me bole.
         AgentBrain.run(
-            applicationContext, geminiHistory.toList(), text, tools::execute
+            applicationContext, geminiHistory.toList(), text, tools::execute,
+            replyLanguage = personaSpokenLang()
         ) { reply ->
             executor.execute { onAgentBrainAnswer(text, reply, playQueryFallback) }
         }
@@ -1735,7 +1980,11 @@ class JarvisWakeService : Service() {
                 runDirectYouTubePlay(text, playQueryFallback)
                 return
             }
-            if (addaEngine.shouldHandle(text)) {
+            // v48: adda sirf MAYA ke session me (Hindi
+            // baatchit) — Tara me kabhi nahi.
+            if (sessionPersona == Persona.MAYA &&
+                addaEngine.shouldHandle(text)
+            ) {
                 handleAddaHeard(text)
                 return
             }
@@ -1751,12 +2000,15 @@ class JarvisWakeService : Service() {
                 finishCommandResult(
                     text,
                     CommandResult(
-                        PlayIntent.quotaReply(
-                            PlayIntent.requestLanguage(text)
-                        ),
+                        // v48: kota line bhi shaksiyat
+                        // ki pakki bhasha me hogi.
+                        PlayIntent.quotaReply(personaSpokenLang()),
                         true
                     )
                 )
+                // v48: ant ki wajah "quota" — aam
+                // "completed" se alag band karo.
+                pendingEndReason = SESSION_END_QUOTA
                 return
             }
             finishCommandResult(text, engineResult)
@@ -1767,8 +2019,10 @@ class JarvisWakeService : Service() {
         // line jayegi, kaccha payload kabhi nahi (saamne
         // wale raaste wala hi niyam, MainActivity dekho)।
         // Yaad me bhi wahi saaf roop bandhta hai.
+        // v48: chauki ki haar-line bhi shaksiyat ki
+        // pakki bhasha me — bhasha-milan yahan bhi nahi.
         val safeReply = ReplyGuard.sanitize(
-            reply, PlayIntent.requestLanguage(text)
+            reply, personaSpokenLang()
         )
         // Baatchit ki yaad: aakhiri 10 turn rakho, jodi todna mat.
         geminiHistory.add("user" to text)
@@ -1779,6 +2033,9 @@ class JarvisWakeService : Service() {
         }
         setStatus("Online jawab mila — bol rahi hoon")
         updateNotification("Jarvis jawab de raha hai...")
+        // v48: agent ka jawab bola ja raha hai — ant
+        // "completed" band karo.
+        pendingEndReason = SESSION_END_COMPLETED
         // v16 wala screen-wake refresh, aam jawab ki tarah.
         lightScreenOnWake()
         speaker.speak(safeReply)
@@ -1812,13 +2069,59 @@ class JarvisWakeService : Service() {
                 AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
             }
             PlayIntent.saveDirectPlayDiag(applicationContext, query, result)
+            // v48: natije ki boli bhi shaksiyat ki pakki
+            // bhasha me — suna hua text kisi bhi script
+            // me raha ho, Maya Hindi hi bolegi, Tara
+            // Bangla hi.
             val line = PlayIntent.playOutcomeReply(
-                result, query, PlayIntent.requestLanguage(text)
+                result, query, personaSpokenLang()
             )
             executor.execute {
                 if (destroyed || state != State.REPLY) return@execute
                 setStatus("Seedha jawab mila — bol rahi hoon")
                 updateNotification("Jarvis jawab de raha hai...")
+                pendingEndReason = SESSION_END_COMPLETED
+                lightScreenOnWake()
+                speaker.speak(line)
+                armReplyFallback(line)
+                orbOverlay.setReply(line)
+            }
+        }.start()
+    }
+
+    /**
+     * v48: bina mastishk ke seedha screen_task — LINK
+     * wala kaam ([UrlIntent]) background me bhi pakke
+     * taur par yahin aata hai (saamne wali screen wala
+     * hi niyam). Auzaar bandha (sync) hai aur kadam
+     * lambe ho sakte hain, isliye apne thread par;
+     * natija wapas executor par aakar aam jawab ki
+     * tarah bola jayega. Bola jaane wala saar
+     * [UrlIntent.spokenSummary] se — screen agent ke
+     * apne shabd milein to wohi, warna shaksiyat ki
+     * bhasha me natije ki imaandaar bandhi line.
+     * State REPLY pehle se hai aur command session
+     * band hai, bilkul agent wale jawab jaisa mahaul.
+     */
+    private fun runDirectScreenTask(text: String, task: String) {
+        setStatus("Link wala kaam screen par kar rahi hoon...")
+        updateNotification("Screen wala kaam chal raha hai...")
+        Thread {
+            val tools = AgentTools(
+                applicationContext, commandEngine, fromBackgroundService = true
+            )
+            val result = try {
+                tools.execute("screen_task", JSONObject().put("task", task))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            UrlIntent.saveRouteDiag(applicationContext, result.ok)
+            val line = UrlIntent.spokenSummary(result, personaSpokenLang())
+            executor.execute {
+                if (destroyed || state != State.REPLY) return@execute
+                setStatus("Screen wale kaam ka jawab mila — bol rahi hoon")
+                updateNotification("Jarvis jawab de raha hai...")
+                pendingEndReason = SESSION_END_COMPLETED
                 lightScreenOnWake()
                 speaker.speak(line)
                 armReplyFallback(line)
@@ -1881,6 +2184,10 @@ class JarvisWakeService : Service() {
         } else {
             setStatus("Adda khatm — jawab de raha hoon")
             updateNotification("Jarvis jawab de raha hai...")
+            // v48: adda is jawab ke saath band ho raha
+            // hai — jawab hi uski vida hai, ant
+            // "completed" band karo.
+            pendingEndReason = SESSION_END_COMPLETED
         }
         // v16: adda ka jawab bolna shuru — screen-wake refresh.
         lightScreenOnWake()
@@ -1904,16 +2211,26 @@ class JarvisWakeService : Service() {
         updateNotification("Phir se boliye...")
         // v16: retry prompt bhi ek bola hua jawab hai — screen jala rahe.
         lightScreenOnWake()
-        // v33: prompt Bangla me — malik Bangla bolte hain, aur
-        // TtsSpeaker ab script dekhkar awaaz khud badalta hai.
-        speaker.speak(
-            if (commandRetryCount <= 1) {
-                RETRY_PROMPT_FIRST
-            } else {
-                RETRY_PROMPT_SECOND
-            }
-        )
+        // v33: prompt Bangla me tha — v48: ab prompt
+        // SHAKSIYAT ki bhasha me hai (Maya = Hindi,
+        // Tara = v33 wali Bangla line hi), kyunki
+        // bhasha-milan hi is sanskaran ki jad hai.
+        speaker.speak(personaRetryPrompt())
         armAckFallback()
+    }
+
+    /** Retry wala prompt — shaksiyat ki apni bhasha me, koshish ki ginati ke hisaab se. */
+    private fun personaRetryPrompt(): String = when (sessionPersona) {
+        Persona.MAYA -> if (commandRetryCount <= 1) {
+            MAYA_RETRY_PROMPT_FIRST
+        } else {
+            MAYA_RETRY_PROMPT_SECOND
+        }
+        Persona.TARA -> if (commandRetryCount <= 1) {
+            RETRY_PROMPT_FIRST
+        } else {
+            RETRY_PROMPT_SECOND
+        }
     }
 
     /**
@@ -1921,14 +2238,25 @@ class JarvisWakeService : Service() {
      * vinamra line bolkar wapas wake par jao (ACK wale
      * raaste se, taaki boli khatm hone par hi mic khule).
      * Sirf executor thread se bulao.
+     *
+     * v48: vida line ab SHAKSIYAT ki bhasha me hai
+     * (purani bandhi Bangla line Tara ki hi hai; Maya
+     * apni Hindi line bolegi) aur ant ki wajah
+     * [reason] yahin bandhti hai — boli khatm hone par
+     * onAckSpeechDone use "last_session_end" me
+     * likhega. Koi bhi ant bina boli + bina wajah ke
+     * nahi hoga.
      */
-    private fun startClosingLine() {
+    private fun startClosingLine(
+        reason: String = SESSION_END_NOT_UNDERSTOOD
+    ) {
+        closingReason = reason
         state = State.ACK
         ackEndsConversation = true
         setStatus("Samajh nahi aaya — wapas 'Jarvis' sun raha hoon")
         updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
         lightScreenOnWake()
-        speaker.speak(CLOSE_PROMPT_TEXT)
+        speaker.speak(personaCloseText())
         armAckFallback()
     }
 
@@ -1939,7 +2267,7 @@ class JarvisWakeService : Service() {
      * mauka; retry ke baad purana chup vida — gola hatao aur
      * wapas wake sunne par jao. Sirf executor thread se bulao.
      */
-    private fun handleCommandMiss() {
+    private fun handleCommandMiss(fromRecognizerError: Boolean = false) {
         if (destroyed) return
         stopCommandSession()
         if (addaEngine.isActive) {
@@ -1948,21 +2276,29 @@ class JarvisWakeService : Service() {
             // mauka; dusra lagatar khaali session adda band karke
             // wapas wake par. Asli utterance aate hi ginati reset
             // ho jati hai (onCommandHeard).
+            // v48: dusra khaali session ab CHUP nahi marega —
+            // vida-line bolkar band hoga (startClosingLine),
+            // shaksiyat ki bhasha me, wajah ke saath.
             if (addaNoSpeechCount == 0) {
                 addaNoSpeechCount = 1
                 startCommandSession()
             } else {
                 addaEngine.endSession()
                 addaNoSpeechCount = 0
-                orbOverlay.hideNow()
-                startWakeSession()
+                startClosingLine(SESSION_END_ADDA_SILENT)
             }
             return
         }
         if (commandRetryCount < MAX_COMMAND_RETRIES) {
             startCommandRetry()
         } else {
-            startClosingLine()
+            startClosingLine(
+                if (fromRecognizerError) {
+                    SESSION_END_RECOGNIZER_ERROR
+                } else {
+                    SESSION_END_NOT_UNDERSTOOD
+                }
+            )
         }
     }
 
@@ -2053,6 +2389,11 @@ class JarvisWakeService : Service() {
                     // bhi adda wahi se aage badhe, wake par na gire.
                     startCommandSession()
                 } else {
+                    // v48: jawab bola mana gaya (TTS-finish
+                    // callback kho gaya tha) — ant yahin
+                    // band karo, bilkul onTtsFinished jaise.
+                    endSession(pendingEndReason)
+                    pendingEndReason = SESSION_END_COMPLETED
                     orbOverlay.hideAfter(ORB_REPLY_LINGER_MS)
                     startWakeSession()
                 }
@@ -2411,6 +2752,55 @@ class JarvisWakeService : Service() {
         }
     }
 
+    /**
+     * v48: teesra wake naam "Tara" (তারা) — par Maya
+     * wale token-niyam se SAKHT sthan-niyam ke saath:
+     * "তারা" aam Bangla me "ve log" bhi hota hai,
+     * isliye naam SIRF baat ki SHURUAAT me (ya akela)
+     * mile tabhi wake hoga; beech-wakya wala তারা
+     * kabhi nahi jagayega. Shuruaat me "হে"/"hey"/"আরে"
+     * jaisa pukar-shabd ho to uske theek baad wala
+     * token bhi chalega. Latin roop par distance-1
+     * wali fuzzy chhoot Maya wali hi hai; script
+     * roopon par pakka token match hi hai (squash ke
+     * baad ve chhote ho jate hain — Maya wala nota).
+     * Vosk Hindi use "तारा" sunta hai — Devanagari,
+     * Bangla aur Latin, teeno roop kataar me hain.
+     */
+    private fun containsTaraCall(text: String): Boolean {
+        val variants = TARA_WAKE_WORDS.map { squashWakeText(it) }.toSet()
+        val tokens = text.split(Regex("\\s+"))
+            .flatMap { it.split('-') }
+            .map { squashWakeText(it) }
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return false
+        fun isTara(token: String): Boolean =
+            token in variants ||
+                (token.length >= 4 && variants.any { variant ->
+                    variant.all { ch -> ch.code < 128 } &&
+                        levenshteinDistance(token, variant) <= 1
+                })
+        if (isTara(tokens[0])) return true
+        // "হে তারা ..." — pukar-shabd ke baad wala naam.
+        val particles = WAKE_PARTICLES.map { squashWakeText(it) }.toSet()
+        return tokens.size >= 2 && tokens[0] in particles &&
+            isTara(tokens[1])
+    }
+
+    /**
+     * v48: suna hua text kis shaksiyat ko jaga raha
+     * hai — Tara ki sthan-bandhi pehchan PEHLE (jo
+     * baat ki shuruaat me naam lekar bulaye, usi ki
+     * shaksiyat), phir purana Jarvis/Maya wala raasta
+     * -> MAYA. Kuch na mile to null (wake nahi).
+     */
+    private fun detectWakePersona(text: String): Persona? {
+        if (text.isBlank()) return null
+        if (containsTaraCall(text)) return Persona.TARA
+        if (containsWakeWord(text)) return Persona.MAYA
+        return null
+    }
+
     private fun squashWakeText(text: String): String {
         val result = StringBuilder()
         for (ch in text.lowercase()) {
@@ -2462,12 +2852,47 @@ class JarvisWakeService : Service() {
 
         private const val ACK_TEXT = "हाँ, बोलिए"
 
+        /** v48: Tara ki haan — Bangla me. */
+        private const val TARA_ACK_TEXT = "হ্যাঁ, বলো"
+
         /** v12: command na samajhne par ek baar dobara mauka dene ka prompt. */
         // v33: retry prompts Bangla me (malik ki bhasha);
         // TtsSpeaker script dekhkar Bangla awaaz lagayega.
+        // v48: ye dono ab TARA ke prompt hain; Maya ke
+        // Hindi prompt neeche alag hain — har shaksiyat
+        // sirf apni bhasha bolegi.
         private const val RETRY_PROMPT_FIRST = "বুঝতে পারিনি — আরেকবার বলো তো।"
         private const val RETRY_PROMPT_SECOND = "আরেকবার একটু আস্তে বলো তো — শুনছি।"
-        private const val CLOSE_PROMPT_TEXT = "ঠিক আছে — পরে আবার 'জার্ভিস' বলে ডেকো।"
+        private const val MAYA_RETRY_PROMPT_FIRST = "समझ नहीं आया — एक बार फिर बोलिए।"
+        private const val MAYA_RETRY_PROMPT_SECOND = "एक बार फिर, थोड़ा धीरे बोलिए — सुन रही हूँ।"
+
+        /** v48: vida (closing) lines — har shaksiyat ki apni bhasha me. */
+        private const val MAYA_CLOSE_TEXT =
+            "ठीक है, मैं जाती हूँ — जब याद आए तो 'माया' या 'जार्विस' बोलकर बुला लेना।"
+        private const val TARA_CLOSE_TEXT =
+            "ঠিক আছে, আমি যাচ্ছি — মনে পড়লে 'তারা' বলে ডেকো।"
+
+        /**
+         * v48: dusri bhasha par vinamra mod (redirect)
+         * wali pakki line — Maya ke session me Bangla
+         * baat aaye to Hindi me ye, Tara ke session me
+         * Hindi baat aaye to Bangla me woh.
+         */
+        private const val MAYA_REDIRECT_TEXT =
+            "मैं सिर्फ़ हिंदी समझती हूँ। बांग्ला के लिए 'तारा' कहकर बुलाइए।"
+        private const val TARA_REDIRECT_TEXT =
+            "আমি শুধু বাংলা বুঝি — হিন্দির জন্য 'মায়া' বলে ডাকো।"
+
+        /** v48: "last_session_end" report ki wajahen. */
+        private const val SESSION_END_COMPLETED = "completed"
+        private const val SESSION_END_NOT_UNDERSTOOD = "not-understood"
+        private const val SESSION_END_REDIRECT_BN = "redirect-bn"
+        private const val SESSION_END_REDIRECT_HI = "redirect-hi"
+        private const val SESSION_END_RECOGNIZER_ERROR = "recognizer-error"
+        private const val SESSION_END_QUOTA = "quota"
+        private const val SESSION_END_SCREEN_CONFIRM = "screen-confirm"
+        private const val SESSION_END_ADDA_SILENT = "adda-silent"
+        private const val SESSION_END_WEDGED = "wedged-recovered"
 
         /** v33: ek command ko kul itne retry milenge. */
         private const val MAX_COMMAND_RETRIES = 2
@@ -2537,6 +2962,25 @@ class JarvisWakeService : Service() {
         private val MAYA_WAKE_WORDS = listOf(
             "माया", "মায়া", "মাযা", "মাইয়া",
             "maya", "maaya", "maiya"
+        )
+
+        /**
+         * v48: teesre wake naam "Tara" ke roop —
+         * Devanagari (Vosk Hindi wahi sunta hai), Bangla
+         * aur Latin. Ye MAYA_WAKE_WORDS se alag isliye
+         * hain kyunki inpar sthan-bandha niyam lagta hai
+         * (containsTaraCall dekho): "তারা" aam shabd
+         * hai, beech-wakya me kabhi wake nahi.
+         */
+        private val TARA_WAKE_WORDS = listOf(
+            "तारा", "তারা", "তাঁরা",
+            "tara", "taara"
+        )
+
+        /** v48: naam se pehle aane wale pukar-shabd ("হে তারা"). */
+        private val WAKE_PARTICLES = listOf(
+            "হে", "হেই", "আরে", "ও", "हे", "अरे",
+            "hey", "he", "are", "o"
         )
 
         /** True while the wake service is alive (same process as the UI). */
