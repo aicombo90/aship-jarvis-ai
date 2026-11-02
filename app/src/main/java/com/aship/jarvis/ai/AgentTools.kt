@@ -211,9 +211,13 @@ class AgentTools(
      * Natija hamesha sachha hai — poora hua, pushti na
      * milne par ruka, ya fail (kahaan tak pahuncha,
      * uske saath). Ye auzaar bandha (sync) hai aur
-     * ScreenAgent ki apni kul seema (~150 s) tak chal
-     * sakta hai — bulana hamesha background thread se
-     * hi hota hai (AgentBrain ka executor).
+     * ScreenAgent ki apni kul seema (~300 s, v45) tak
+     * chal sakta hai — bulana hamesha background
+     * thread se hi hota hai (AgentBrain ka executor).
+     * v45: [fromBackgroundService] ScreenAgent tak bhi
+     * jata hai — uske open_app kadam ka launch raasta
+     * (seedha ya OverlayLauncher wala) isiliye wahi
+     * rehta hai jo is auzaar ke apne open_app ka hai.
      */
     private fun screenTask(task: String): ToolResult {
         if (task.isEmpty()) {
@@ -225,7 +229,8 @@ class AgentTools(
         // screen wale mastishk ke saath jud jata hai —
         // kaam ka apna text bilkul nahi badalta.
         val playbook = TrashPlaybook.forTask(task)
-        val outcome = ScreenAgent(context).runTask(task, playbook)
+        val outcome = ScreenAgent(context, fromBackgroundService)
+            .runTask(task, playbook)
         return ToolResult(outcome.ok, outcome.text)
     }
 
