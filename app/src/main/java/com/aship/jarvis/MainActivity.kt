@@ -113,6 +113,13 @@ class MainActivity : Activity() {
     // "jarvis_diag" ki last_screen_run report yahan dikhti hai.
     private lateinit var screenRunText: TextView
 
+    // v46: aakhiri screen-kaam ki audit report line —
+    // ScreenAudit "last_screen_audit" bandhta hai
+    // (<kaam> — <n> actions, <natija>); poora audit
+    // record app ke andar wali file me rehta hai,
+    // yahan sirf uska saar dikhta hai.
+    private lateinit var screenAuditText: TextView
+
     // v41: Bangla offline model (Zipformer) ki haalat —
     // status line + download button is screen par hi hain
     // taaki malik ek nazar me dekhe: model aaya ya nahi,
@@ -298,6 +305,7 @@ class MainActivity : Activity() {
         youtubeTapText = findViewById(R.id.youtubeTapText)
         agentRunText = findViewById(R.id.agentRunText)
         screenRunText = findViewById(R.id.screenRunText)
+        screenAuditText = findViewById(R.id.screenAuditText)
         banglaModelStatusText = findViewById(R.id.banglaModelStatusText)
         banglaModelButton = findViewById(R.id.banglaModelButton)
         banglaAsrText = findViewById(R.id.banglaAsrText)
@@ -1317,6 +1325,17 @@ class MainActivity : Activity() {
                     "Screen chaal (aakhiri): abhi tak koi koshish nahi"
                 } else {
                     "Screen chaal (aakhiri): $screen"
+                }
+            }
+            // v46: aakhiri screen-kaam ki audit report —
+            // ScreenAudit "last_screen_audit" bandhta hai
+            // (<kaam> — <n> actions, <natija> wale roop me).
+            if (::screenAuditText.isInitialized) {
+                val audit = diag.getString("last_screen_audit", null)
+                screenAuditText.text = if (audit.isNullOrBlank()) {
+                    "Screen audit (aakhiri): abhi tak koi record nahi"
+                } else {
+                    "Screen audit (aakhiri): $audit"
                 }
             }
             // v41: Bangla offline kaan ki report bhi yahin
