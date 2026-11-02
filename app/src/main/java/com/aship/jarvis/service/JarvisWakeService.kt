@@ -29,6 +29,7 @@ import android.widget.TextView
 import com.aship.jarvis.MainActivity
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.chat.AddaAction
@@ -1761,9 +1762,17 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, engineResult)
             return
         }
+        // v42: prastuti wali chauki — jawab protocol JSON
+        // bankar aaya ho to boli/bubble me sirf uski "say"
+        // line jayegi, kaccha payload kabhi nahi (saamne
+        // wale raaste wala hi niyam, MainActivity dekho)।
+        // Yaad me bhi wahi saaf roop bandhta hai.
+        val safeReply = ReplyGuard.sanitize(
+            reply, PlayIntent.requestLanguage(text)
+        )
         // Baatchit ki yaad: aakhiri 10 turn rakho, jodi todna mat.
         geminiHistory.add("user" to text)
-        geminiHistory.add("model" to reply)
+        geminiHistory.add("model" to safeReply)
         while (geminiHistory.size > MAX_GEMINI_HISTORY_ENTRIES) {
             geminiHistory.removeAt(0)
             geminiHistory.removeAt(0)
@@ -1772,9 +1781,9 @@ class JarvisWakeService : Service() {
         updateNotification("Jarvis jawab de raha hai...")
         // v16 wala screen-wake refresh, aam jawab ki tarah.
         lightScreenOnWake()
-        speaker.speak(reply)
-        armReplyFallback(reply)
-        orbOverlay.setReply(reply)
+        speaker.speak(safeReply)
+        armReplyFallback(safeReply)
+        orbOverlay.setReply(safeReply)
     }
 
     /**
