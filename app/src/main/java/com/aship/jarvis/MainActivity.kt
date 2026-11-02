@@ -26,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
@@ -34,6 +35,7 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.UrlIntent
@@ -147,6 +149,12 @@ class MainActivity : Activity() {
     // not-understood / redirect-bn ...). Yahan sirf
     // dono ka jod dikhta hai.
     private lateinit var personaText: TextView
+
+    // v49: seekhe hue kaamon ki kul ginati —
+    // [LearnedRoutines] ki godam se taaza padhkar
+    // dikhti hai (kaam ke naam yahan nahi, woh
+    // "কী কী শিখেছ" bolne par awaaz se milte hain)।
+    private lateinit var learnedText: TextView
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -323,6 +331,7 @@ class MainActivity : Activity() {
         banglaAsrText = findViewById(R.id.banglaAsrText)
         quotaText = findViewById(R.id.quotaText)
         personaText = findViewById(R.id.personaText)
+        learnedText = findViewById(R.id.learnedText)
         banglaModelButton.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
@@ -754,6 +763,30 @@ class MainActivity : Activity() {
         val vocative = PersonaVocative.stripVocative(text)
         val commandText = vocative?.second ?: text
         val vocativeLang = vocative?.first?.spokenLang()
+        // v49: SEEKHNE WALE PAKKE HUKM — wake service
+        // wala hi ek object ([LearnCommands]) yahan
+        // bhi: "মনে রেখো" aakhiri SAFAL screen-kaam
+        // ko bandhta hai (asafal par imaandaar
+        // manaahi — asafal chaal kabhi nahi seekhi
+        // jati), "শিখে নাও: …" bolkar sikhayi
+        // chaal, "কী কী শিখেছ" bandhe naamon ki
+        // suchi, naam wala "ভুলে যাও" ek routine
+        // mitata hai। Baat seekhne wali na ho to
+        // null — aam raasta bilkul pehle jaisa
+        // chalega (tathya wala "মনে রেখো, <baat>"
+        // brain ke remember_fact par hi jayega,
+        // [LearnCommands] ke bandhe niyam se)।
+        // Bhasha: naam-pukar wali shaksiyat ki,
+        // warna hukm ki apni।
+        LearnCommands.tryHandle(
+            this, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText)
+        )?.let { learnLine ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Maya: $learnLine"
+            speaker.speak(learnLine)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -1476,6 +1509,13 @@ class MainActivity : Activity() {
                 } else {
                     "Persona (aakhiri): $persona · $sessionEnd"
                 }
+            }
+            // v49: seekhe hue kaamon ki ginati —
+            // godam se taaza ginati (naam yahan
+            // nahi dikhte; woh bolkar milte hain)।
+            if (::learnedText.isInitialized) {
+                learnedText.text =
+                    "শেখা কাজ (mot): " + LearnedRoutines.count(this)
             }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
