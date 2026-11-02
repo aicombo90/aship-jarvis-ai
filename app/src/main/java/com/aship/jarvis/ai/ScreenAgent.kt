@@ -156,6 +156,23 @@ import java.util.concurrent.TimeUnit
  * to imaandaar FAILED; is sanskar ka koi offline
  * screen-agent nahi hai.
  *
+ * v48: TASVEER-KADAM AB KOTA PAR NAHI MARTA. Live
+ * test (2026-11-02) me pehla asal screen-kaam isiliye
+ * mara tha — "FAILED (koi model nahi) (0 steps,
+ * vision 1/15)" — kyunki mukhya kataar 429 se khatm
+ * thi aur tasveer-kadam ke paas koi dusri sharan thi
+ * hi nahi. Ab kram teen-padraav wala hai: (1) mukhya
+ * kataar (VISION), woh QuotaManager ki haalat se
+ * pehle se band ho to use chhoona hi nahi; (2) Lite
+ * kataar par tasveer (VISION_LITE) — kataar me
+ * "vision via lite (main quota sesh)" bandhta hai;
+ * (3) woh bhi na mile to kadam node-raaste (TEXT)
+ * par chalta hai — "vision unavailable — node-only
+ * step" wala nota kataar me. Kaam model ki wajah se
+ * tabhi marta hai jab node-kadam bhi bina jawab ke
+ * rahe. Tasveer-kota (vision n/15) teeno haalon me
+ * ek hi kadam ke liye ek hi baar ginta hai.
+ *
  * Har daud ki report "jarvis_diag" me "last_screen_run"
  * par band hoti hai: user ke apne shabdon wala kaam
  * (kata hua), natija, aur kitne kadam chale. Model ne
@@ -629,24 +646,105 @@ class ScreenAgent(
                         "you will NOT receive more images in this task."
                 )
             }
-            val raw = if (stepImage != null) {
+            var raw: String?
+            if (stepImage != null) {
                 // v43: tasveer wala kadam VISION varg —
                 // mukhya model kataar hi chalegi.
-                GeminiBrain.requestAgentRoundWithImage(
-                    context,
-                    SCREEN_INSTRUCTION,
-                    listOf(
-                        "user" to buildVisionStepPrompt(
-                            task, history, snapshot, stepMarked
-                        )
-                    ),
-                    stepImage,
-                    GeminiBrain.RequestClass.VISION
+                val visionContents = listOf(
+                    "user" to buildVisionStepPrompt(
+                        task, history, snapshot, stepMarked
+                    )
                 )
+                // v48: mukhya kataar is pal uplabdh hi
+                // nahi (QuotaManager: har mukhya model
+                // exhausted / thand / uplabdh-nahi) to
+                // uspar koshish jalana bekaar hai — seedha
+                // Lite wali dusri sharan par jao.
+                val mainChainDown = GeminiBrain.MAIN_MODELS.all {
+                    QuotaManager.isSkippedToday(context, it)
+                }
+                var visionRaw: String? = null
+                var visionViaLite = false
+                if (!mainChainDown) {
+                    visionRaw = GeminiBrain.requestAgentRoundWithImage(
+                        context,
+                        SCREEN_INSTRUCTION,
+                        visionContents,
+                        stepImage,
+                        GeminiBrain.RequestClass.VISION
+                    )
+                }
+                if (visionRaw == null) {
+                    // v48: mukhya kataar kota/thand se
+                    // mari (ya shuru se hi band thi) —
+                    // tasveer Lite modelon ko do. Lite
+                    // bhi tasveer samajh sakte hain aur
+                    // Set-of-Mark nishan tap ko bandhe
+                    // hisse ke pakke beech par hi rakhte
+                    // hain, isliye is sharan ki laagat
+                    // bandhi hui hai. Ye bhi ek tasveer-
+                    // kadam hi hai — [visionUsed] upar
+                    // pehle hi is kadam ke liye gina ja
+                    // chuka hai, kota waisa hi rehta hai.
+                    val liteRaw = GeminiBrain.requestAgentRoundWithImage(
+                        context,
+                        SCREEN_INSTRUCTION,
+                        visionContents,
+                        stepImage,
+                        GeminiBrain.RequestClass.VISION_LITE
+                    )
+                    if (liteRaw != null) {
+                        visionRaw = liteRaw
+                        visionViaLite = true
+                    }
+                }
+                if (visionViaLite) {
+                    history.add(
+                        "System note: vision via lite (main quota " +
+                            "sesh) — the main model chain could not " +
+                            "serve this image step, so a Lite model " +
+                            "read the image instead. The numbered " +
+                            "marks are unchanged."
+                    )
+                }
+                if (visionRaw != null) {
+                    raw = visionRaw
+                } else {
+                    // v48: koi model tasveer nahi le paya —
+                    // kaam YAHIN nahi marta (v47 tak marta
+                    // tha: "FAILED (koi model nahi)"). Saar
+                    // uplabdh ho to ye kadam NODE-raaste par
+                    // chalega; kaam model ki wajah se tabhi
+                    // marega jab ye node-kadam bhi bina
+                    // jawab ke rahe (neeche wala purana
+                    // FAILED raasta).
+                    history.add(
+                        "System note: vision unavailable — " +
+                            "node-only step. No model could serve " +
+                            "the image this step; decide from the " +
+                            "element list only."
+                    )
+                    raw = GeminiBrain.requestAgentRound(
+                        context,
+                        SCREEN_INSTRUCTION,
+                        listOf(
+                            "user" to buildStepPrompt(
+                                task, history, snapshot
+                            )
+                        ),
+                        GeminiBrain.RequestClass.TEXT
+                    )
+                    // Is kadam par model ne nishan dekhe
+                    // hi nahi — tap_mark/long_press_mark
+                    // ke nambar bekaar hain; khaali kataar
+                    // unhe imaandaari se "no such mark"
+                    // banayegi.
+                    stepMarked = emptyList()
+                }
             } else {
                 // v43: node-only kadam TEXT varg — Lite
                 // kataar pehle, mukhya kota bachega.
-                GeminiBrain.requestAgentRound(
+                raw = GeminiBrain.requestAgentRound(
                     context,
                     SCREEN_INSTRUCTION,
                     listOf("user" to buildStepPrompt(task, history, snapshot)),
