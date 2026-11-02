@@ -111,6 +111,24 @@ import java.util.concurrent.TimeUnit
  * tarah jaancha jata hai par atke me nahi ginta —
  * uska apna FOUND/TIMEOUT hi uski report hai.
  *
+ * v46: SURAKSHA-PARDA + AUDIT — taqaat ke saath
+ * hifazat ki bandhi bhi. Banking/UPI/payment apps
+ * ([ScreenSafety] ki kataar + launcher-naam wala
+ * darja) is agent ke liye bilkul band hain: kaam ki
+ * shuruat me saamne wali app waisi ho to kaam bina
+ * ek bhi kadam liye mana hota hai (REFUSED); beech
+ * daud me waisi app saamne aate hi kaam wahin bandh
+ * hota hai (BLOCKED) — har chakkar ki pehchan
+ * node-saar se hoti hai, isliye koi tasveer waisi
+ * screen par kabhi banti hi nahi; aur open_app ka
+ * nishana waisi app ho to kholna hi nahi padta
+ * (REFUSED). Saath me har daud — safal ho ya roki
+ * hui — app ke andar ek audit record chhodti hai
+ * ([ScreenAudit]): kaam, har chala kadam uske
+ * natije ke saath, jaanch ke faisle, pushtiyan,
+ * sudhaar, aakhiri natija. Likhe hue sandeshon ka
+ * asal text audit me kabhi nahi jata.
+ *
  * Bandh: zyada se zyada [MAX_ROUNDS] kadam-faisle aur
  * kul ~[TOTAL_BUDGET_MS] ms; dono me se jo pehle
  * khatm, kaam wahin imaandaari se rukta hai.
@@ -202,12 +220,54 @@ class ScreenAgent(
     private var recoveryCount = 0
 
     /**
+     * v46: is daud ka aakhiri [saveDiag] natija-naam —
+     * audit record ka "outcome" yahi banta hai (wahan
+     * saveDiag har bade rukhne par bulaya jata hai)।
+     * [runTask] shuru me saaf karta hai.
+     */
+    private var auditOutcomeLabel: String? = null
+
+    /**
      * Ek kaam chalao — bandha (sync) call, background
      * thread se hi bulana. [playbook] ho to uski
      * bandhi hidayat har kadam ke sandesh me judti
      * hai; kaam ka apna text bilkul nahi badalta.
+     *
+     * v46: ye sirf oopar wala ghaira hai — asal daud
+     * [runTaskLoop] me chalti hai, aur kaam jis bhi
+     * haal me khatm ho (safal, asafal, ruka, atka,
+     * suraksha se mana), aakhir me [ScreenAudit] me
+     * ek record band hota hai. Kataar (history) isiliye
+     * yahan bankar andar jaati hai.
      */
     fun runTask(taskRaw: String, playbook: String? = null): Outcome {
+        val history = mutableListOf<String>()
+        auditOutcomeLabel = null
+        val outcome = try {
+            runTaskLoop(taskRaw, playbook, history)
+        } catch (t: Throwable) {
+            // Daud beech me toot jaye tab bhi record bane;
+            // bulane wale ke liye imaandaar FAILED hi
+            // sahi jawab hai.
+            Outcome(
+                false,
+                "FAILED — the screen task stopped because of an " +
+                    "unexpected internal problem. Tell the user " +
+                    "honestly that the task could not be done."
+            )
+        }
+        ScreenAudit.append(
+            context, taskRaw.trim(), history, auditOutcomeLabel
+        )
+        return outcome
+    }
+
+    /** Asal daud — [runTask] se bulta hai, kataar bahar se aati hai. */
+    private fun runTaskLoop(
+        taskRaw: String,
+        playbook: String?,
+        history: MutableList<String>
+    ): Outcome {
         val task = taskRaw.trim()
         if (task.isEmpty()) {
             return Outcome(false, "No task text was given.")
@@ -234,7 +294,6 @@ class ScreenAgent(
         }
         val lang = PlayIntent.requestLanguage(task)
         val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
-        val history = mutableListOf<String>()
         val confirmedTargets = mutableSetOf<String>()
         var stepsDone = 0
         var invalidReplies = 0
@@ -286,6 +345,17 @@ class ScreenAgent(
                 )
             }
             var snapshot = capturedSnapshot
+            // v46: SURAKSHA-JAANCH — is chakkar ka sabse
+            // pehla kaam: saamne wali app banking/payment
+            // wali ho to kaam yahin rukta hai. Pehchan
+            // node-saar (package + launcher naam) par hai,
+            // isliye na model bulta hai, na tasveer banti
+            // hai, na koi kadam chalta hai. Pehle chakkar
+            // par mana (REFUSED), beech daud me bandh
+            // (BLOCKED) — faisla [blockedOutcomeIfDenied] me.
+            blockedOutcomeIfDenied(
+                snapshot, rounds == 1, task, stepsDone, history
+            )?.let { return it }
             // v44: Pichhle kadam ki JAANCH — pichhle chakkar
             // me jo kadam chala tha, uske pehle wale
             // hastakshar se is snapshot ka hastakshar milao
@@ -463,6 +533,13 @@ class ScreenAgent(
                     }
                 }
             }
+            // v46: sudhaar-Back ne taaza snapshot badla ho
+            // to suraksha-jaanch dobara — tasveer/model se
+            // pehle. Aam haal me snapshot wahi hai aur ye
+            // jaanch pehli wali ki dohraav-matr hai.
+            blockedOutcomeIfDenied(
+                snapshot, rounds == 1, task, stepsDone, history
+            )?.let { return it }
             prevSignature = signatureOf(snapshot)
             // v39: is kadam par tasveer chahiye kya? Saar
             // kaam ka ho to node-raasta (purana, kota-mukt);
@@ -873,6 +950,47 @@ class ScreenAgent(
                     settle(deadline)
                 }
                 is ScreenAction.OpenApp -> {
+                    // v46: SURAKSHA — kholne se PEHLE nishana
+                    // jaancho: manga naam/package asal me
+                    // banking/payment wali app par utre to
+                    // kholna hi mana hai aur kaam yahin
+                    // bandh. Model home-screen ke aikon se
+                    // ghumkar bhi wahan nahi pahunchega —
+                    // agli pehchan (chakkar ki shuruat wali
+                    // jaanch) use pehle hi kadam par rokegi.
+                    val deniedTarget = deniedOpenTarget(action.value)
+                    if (deniedTarget != null) {
+                        stepsDone++
+                        history.add(
+                            "$stepsDone. open_app \"" + action.value +
+                                "\" -> REFUSED (banking/payment app)"
+                        )
+                        saveDiag(
+                            task,
+                            "BLOCKED (open_app refused: " +
+                                "banking/payment app)",
+                            stepsDone
+                        )
+                        return Outcome(
+                            false,
+                            "BLOCKED — the screen agent tried to " +
+                                "open a banking/payment app (" +
+                                deniedTarget + ") and the safety " +
+                                "layer refused: Maya never opens or " +
+                                "operates banking/payment apps, for " +
+                                "the user's own safety. The app was " +
+                                "NOT opened by the agent. Actions " +
+                                "taken so far: " +
+                                historySummary(history) + ". Tell " +
+                                "the user plainly, in their own " +
+                                "language, that Maya cannot open or " +
+                                "work inside a banking/payment app — " +
+                                "for example in Bengali: \"এটা " +
+                                "ব্যাংকিং/পেমেন্ট অ্যাপ — এর ভিতরে " +
+                                "আমি কাজ করতে পারি না, তোমার " +
+                                "সুরক্ষার জন্য।\""
+                        )
+                    }
                     // v45: app kholna/badlo — mashinari wahi
                     // jo AgentTools ka open_app leta hai
                     // (openAppSync): kai-app wale kaam ab
@@ -1164,6 +1282,113 @@ class ScreenAgent(
     }
 
     // ------------------------------------------------------------------
+    // v46: Suraksha-parda — banking/payment apps par rok
+    // ------------------------------------------------------------------
+
+    /**
+     * Is pal saamne wali app mana ho to kaam rokne wala
+     * [Outcome], warna null. [atTaskStart] = pehla
+     * chakkar: wahan rok ka naam REFUSED hai (ek bhi
+     * kadam nahi chala); beech daud me BLOCKED. Dono
+     * haal me: koi model-call nahi, koi tasveer nahi,
+     * koi kadam nahi — pehchan sirf node-saar ki
+     * [JarvisAccessibilityService.ScreenSnapshot.packageName]
+     * aur launcher naam par hai ([ScreenSafety])।
+     * Rok audit ke liye kataar me "System note" bankar
+     * bhi rehti hai.
+     */
+    private fun blockedOutcomeIfDenied(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        atTaskStart: Boolean,
+        task: String,
+        stepsDone: Int,
+        history: MutableList<String>
+    ): Outcome? {
+        val reason = ScreenSafety.denyReason(context, snapshot.packageName)
+            ?: return null
+        val pkg = snapshot.packageName.ifEmpty { "(unknown)" }
+        history.add(
+            "System note: task stopped by the safety layer — " +
+                "banking/payment app in foreground (" + pkg +
+                ", matched by " + reason + "); no action was " +
+                "taken inside it."
+        )
+        return if (atTaskStart) {
+            saveDiag(task, "REFUSED (banking/payment app)", stepsDone)
+            Outcome(
+                false,
+                "REFUSED — this screen task starts inside a " +
+                    "banking/payment app (" + pkg + "), and Maya " +
+                    "never operates inside banking or payment " +
+                    "apps, for the user's own safety. NOTHING " +
+                    "was done: no step was taken and the app " +
+                    "was not touched. Tell the user plainly, in " +
+                    "their own language, that Maya cannot work " +
+                    "inside a banking/payment app — for example " +
+                    "in Bengali: \"এটা ব্যাংকিং/পেমেন্ট অ্যাপ — " +
+                    "এর ভিতরে আমি কাজ করতে পারি না, তোমার " +
+                    "সুরক্ষার জন্য।\""
+            )
+        } else {
+            saveDiag(task, "BLOCKED (banking/payment app)", stepsDone)
+            Outcome(
+                false,
+                "BLOCKED — after " + stepsDone + " steps a " +
+                    "banking/payment app (" + pkg + ") came to " +
+                    "the foreground, so the screen task stopped " +
+                    "immediately: Maya never operates inside " +
+                    "banking or payment apps, for the user's own " +
+                    "safety. Nothing was tapped, typed or " +
+                    "captured inside it. Actions taken so far: " +
+                    historySummary(history) + ". Tell the user " +
+                    "plainly, in their own language, that Maya " +
+                    "stopped because a banking/payment app is " +
+                    "open and she cannot work inside it."
+            )
+        }
+    }
+
+    /**
+     * open_app ka manga nishana mana hai kya — ho to
+     * asal package (ya package na milne par manga naam
+     * khud), warna null. Kram:
+     * - manga shabda package-naam ke nakse par utre to
+     *   wahi pehchan hai — seedha [ScreenSafety] jaanch.
+     * - warna wahi pakki khoj jo kholne wali mashinari
+     *   leti hai ([CommandEngine.resolveAppPackage] —
+     *   tryOpenApp ka sirf-padhne wala roop): usse mila
+     *   package hi asal nishana hai, usi ki jaanch.
+     * - package na mile (app is phone me mile hi nahi)
+     *   to aakhiri darja: naam ka apna roop
+     *   ([ScreenSafety.nameLooksDenied])।
+     */
+    private fun deniedOpenTarget(nameRaw: String): String? {
+        val value = nameRaw.trim()
+        if (value.isEmpty()) return null
+        if (PACKAGE_NAME_PATTERN.matches(value)) {
+            return if (ScreenSafety.isDenied(context, value)) {
+                value
+            } else {
+                null
+            }
+        }
+        val resolved = try {
+            CommandEngine(context, fromBackgroundService)
+                .resolveAppPackage(value)
+        } catch (t: Throwable) {
+            null
+        }
+        if (resolved != null) {
+            return if (ScreenSafety.isDenied(context, resolved)) {
+                resolved
+            } else {
+                null
+            }
+        }
+        return if (ScreenSafety.nameLooksDenied(value)) value else null
+    }
+
+    // ------------------------------------------------------------------
     // Pushti (send/pay/delete/confirm) — tap se PEHLE
     // ------------------------------------------------------------------
 
@@ -1195,6 +1420,15 @@ class ScreenAgent(
         if (targetKey.isNotEmpty() && targetKey in confirmedTargets) {
             return null
         }
+        // v46: pushti MAANGI gayi — audit ke liye kataar
+        // me nishan rakho. Sirf shreni ka naam jata hai;
+        // user ke jawab ka asal text kataar me kabhi
+        // nahi aata (mili/na-mili hi kaafi hai)।
+        history.add(
+            "System note: a " +
+                kind.name.lowercase(Locale.ROOT) +
+                " confirmation was asked."
+        )
         val waitMs = minOf(
             ASK_WAIT_MS,
             deadline - SystemClock.uptimeMillis()
@@ -1205,6 +1439,15 @@ class ScreenAgent(
             null
         }
         if (!isYes(answer)) {
+            // v46: pushti NAHI mili — audit me ye bhi
+            // band ho (tap nahi pada, yehi is record ki
+            // sabse zaroori baat hai)।
+            history.add(
+                "System note: the " +
+                    kind.name.lowercase(Locale.ROOT) +
+                    " confirmation was NOT given — the tap " +
+                    "was NOT made."
+            )
             saveDiag(task, "STOPPED (pushti nahi mili: $kind)", stepsDone)
             return Outcome(
                 false,
@@ -2011,6 +2254,9 @@ class ScreenAgent(
      * sudhaar chala).
      */
     private fun saveDiag(task: String, outcome: String, steps: Int) {
+        // v46: natija-naam audit record ke liye bhi yaad
+        // rakho — har bada rukh yahin se guzarta hai.
+        auditOutcomeLabel = outcome
         try {
             val value = task.take(MAX_DIAG_TASK_CHARS) +
                 " — " + outcome + " (" + steps + " steps, vision " +
@@ -2296,6 +2542,10 @@ class ScreenAgent(
                 "wait actions — it returns as soon as the text " +
                 "appears and reports TIMEOUT honestly if it never " +
                 "does.\n" +
+                "- Banking and payment apps (bank apps, UPI, " +
+                "wallets) are OFF-LIMITS: never try to open or " +
+                "operate them. The system will stop the task if " +
+                "one comes to the foreground.\n" +
                 "- Taps and long-presses on Send / Pay / Confirm / " +
                 "Delete are NOT executed immediately: the app first " +
                 "asks the user for confirmation, and the task stops " +
