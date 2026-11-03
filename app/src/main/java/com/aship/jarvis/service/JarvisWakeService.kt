@@ -34,6 +34,8 @@ import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.SessionShot
+import com.aship.jarvis.ai.TaughtCommands
+import com.aship.jarvis.ai.UserProfile
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
@@ -42,6 +44,7 @@ import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.SessionCommands
+import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
@@ -68,7 +71,7 @@ import java.util.concurrent.Executors
  * recognizer continuously, scanning everything it hears for the wake
  * word ("Jarvis" in Devanagari / Bengali / Latin script). On a wake:
  *
- *   wake session STOPPED -> ack spoken ("हाँ, बोलिए") -> command
+ *   wake session STOPPED -> ack spoken ("जी बॉस, बोलिए") -> command
  *   session listens for ONE utterance -> CommandEngine runs it ->
  *   reply spoken -> wake session resumes.
  *
@@ -985,12 +988,12 @@ class JarvisWakeService : Service() {
         prefs.wakeHitCount = prefs.wakeHitCount + 1
         setStatus("'Jarvis' suna gaya — command boliye")
         updateNotification("Command boliye...")
-        // v1.5: Siri gola ubhar aaye — "हाँ, बोलिए" wale pal se
+        // v1.5: Siri gola ubhar aaye — wake ki haan wale pal se
         // lekar poore command flow ke ant tak dikhega.
         orbOverlay.show()
         // Mic is fully released before Jarvis speaks, so it cannot
         // hear its own acknowledgement.
-        // v48: "haan boliye" bhi shaksiyat ki apni bhasha me.
+        // v48+v50: wake ki haan bhi shaksiyat ki apni bandhi line me.
         speaker.speak(personaAckText())
         armAckFallback()
     }
@@ -1162,13 +1165,54 @@ class JarvisWakeService : Service() {
     }
 
     /**
+     * v50: SHUTDOWN — BINA BOLE band। User ka
+     * pakka hukm: "শাটডাউন" sunte hi gola turant
+     * gayab aur koi vida-line NAHI boli jayegi।
+     * Isliye ye raasta boli wale saare bandobast
+     * (ACK fallback, reply fallback, chalti hui
+     * boli) ko pehle rokta hai, ant ki wajah
+     * "shutdown-silent" bandhta hai, gola abhi
+     * hatata hai aur wake sunna phir chalu karta
+     * hai — service zinda rehti hai। Adda chalu
+     * ho to woh bhi yahin saaf hota hai।
+     * Sirf executor thread se bulao (onCommandHeard
+     * wala raasta — state wahan REPLY ho chuka
+     * hota hai aur command session band)। 
+     */
+    private fun shutdownSilently() {
+        disarmSessionIdle()
+        disarmAckFallback()
+        disarmReplyFallback()
+        try {
+            speaker.stop()
+        } catch (t: Throwable) {
+            // Boli rokna bonus hai — band hona asal hai.
+        }
+        addaEngine.endSession()
+        addaNoSpeechCount = 0
+        sessionAwaitingMore = false
+        // endSession taana session ki safaai bhi
+        // yahin se karta hai (uska bandha niyam)।
+        endSession(SESSION_END_SHUTDOWN_SILENT)
+        pendingEndReason = SESSION_END_COMPLETED
+        closingReason = SESSION_END_NOT_UNDERSTOOD
+        ackEndsConversation = false
+        setStatus("Shutdown — gola band, wake sunna chal raha hai")
+        updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
+        orbOverlay.hideNow()
+        startWakeSession()
+    }
+
+    /**
      * Vida-line bolkar session band karo — ACK
      * wale band raaste se: boli khatm hote hi
      * onAckSpeechDone ant ki wajah ([reason])
      * bandhega, gola HATAYEGA aur wake sunna phir
-     * chalu karega। Shutdown aur khamoshi wale
-     * ant yahi raasta lete hain (gola gayab,
-     * service zinda — poori band NAHI)।
+     * chalu karega। Khamoshi (idle) wala ant
+     * yahi raasta leta hai (gola gayab, service
+     * zinda — poori band NAHI)। Shutdown is
+     * raaste par ab NAHI aata — woh v50 se
+     * bilkul chup hai ([shutdownSilently])।
      */
     private fun endSessionWithClosingLine(reason: String, line: String) {
         disarmSessionIdle()
@@ -1337,16 +1381,24 @@ class JarvisWakeService : Service() {
         Persona.TARA -> SESSION_NOT_UNDERSTOOD_TEXT_BN
     }
 
-    /** Shutdown wali vida — gola gayab hone se pehle ki line। */
-    private fun sessionShutdownText(): String = when (sessionPersona) {
-        Persona.MAYA -> SESSION_SHUTDOWN_TEXT_HI
-        Persona.TARA -> SESSION_SHUTDOWN_TEXT_BN
-    }
-
-    /** Prompt par "না" ki vinamra vida। */
-    private fun sessionDoneText(): String = when (sessionPersona) {
-        Persona.MAYA -> SESSION_DONE_TEXT_HI
-        Persona.TARA -> SESSION_DONE_TEXT_BN
+    /**
+     * Prompt par "না" ki vinamra vida। v50:
+     * malik ka naam bandha ho ([UserProfile])
+     * to vida me naam judta hai — "ঠিক আছে,
+     * <নাম>"। Naam na ho to bandhi line hi।
+     * (Wake wali haan-line me naam jaan-boojh
+     * kar nahi judta — woh bandhi hai।)
+     */
+    private fun sessionDoneText(): String {
+        val name = UserProfile.getName(applicationContext)
+        return when (sessionPersona) {
+            Persona.MAYA ->
+                if (name != null) "ठीक है, $name।"
+                else SESSION_DONE_TEXT_HI
+            Persona.TARA ->
+                if (name != null) "ঠিক আছে, $name।"
+                else SESSION_DONE_TEXT_BN
+        }
     }
 
     /** Khamoshi wale ant ki chetaavni line। */
@@ -2160,22 +2212,24 @@ class JarvisWakeService : Service() {
         // layegi।
         val wasAwaitingMore = sessionActive && sessionAwaitingMore
         sessionAwaitingMore = false
-        // v49: SESSION ME SHUTDOWN SABSE PEHLE —
-        // "সিস্টেম শাটডাউন" har baat par, har
-        // jaanch se pehle pakda jata hai (user ka
-        // pakka hukm)। Latka hua pushti-sawal ho to
-        // use saaf "না" dekar agent ko turant
-        // chhodo (dwaar fail-closed hi rahega),
-        // phir session apni vida-line bolkar band —
-        // gola gayab, wake sunna chaloo (poori
-        // service band NAHI hoti)।
-        if (sessionActive && SessionCommands.isShutdownCommand(text)) {
+        // v50: SHUTDOWN HAR HAAL ME SABSE PEHLE —
+        // session ho ya na ho, adda ho ya aam
+        // hukm, "শাটডাউন / shutdown" sunte hi
+        // baat yahin khatm: gola turant gayab aur
+        // EK SHABD BHI NAHI bola jayega (v49 ki
+        // boli jaane wali vida-line is hukm ke
+        // liye khatm — user ka pakka hukm:
+        // "কিছু না বলে" band)। Latka hua
+        // pushti-sawal ho to use saaf "না" dekar
+        // agent ko turant chhodo (dwaar
+        // fail-closed hi rahega)। Background wake
+        // sunna chaloo rehta hai — poori service
+        // band NAHI hoti।
+        if (SessionCommands.isShutdownCommand(text)) {
             if (ScreenConfirm.hasPending()) {
                 ScreenConfirm.deliverAnswer(SESSION_DENY_ANSWER)
             }
-            endSessionWithClosingLine(
-                SESSION_END_SHUTDOWN, sessionShutdownText()
-            )
+            shutdownSilently()
             return
         }
         // v37: screen-agent ka sawal latka ho (send ki
@@ -2213,6 +2267,24 @@ class JarvisWakeService : Service() {
         // hukm hi rehta hai।
         if (wasAwaitingMore && SessionCommands.isNoMoreAnswer(text)) {
             endSessionDone()
+            return
+        }
+        // v50: SIKHANE WALE NAYE HUKM — naam
+        // bandhna ("আমার নাম …") aur shabd-kaam
+        // sikhana ("'লাইট' বললে টর্চ জ্বালাবে")।
+        // [TeachCommands] sirf apne saaf roop
+        // pakadta hai; baaki seekhne wali baat
+        // neeche [LearnCommands] ke paas hi
+        // jayegi, bilkul pehle jaisa।
+        TeachCommands.tryHandleAdmin(
+            applicationContext, text, personaSpokenLang()
+        )?.let { teachLine ->
+            setStatus("Sikhane wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(teachLine)
+            armReplyFallback(teachLine)
+            orbOverlay.setReply(teachLine)
             return
         }
         // v49: SEEKHNE WALE PAKKE HUKM — session ke
@@ -2256,6 +2328,46 @@ class JarvisWakeService : Service() {
             speaker.speak(redirectLine)
             armReplyFallback(redirectLine)
             orbOverlay.setReply(redirectLine)
+            return
+        }
+        // v50: SIKHAYA HUA SHABD-KAAM — baat kisi
+        // bandhe shabd ka akela roop ho ("লাইট")
+        // to uska kaam seedha offline, mastishk
+        // se pehle (shutdown ke baad ki sabse
+        // pakki pehchan yahi hai)। Bandha
+        // screenshot kaam chale to woh bhi
+        // screen-kaam hai — taana session yahin
+        // se shuru/aage (neeche wale pakke
+        // screenshot raaste wala hi niyam)।
+        TeachCommands.tryExecuteTaught(
+            applicationContext, commandEngine, text, personaSpokenLang()
+        )?.let { taughtExec ->
+            if (taughtExec.actionId == TaughtCommands.ACTION_SCREENSHOT &&
+                taughtExec.result.handled
+            ) {
+                enterContinuousSession()
+                val shotDiag = try {
+                    getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                        .getString("last_screenshot_command", null)
+                } catch (t: Throwable) {
+                    null
+                }
+                if (shotDiag != null &&
+                    shotDiag.trimEnd().endsWith("OK")
+                ) {
+                    val freshShot = try {
+                        JarvisAccessibilityService.instance
+                            ?.lastCleanScreenshot
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    if (freshShot != null) {
+                        SessionShot.bitmap = freshShot
+                        sessionShotTaken = true
+                    }
+                }
+            }
+            finishCommandResult(text, taughtExec.result)
             return
         }
         addaNoSpeechCount = 0
@@ -3500,10 +3612,18 @@ class JarvisWakeService : Service() {
         private const val CHANNEL_ID = "jarvis_wake_channel"
         private const val SAMPLE_RATE = 16000.0f
 
-        private const val ACK_TEXT = "हाँ, बोलिए"
+        /**
+         * v50: wake wali haan — user ki bandhi
+         * line (2026-11-03): Maya Hindi me "জি
+         * বস, বলিয়ে" — Devanagari roop hi bola
+         * jata hai, taaki hi-IN awaaz sahi bole।
+         * Naam bandha ho tab bhi ye line NAHI
+         * badalti (bandhi hai)।
+         */
+        private const val ACK_TEXT = "जी बॉस, बोलिए"
 
-        /** v48: Tara ki haan — Bangla me. */
-        private const val TARA_ACK_TEXT = "হ্যাঁ, বলো"
+        /** v50: Tara ki haan — user ki bandhi line: "জি বস, বলো"। */
+        private const val TARA_ACK_TEXT = "জি বস, বলো"
 
         /** v12: command na samajhne par ek baar dobara mauka dene ka prompt. */
         // v33: retry prompts Bangla me (malik ki bhasha);
@@ -3545,9 +3665,17 @@ class JarvisWakeService : Service() {
         private const val SESSION_END_WEDGED = "wedged-recovered"
 
         /** v49: taana session ke ant ki wajahen (usi report me). */
-        private const val SESSION_END_SHUTDOWN = "session-shutdown"
         private const val SESSION_END_DONE = "session-done"
         private const val SESSION_END_IDLE = "session-idle"
+
+        /**
+         * v50: shutdown wala ant — session ho ya
+         * na ho, wajah hamesha yahi bandhti hai
+         * ("shutdown-silent": gola gayab, boli
+         * bilkul nahi)। v49 ki "session-shutdown"
+         * isse badal gayi।
+         */
+        private const val SESSION_END_SHUTDOWN_SILENT = "shutdown-silent"
 
         /**
          * v49: shutdown ke pal latke pushti-sawal ko
@@ -3582,10 +3710,6 @@ class JarvisWakeService : Service() {
             "এটা আমি ঠিক বুঝতে পারলাম না।"
         private const val SESSION_NOT_UNDERSTOOD_TEXT_HI =
             "यह मैं ठीक से समझ नहीं पाई।"
-        private const val SESSION_SHUTDOWN_TEXT_BN =
-            "ঠিক আছে, সেশন বন্ধ করলাম।"
-        private const val SESSION_SHUTDOWN_TEXT_HI =
-            "ठीक है, सेशन बंद कर दिया।"
         private const val SESSION_DONE_TEXT_BN = "ঠিক আছে।"
         private const val SESSION_DONE_TEXT_HI = "ठीक है।"
         private const val SESSION_IDLE_TEXT_BN =
