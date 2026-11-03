@@ -33,6 +33,7 @@ import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.SessionShot
 import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.ai.UserProfile
@@ -40,6 +41,7 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
@@ -52,6 +54,7 @@ import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.BanglaModelManager
 import com.aship.jarvis.voice.BanglaZipformer
+import com.aship.jarvis.voice.MicArbiter
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
 import com.aship.jarvis.voice.SpeechEngineListener
@@ -405,6 +408,61 @@ class JarvisWakeService : Service() {
     private var systemEchoRestarts: Int = 0
 
     // ------------------------------------------------------------------
+    // v51: sunne ki marammat wale khet.
+    //
+    // [systemOfflineEngine]: net-fail par ek baar
+    // aazmaya jaane wala preferOffline=true wala
+    // system engine (item 4) — aam [systemEngine] se
+    // alag isliye, taaki online wala apni haalat me
+    // rahe aur agla turn phir online se hi shuru ho।
+    // [activeSystemEngine]: is pal jo engine chal
+    // raha hai (aam ya offline) — listener error ki
+    // pehchan isi se padhta hai।
+    // [systemOfflineAttemptUsed]: is chain me offline
+    // wala mauka kharch ho chuka hai kya (har turn
+    // par ek hi baar)।
+    // [systemOfflineActive]: is pal chal raha prayas
+    // offline wala hai kya (report + safalta ke
+    // nishan ke liye)।
+    // [systemGateRestarts] / [zipformerGateRestarts]:
+    // gate se ruka natija bina boli-retry kharch
+    // kiye kitni baar phir suna gaya (echo wala hi
+    // hisaab, seema MAX_GATE_RESTARTS)।
+    // [sessionEmptyReopenCount]: taana session ki
+    // lagatar khaali khidkiyan — peeche-hatne
+    // (backoff) wale antar ke liye (item 6b)।
+    // [micYielded] / [micYieldedMidSession]: mic
+    // saamne wali screen ko udhaar diya gaya hai,
+    // aur dete samay koi taana session beech me
+    // ruka tha kya (item 6a)।
+    // ------------------------------------------------------------------
+    private var systemOfflineEngine: SystemSpeechEngine? = null
+
+    @Volatile
+    private var activeSystemEngine: SystemSpeechEngine? = null
+
+    @Volatile
+    private var systemOfflineAttemptUsed: Boolean = false
+
+    @Volatile
+    private var systemOfflineActive: Boolean = false
+
+    @Volatile
+    private var systemGateRestarts: Int = 0
+
+    @Volatile
+    private var zipformerGateRestarts: Int = 0
+
+    @Volatile
+    private var sessionEmptyReopenCount: Int = 0
+
+    @Volatile
+    private var micYielded: Boolean = false
+
+    @Volatile
+    private var micYieldedMidSession: Boolean = false
+
+    // ------------------------------------------------------------------
     // v41: Bangla offline ASR (Zipformer) wala raasta.
     // Model [BanglaModelManager] se sirf taiyaari jaanchi
     // jati hai; asal sunna/decode [BanglaZipformer] apne
@@ -572,6 +630,17 @@ class JarvisWakeService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_YIELD_MIC -> {
+                // v51 (item 6a): saamne wali screen mic
+                // lene ja rahi hai — chal raha COMMAND
+                // session bhi poori tarah roko (sirf wake
+                // sunna nahi), warna dono recognizer
+                // takrakar bip chakra banayenge।
+                if (state != State.STOPPED) {
+                    executor.execute { yieldMicToForeground() }
+                }
+                return START_NOT_STICKY
+            }
         }
         if (state != State.STOPPED) {
             // Already running: a second START changes nothing.
@@ -637,6 +706,14 @@ class JarvisWakeService : Service() {
             // Band karte huey gadbad — teardown nahi rukega.
         }
         systemEngine = null
+        // v51: offline wala system engine bhi saath band.
+        try {
+            systemOfflineEngine?.destroy()
+        } catch (t: Throwable) {
+            // Band karte huey gadbad — teardown nahi rukega.
+        }
+        systemOfflineEngine = null
+        activeSystemEngine = null
         // v16: screen wala wake lock pada ho to chhod do — waise
         // bhi uska timeout khud use bujha deta, ye bas safaai hai.
         try {
@@ -698,6 +775,15 @@ class JarvisWakeService : Service() {
             // rahega, par koi session mic nahi pakdega. Resume (ya
             // 12 s wala safety timer) aane par yahi function dobara
             // chalega aur session sach me shuru hoga.
+            setStatus("Background sunna roka hai — mic app ke paas hai")
+            return
+        }
+        if (MicArbiter.isForegroundOwned(applicationContext)) {
+            // v51 (item 6a): arbiter bhi wahi kehta hai —
+            // mic is pal saamne wali screen ka hai; wake
+            // sunna mic nahi pakdega. (Aam taur par
+            // wakePaused upar hi rok deta hai — ye dusra
+            // jaal hai.)
             setStatus("Background sunna roka hai — mic app ke paas hai")
             return
         }
@@ -770,12 +856,72 @@ class JarvisWakeService : Service() {
         if (destroyed || !wakePaused) return
         wakePaused = false
         disarmAutoResume()
+        // v51 (item 6a): mic udhaar se wapas aaya. Beech
+        // me ruka taana session ho to wake sunne ki
+        // jagah usi ki khidki phir kholo — session
+        // udhaar se nahi marta (v49 wala niyam)।
+        micYielded = false
+        if (micYieldedMidSession && sessionActive) {
+            micYieldedMidSession = false
+            state = State.ACK
+            reopenSessionWindow()
+            return
+        }
+        micYieldedMidSession = false
         // Sirf WAKE state me session dobara chalao. LOADING ho to
         // model load ke baad wala startWakeSession() khud chalega;
         // ACK/COMMAND/REPLY ho to flow ke ant me chalega — dono ab
         // wakePaused ki rukawat nahi dekhenge.
         if (state == State.WAKE) {
             startWakeSession()
+        } else if (state == State.ACK) {
+            // v51: ACK wali boli ke baad khulne wali
+            // khidki arbiter par atki ho sakti hai —
+            // mic ab khaali hai, khidki yahin kholo।
+            startCommandSession()
+        }
+    }
+
+    /**
+     * v51 (item 6a): mic saamne wali screen ko udhaar
+     * do — sirf wake sunna nahi, chal raha COMMAND
+     * session (system / Vosk / Zipformer, jo bhi ho)
+     * bhi poori tarah roko, warna dono recognizer ek
+     * hi mic par takrakar recognizer-busy wale bip
+     * chakra banate hain. Taana session ho to woh
+     * MARTA nahi — sirf rukta hai; mic wapas milte hi
+     * (resumeWakeListening) uski khidki phir khulti
+     * hai. Boli (ACK/REPLY) chal rahi ho to use haath
+     * mat lagao — arbiter wala jaal aage ke
+     * startCommandSession ko rokega।
+     * Sirf executor thread se bulao।
+     */
+    private fun yieldMicToForeground() {
+        if (destroyed) return
+        micYielded = true
+        // wakePaused wala purana bandobast (auto-resume
+        // ghadi, startWakeSession ki rukawat) udhaar ke
+        // liye bhi wahi kaam karega।
+        wakePaused = true
+        armAutoResume()
+        when (state) {
+            State.COMMAND -> {
+                micYieldedMidSession = sessionActive
+                stopSystemCommandSession()
+                stopCommandSession()
+                stopZipformerCommandSession()
+                commandKind = CommandKind.NONE
+                state = State.WAKE
+                setStatus("Mic saamne wali screen ko diya — sunna ruka hai")
+            }
+            State.WAKE -> {
+                stopWakeSession()
+                setStatus("Mic saamne wali screen ko diya — sunna ruka hai")
+            }
+            else -> {
+                // ACK / REPLY / LOADING: flow ko haath
+                // mat lagao (v1.3 wala hi niyam)।
+            }
         }
     }
 
@@ -966,6 +1112,13 @@ class JarvisWakeService : Service() {
         systemRetryUsed = false
         currentTurnViaSystem = false
         systemUnavailableThisChain = false
+        // v51: net-fail wala offline mauka aur gate
+        // wala hisaab bhi har nayi chain me taaza —
+        // pichhli chain ki nakami agli ko nahi maregi।
+        systemOfflineAttemptUsed = false
+        systemGateRestarts = 0
+        zipformerGateRestarts = 0
+        micYieldedMidSession = false
         // v41: Zipformer ko bhi har nayi chain me taaza
         // mauka — pichhli chain me bigda ho to bhi agle
         // wake par phir aazmayenge, goonj wala hisaab
@@ -1089,6 +1242,9 @@ class JarvisWakeService : Service() {
         sessionShotTaken = false
         sessionContextLines.clear()
         sessionMissCount = 0
+        // v51 (item 6b): khaali-khidki wala peeche-
+        // hatne ka hisaab bhi taaza।
+        sessionEmptyReopenCount = 0
         SessionShot.clear()
     }
 
@@ -1099,6 +1255,8 @@ class JarvisWakeService : Service() {
         sessionShotTaken = false
         sessionContextLines.clear()
         sessionMissCount = 0
+        sessionEmptyReopenCount = 0
+        micYieldedMidSession = false
         SessionShot.clear()
         disarmSessionIdle()
         mainHandler.removeCallbacks(sessionReopenRunnable)
@@ -1353,10 +1511,25 @@ class JarvisWakeService : Service() {
     }
 
     private fun reopenSessionWindow() {
+        // v51 (item 6b): lagatar khaali khidkiyon par
+        // antar peeche hat-ta hai — pehli 3 par 600 ms,
+        // phir 3 s, phir 8 s। Har khaali khidki ek
+        // recognizer band+shuru (aur system kaan par
+        // ek bip jodi) hoti hai; bina peeche-hatne ke
+        // chup kamre me bhi bip chakra banta rehta
+        // tha। Asal baat milte hi hisaab taaza
+        // (onCommandHeard), aur 15-minute wali idle
+        // ghadi aakhiri rok pehle ki tarah hai —
+        // "miss session ko nahi marta" wala v49
+        // niyam bilkul aparivartit।
+        sessionEmptyReopenCount++
+        val delayMs = when {
+            sessionEmptyReopenCount <= 3 -> SESSION_REOPEN_DELAY_MS
+            sessionEmptyReopenCount <= 5 -> SESSION_REOPEN_DELAY_MID_MS
+            else -> SESSION_REOPEN_DELAY_LATE_MS
+        }
         mainHandler.removeCallbacks(sessionReopenRunnable)
-        mainHandler.postDelayed(
-            sessionReopenRunnable, SESSION_REOPEN_DELAY_MS
-        )
+        mainHandler.postDelayed(sessionReopenRunnable, delayMs)
     }
 
     // ------------------------------------------------------------------
@@ -1549,6 +1722,21 @@ class JarvisWakeService : Service() {
      */
     private fun startCommandSession() {
         if (destroyed) return
+        // v51 (item 6a): mic saamne wali screen ke paas
+        // ho to khidki MAT kholo — dono recognizer
+        // takrayenge। Taana session ho to khidki
+        // peeche-hatne wale antar se phir aazmayenge
+        // (mic wapas milte hi resume wala raasta bhi
+        // wahi kholega); aam turn ho to woh turn yahin
+        // chup-chaap khatm — screen wala sunna malik
+        // ki apni marzi hai, usse ladna nahi hai।
+        if (MicArbiter.isForegroundOwned(applicationContext)) {
+            if (sessionActive) {
+                reopenSessionWindow()
+            }
+            return
+        }
+        MicArbiter.claim(applicationContext, MicArbiter.OWNER_SERVICE)
         // v49: taana session ki khidki khul rahi hai —
         // 15-minute wali khamoshi-ghadi yahin se chalegi
         // (koi baat mile to onCommandHeard use band
@@ -1566,6 +1754,17 @@ class JarvisWakeService : Service() {
             !zipformerBrokenThisChain && isBanglaModelReady()
         ) {
             startZipformerCommandSession()
+            return
+        }
+        if (prefs.offlineEarsFirst && model != null) {
+            // v51 (item 8): "offline kaan pehle" wala
+            // vaikalpik badlav chalu hai — system
+            // recognizer (bip wala kaan) se pehle Vosk
+            // wala offline kaan। Tara ke liye Zipformer
+            // upar pehle hi hai; ye Maya ke kram ko
+            // badalta hai। Badlav band ho to ye shaakha
+            // kabhi nahi chalti — purana kram hi aam hai।
+            startVoskCommandSession()
             return
         }
         if (!systemUnavailableThisChain && tryStartSystemCommandSession()) {
@@ -1669,10 +1868,31 @@ class JarvisWakeService : Service() {
         state = State.COMMAND
         commandKind = CommandKind.SYSTEM
         systemEchoRestarts = 0
+        // v51 (item 2): gate wala hisaab bhi har naye
+        // system prayas par taaza।
+        systemGateRestarts = 0
         resetSystemCascade()
         setStatus("Command sun raha hoon — boliye")
         updateNotification("Command boliye...")
-        mainHandler.post { startSystemListeningOnMain() }
+        // v51 (item 6c): rok + shuru EK hi main-thread
+        // block me — upar wala stopSystemCommandSession
+        // apna post alag bhejta hai; woh post isse pehle
+        // chale ya baad me, asal band+shuru yahin ek
+        // saath hoga, isliye aadha-band recognizer par
+        // naya start padkar busy-error nahi banega।
+        mainHandler.post {
+            try {
+                systemEngine?.stopListening()
+            } catch (t: Throwable) {
+                // Band karte huey gadbad — shuru phir bhi hoga.
+            }
+            try {
+                systemOfflineEngine?.stopListening()
+            } catch (t: Throwable) {
+                // Band karte huey gadbad — shuru phir bhi hoga.
+            }
+            startSystemListeningOnMain()
+        }
         return true
     }
 
@@ -1707,13 +1927,65 @@ class JarvisWakeService : Service() {
             created.listener = systemCommandListener
             systemEngine = created
         }
+        activeSystemEngine = engine
+        systemOfflineActive = false
         engine.languageOverride =
             systemCascadeLanguages.getOrNull(systemCascadeIndex)
         try {
-            engine.startListening()
+            // v51 (item 6c): restartListening = purana
+            // recognizer destroy + taaza shuru, ek hi
+            // main-thread saans me — ruk-kar-shuru wala
+            // purana takraav (busy error -> bip chakra)
+            // yahin khatm hota hai।
+            engine.restartListening()
         } catch (t: Throwable) {
             // Engine ne apna onError na diya ho to bhi
             // is turn ke liye Vosk par giro.
+            executor.execute { onSystemSessionFailed() }
+        }
+    }
+
+    /**
+     * v51 (item 4): net-fail ke baad ka EK offline
+     * prayas — preferOffline=true wala alag engine।
+     * Phone me Google ka Hindi offline pack ho to ye
+     * bina net ke bhi achha sunega; pack na ho to ye
+     * turant fail hoga aur listener wala raasta Vosk
+     * par girayega (factory wali chetaavni yahi hai —
+     * isliye koshish ek hi baar, [systemOfflineAttemptUsed]
+     * se bandhi)। Sirf executor thread se bulao;
+     * engine main thread par banta/chalta hai।
+     */
+    private fun startOfflineSystemAttempt() {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.SYSTEM
+        ) {
+            return
+        }
+        setStatus("Net wala kaan fail — offline kaan aazma rahi hoon")
+        mainHandler.post { restartOfflineListeningOnMain() }
+    }
+
+    /** Sirf main thread se — offline engine ko (phir) chalao। */
+    private fun restartOfflineListeningOnMain() {
+        if (destroyed || state != State.COMMAND ||
+            commandKind != CommandKind.SYSTEM
+        ) {
+            return
+        }
+        val engine = systemOfflineEngine ?: SystemSpeechEngine(
+            applicationContext, preferOffline = true
+        ).also { created ->
+            created.listener = systemCommandListener
+            systemOfflineEngine = created
+        }
+        activeSystemEngine = engine
+        systemOfflineActive = true
+        engine.languageOverride =
+            systemCascadeLanguages.getOrNull(systemCascadeIndex)
+        try {
+            engine.restartListening()
+        } catch (t: Throwable) {
             executor.execute { onSystemSessionFailed() }
         }
     }
@@ -1726,8 +1998,22 @@ class JarvisWakeService : Service() {
             } catch (t: Throwable) {
                 // Band karte huey gadbad — session waise bhi khatm.
             }
+            try {
+                // v51: offline wala engine bhi saath roko —
+                // jo chal raha ho wahi asal mic rakhta hai।
+                systemOfflineEngine?.stopListening()
+            } catch (t: Throwable) {
+                // Band karte huey gadbad — session waise bhi khatm.
+            }
         }
     }
+
+    /** v51 (item 3): net-warga ke error code — dheela net / server timeout wali pehchan। */
+    private fun isNetworkErrorCode(code: Int): Boolean =
+        code == SpeechRecognizer.ERROR_NETWORK ||
+            code == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
+            code == SpeechRecognizer.ERROR_SERVER ||
+            code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
 
     private val systemCommandListener = object : SpeechEngineListener {
         override fun onListeningStateChanged(listening: Boolean) {
@@ -1748,22 +2034,63 @@ class JarvisWakeService : Service() {
         override fun onError(message: String) {
             // Error ki pehchan engine ke bandhe hue code se —
             // main thread par hi padh lo, phir faisla executor par.
-            val engine = systemEngine ?: return
+            // v51: jo engine is pal chal raha tha (aam ya
+            // offline wala) usi ke code padho — pehle hamesha
+            // aam engine padha jata tha।
+            val engine = activeSystemEngine ?: systemEngine ?: return
             val code = engine.lastErrorCode
             val immediate = engine.lastErrorWasImmediate
+            val wasOfflineAttempt = systemOfflineActive
             executor.execute {
                 if (destroyed || state != State.COMMAND ||
                     commandKind != CommandKind.SYSTEM
                 ) {
                     return@execute
                 }
+                // v51 (item 1): har error wala turn bhi
+                // sunne-raaste ki report me bandhe —
+                // engine + bhasha + code + turant-fail
+                // ka nishan।
+                saveHearPathDiag(
+                    engine = if (wasOfflineAttempt) {
+                        "system-offline"
+                    } else {
+                        "system"
+                    },
+                    locale = systemCascadeLanguages
+                        .getOrNull(systemCascadeIndex),
+                    errCode = code,
+                    immediate = immediate,
+                    text = null
+                )
                 when {
+                    isNetworkErrorCode(code) && !wasOfflineAttempt &&
+                        !systemOfflineAttemptUsed -> {
+                        // v51 (item 3+4): net wali nakami
+                        // boli-retry wala chakra NAHI
+                        // chalegi — pehle EK offline
+                        // prayas (pack ho to bina net
+                        // sunega), woh bhi fail ho to
+                        // seedha Vosk. Dheele net par yahi
+                        // chakra bip chakra ki jad tha।
+                        systemOfflineAttemptUsed = true
+                        startOfflineSystemAttempt()
+                    }
                     code == SpeechRecognizer.ERROR_CLIENT || immediate -> {
                         // Recognizer service hi kharab /
                         // missing hai (OriginOS par aam) —
                         // is chain me phir koshish nahi;
                         // is turn ke liye Vosk wala raasta.
+                        // v51: offline prayas pack na hone
+                        // par yahin turant fail hokar aata
+                        // hai — uska bhi yahi ant hai।
                         systemUnavailableThisChain = true
+                        onSystemSessionFailed()
+                    }
+                    isNetworkErrorCode(code) -> {
+                        // v51: offline wala bhi net par
+                        // fail, ya dusri baar net-fail —
+                        // bina boli-retry ke Vosk par giro।
                         onSystemSessionFailed()
                     }
                     (code == SpeechRecognizer.ERROR_NO_MATCH ||
@@ -1822,6 +2149,54 @@ class JarvisWakeService : Service() {
             handleSystemCommandMiss()
             return
         }
+        // v51 (item 1): sunne ke raaste ki report —
+        // engine + bhasha + suna text, har turn par।
+        val offlineNow = systemOfflineActive
+        saveHearPathDiag(
+            engine = if (offlineNow) "system-offline" else "system",
+            locale = systemCascadeLanguages
+                .getOrNull(systemCascadeIndex),
+            errCode = -1,
+            immediate = false,
+            text = text
+        )
+        // v51 (item 2): plausibility gate — kachra
+        // (bahut chhota + bina pehchan shabd) hukm
+        // bankar aage NAHI jayega; miss mano par
+        // boli-retry kharch kiye bina phir suno
+        // (echo-restart wala hi raasta, seema bandhi)।
+        val gate = HearingGate.evaluate(
+            text = text,
+            persona = sessionPersona,
+            scriptReliable = true,
+            extraAccepted = gateExtraAccepted()
+        )
+        if (!gate.accepted) {
+            saveHearPathDiag(
+                engine = if (offlineNow) "system-offline" else "system",
+                locale = systemCascadeLanguages
+                    .getOrNull(systemCascadeIndex),
+                errCode = -1,
+                immediate = false,
+                text = text,
+                gateReason = gate.reason
+            )
+            if (systemGateRestarts < MAX_GATE_RESTARTS) {
+                systemGateRestarts++
+                resetSystemCascade()
+                // Jis kaan ne suna tha usi ko phir
+                // chalao — offline wala natija online
+                // par phir net-fail ka chakra na bane।
+                if (offlineNow) {
+                    mainHandler.post { restartOfflineListeningOnMain() }
+                } else {
+                    mainHandler.post { startSystemListeningOnMain() }
+                }
+            } else {
+                handleSystemCommandMiss()
+            }
+            return
+        }
         if (selfEchoGuardActive()) {
             // Maya ki apni boli (prompt) goonj bankar aayi
             // hai — retry kharch kiye bina wahi khidki phir
@@ -1836,6 +2211,13 @@ class JarvisWakeService : Service() {
             return
         }
         currentTurnViaSystem = true
+        if (offlineNow) {
+            // v51 (item 4): offline engine ne asal hukm
+            // suna — pack maujood hai aur kaam karta
+            // hai; main screen ki salaah-line ab khud
+            // chhup jayegi।
+            saveOfflineSystemOkDiag()
+        }
         // v12 diagnostics wala hi "Mic ne aakhri suna",
         // aur v38 ki engine-wali report jarvis_diag me.
         rememberCommandFinal(text)
@@ -1935,6 +2317,93 @@ class JarvisWakeService : Service() {
             "vosk"
         }
         saveBackgroundHeardDiagTag(tag, text)
+    }
+
+    /**
+     * v51 (item 1): sunne ke RAASTE ki report —
+     * "jarvis_diag" ki "last_hear_path" par har
+     * command turn ka hisaab: kaun sa kaan (system /
+     * system-offline / vosk / zipformer / fg-*), kis
+     * bhasha me, error code + turant-fail ka nishan
+     * (natija ho to err=-1), aur suna text। Gate ne
+     * roka ho to [gateReason] ke saath "gate:rejected"
+     * bankar bandhta hai (item 2)। Main screen par
+     * "শোনার পথ (aakhiri)" line me dikhta hai —
+     * bip chakra ya galat-sunne ki shikayat par ab
+     * andaza nahi, bandha hisaab milega।
+     */
+    private fun saveHearPathDiag(
+        engine: String,
+        locale: String?,
+        errCode: Int,
+        immediate: Boolean,
+        text: String?,
+        gateReason: String? = null
+    ) {
+        try {
+            val sb = StringBuilder(engine)
+            if (!locale.isNullOrBlank()) {
+                sb.append(' ').append(locale)
+            }
+            if (gateReason != null) {
+                sb.append(" gate:rejected(").append(gateReason).append(')')
+            } else if (errCode >= 0) {
+                sb.append(" err=").append(errCode)
+                    .append(" imm=").append(immediate)
+            }
+            if (!text.isNullOrBlank()) {
+                sb.append(": ").append(text.trim())
+            }
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_hear_path", sb.toString())
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
+     * v51 (item 4): offline system engine ne pehli
+     * baar asal hukm suna — "offline_system_ok" ka
+     * nishan, jisse main screen ki Hindi-pack wali
+     * salaah-line khud chhup jati hai।
+     */
+    private fun saveOfflineSystemOkDiag() {
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("offline_system_ok", "1")
+                .apply()
+        } catch (t: Throwable) {
+            // Nishan bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
+     * v51 (item 2): gate ke liye sikhaye/seekhe hue
+     * shabd — malik ke khud bandhe shabd (taught
+     * triggers) aur seekhe kaamon ke naam hamesha
+     * pehchan-shabd maane jayein, warna ek-shabd
+     * wala sikha hukm gate par ruk jayega।
+     */
+    private fun gateExtraAccepted(): List<String> {
+        val out = mutableListOf<String>()
+        try {
+            out.addAll(
+                TaughtCommands.readAll(applicationContext).map { it.trigger }
+            )
+        } catch (t: Throwable) {
+            // Sikhaye shabd na milein to gate apne niyam par chalega.
+        }
+        try {
+            out.addAll(
+                LearnedRoutines.readAll(applicationContext).map { it.name }
+            )
+        } catch (t: Throwable) {
+            // Seekhe naam na milein to bhi gate rukega nahi.
+        }
+        return out
     }
 
     /** v41: "last_background_heard" me kaan ka naam dekar band karo. */
@@ -2078,6 +2547,36 @@ class JarvisWakeService : Service() {
                 saveBanglaAsrDiag(
                     "zipformer ${outcome.decodeMs}ms: ${outcome.text}"
                 )
+                // v51 (item 1+2): raaste ki report + gate।
+                // Zipformer chhoti awaaz par bhi badi
+                // bani hui baat de sakta hai — tez decode
+                // (<600 ms) + bina pehchan shabd wali
+                // baat kachra maankar khidki phir kholo
+                // (seema bandhi), phir purane kram par।
+                val gate = HearingGate.evaluate(
+                    text = outcome.text,
+                    persona = sessionPersona,
+                    scriptReliable = true,
+                    decodeMs = outcome.decodeMs,
+                    extraAccepted = gateExtraAccepted()
+                )
+                saveHearPathDiag(
+                    engine = "zipformer",
+                    locale = "bn-IN",
+                    errCode = -1,
+                    immediate = false,
+                    text = outcome.text,
+                    gateReason = if (gate.accepted) null else gate.reason
+                )
+                if (!gate.accepted) {
+                    if (zipformerGateRestarts < MAX_GATE_RESTARTS) {
+                        zipformerGateRestarts++
+                        startZipformerCommandSession()
+                    } else {
+                        fallThroughToSystemOrVosk()
+                    }
+                    return
+                }
                 if (selfEchoGuardActive()) {
                     // Recording ke baad bhi goonj wali
                     // khidki band hai — natija Maya ki apni
@@ -2125,6 +2624,13 @@ class JarvisWakeService : Service() {
     private fun fallThroughToSystemOrVosk() {
         if (destroyed) return
         commandKind = CommandKind.NONE
+        if (prefs.offlineEarsFirst && model != null) {
+            // v51 (item 8): offline kaan pehle wala
+            // badlav — Zipformer ke baad bhi system se
+            // pehle Vosk hi aayega।
+            startVoskCommandSession()
+            return
+        }
         if (!systemUnavailableThisChain && tryStartSystemCommandSession()) {
             return
         }
@@ -2182,6 +2688,29 @@ class JarvisWakeService : Service() {
             // dauraan aur uske pal bhar baad tak ka suna hua
             // sab yahin chhod do.
             if (selfEchoGuardActive()) return
+            // v51 (item 1+2): raaste ki report + gate।
+            // Vosk hamesha Devanagari lipyantaran deta
+            // hai, isliye script-jaanch yahan lagu nahi
+            // (scriptReliable = false)। Kachra ruke to
+            // khidki yun hi chalti rehti hai — Vosk bip
+            // nahi bajata, aur asal baat aane par wahi
+            // khidki use pakad legi; khaali khidki
+            // watchdog sambhalega।
+            val gate = HearingGate.evaluate(
+                text = text,
+                persona = sessionPersona,
+                scriptReliable = false,
+                extraAccepted = gateExtraAccepted()
+            )
+            saveHearPathDiag(
+                engine = "vosk",
+                locale = "hi-IN",
+                errCode = -1,
+                immediate = false,
+                text = text,
+                gateReason = if (gate.accepted) null else gate.reason
+            )
+            if (!gate.accepted) return
             // v12 diagnostics: command recognizer ne jo suna, woh
             // bhi "Mic ne aakhri suna" me dikhe.
             rememberCommandFinal(text)
@@ -2204,6 +2733,10 @@ class JarvisWakeService : Service() {
         // ghadi band (session ho ya na ho, ghadi sirf
         // session me hi chalti hai)।
         disarmSessionIdle()
+        // v51 (item 6b): asal baat mili — khaali
+        // khidkiyon wala peeche-hatne ka hisaab taaza
+        // (agli khaali khidki phir 600 ms se shuru)।
+        sessionEmptyReopenCount = 0
         // v49: ye khidki "আর কিছু?" wale prompt ke
         // turant baad wali thi kya — sirf usi haal me
         // saaf "না" session band karega (neeche
@@ -3608,6 +4141,9 @@ class JarvisWakeService : Service() {
         const val ACTION_PAUSE_WAKE = "com.aship.jarvis.action.WAKE_PAUSE"
         const val ACTION_RESUME_WAKE = "com.aship.jarvis.action.WAKE_RESUME"
 
+        /** v51 (item 6a): saamne wali screen mic lene se pehle bheja jaane wala "mic chhodo" sanket। */
+        const val ACTION_YIELD_MIC = "com.aship.jarvis.action.WAKE_YIELD_MIC"
+
         private const val NOTIFICATION_ID = 4201
         private const val CHANNEL_ID = "jarvis_wake_channel"
         private const val SAMPLE_RATE = 16000.0f
@@ -3689,6 +4225,13 @@ class JarvisWakeService : Service() {
 
         /** v49: khaali khidki phir kholne ka chhota antar (spin-rok). */
         private const val SESSION_REOPEN_DELAY_MS = 600L
+
+        /** v51 (item 6b): lagatar khaali khidkiyon par peeche-hatne wale antar — 3 ke baad 3 s, 5 ke baad 8 s. */
+        private const val SESSION_REOPEN_DELAY_MID_MS = 3_000L
+        private const val SESSION_REOPEN_DELAY_LATE_MS = 8_000L
+
+        /** v51 (item 2): gate se ruka natija bina boli-retry kharch kiye zyada se zyada itni baar phir suna jayega. */
+        private const val MAX_GATE_RESTARTS = 2
 
         /** v49: session sandarbh me aakhiri itne len-den rehte hain। */
         private const val SESSION_CONTEXT_MAX_LINES = 10
@@ -3827,5 +4370,9 @@ class JarvisWakeService : Service() {
 
         fun resumeIntent(context: Context): Intent =
             Intent(context, JarvisWakeService::class.java).setAction(ACTION_RESUME_WAKE)
+
+        /** v51 (item 6a): [ACTION_YIELD_MIC] wala intent — MainActivity sunna shuru karne se pehle bhejti hai। */
+        fun yieldIntent(context: Context): Intent =
+            Intent(context, JarvisWakeService::class.java).setAction(ACTION_YIELD_MIC)
     }
 }
