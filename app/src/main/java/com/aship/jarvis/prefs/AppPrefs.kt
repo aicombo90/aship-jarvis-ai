@@ -88,6 +88,51 @@ class AppPrefs(context: Context) {
             prefs.edit().putLong(KEY_LAST_HEARD_PARTIAL_AT_MS, value).apply()
         }
 
+    /**
+     * v51 (item 5): saamne wali screen par aakhiri baar
+     * bandhi shaksiyat ka naam ("MAYA" / "TARA"), ya
+     * abhi tak koi na bandhi ho to null. Saamne wali
+     * bhasha-kataar (CascadeOrder) isi se shuru hoti
+     * hai — Maya se baat chal rahi ho to pehla kaan
+     * hi-IN ka khulega, Bangla ka nahi.
+     */
+    var lastForegroundPersonaName: String?
+        get() = prefs.getString(KEY_LAST_FG_PERSONA, null)
+        set(value) {
+            if (value == null) {
+                prefs.edit().remove(KEY_LAST_FG_PERSONA).apply()
+            } else {
+                prefs.edit().putString(KEY_LAST_FG_PERSONA, value).apply()
+            }
+        }
+
+    /**
+     * v51 (item 8): "offline kaan pehle" wala vaikalpik
+     * badlav (toggle). Default BAND (false) — purana
+     * bartao hi aam hai. Chalu ho to command session
+     * system recognizer se pehle Vosk/Zipformer jaise
+     * offline kaan aazmata hai: bip kam, sunna thoda
+     * kamzor.
+     */
+    var offlineEarsFirst: Boolean
+        get() = prefs.getBoolean(KEY_OFFLINE_EARS_FIRST, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_OFFLINE_EARS_FIRST, value).apply()
+        }
+
+    /**
+     * v51 (item 4): Hindi offline pack wali salaah-line
+     * malik ne khud band ki hai kya. Ek baar band to
+     * phir nahi dikhti (pack safal hone par woh
+     * jarvis_diag ke "offline_system_ok" se khud
+     * chhup jati hai).
+     */
+    var offlinePackHintDismissed: Boolean
+        get() = prefs.getBoolean(KEY_OFFLINE_PACK_HINT_DISMISSED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_OFFLINE_PACK_HINT_DISMISSED, value).apply()
+        }
+
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
@@ -98,5 +143,8 @@ class AppPrefs(context: Context) {
         private const val KEY_LAST_HEARD_PARTIAL_TEXT = "last_heard_partial_text"
         private const val KEY_LAST_HEARD_AT_MS = "last_heard_at_ms"
         private const val KEY_LAST_HEARD_PARTIAL_AT_MS = "last_heard_partial_at_ms"
+        private const val KEY_LAST_FG_PERSONA = "last_fg_persona"
+        private const val KEY_OFFLINE_EARS_FIRST = "offline_ears_first"
+        private const val KEY_OFFLINE_PACK_HINT_DISMISSED = "offline_pack_hint_dismissed"
     }
 }
