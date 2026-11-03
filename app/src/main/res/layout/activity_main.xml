@@ -31,6 +31,33 @@
             android:text="Status: taiyaar ho raha hai..."
             android:textSize="13sp" />
 
+        <!-- v51: Hindi offline pack ki salaah — net
+             kamzor ho to online wala kaan baar-baar
+             fail hota hai; pack ho to wahi kaan bina
+             net ke bhi sunega. Line tab tak dikhti hai
+             jab tak offline kaan asal me safal na ho
+             ya malik use band na kar de. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/offlinePackHintText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="💡 Google অ্যাপ → Settings → Voice → Offline speech থেকে हिन्दी প্যাক ডাউনলোড করলে নেট ছাড়াও ভালো শুনবে"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/offlinePackHintClose"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="✕ বন্ধ করুন" />
+        </LinearLayout>
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -291,6 +318,36 @@
             android:text="শেখানো কমান্ড (mot): 0"
             android:textSize="12sp" />
 
+        <!-- v51: sunne ki report — background ne
+             aakhiri kya suna, saamne wali screen ne
+             aakhiri kya suna, aur sunne ka raasta
+             (kaun sa kaan, kis bhasha me, kya error)।
+             Galat-sunne ya bip ki shikayat par asal
+             wajah inhi teen lineon se milegi. -->
+        <TextView
+            android:id="@+id/backgroundHeardText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Background (aakhiri suna): abhi tak kuch nahi"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/foregroundHeardText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Saamne (aakhiri suna): abhi tak kuch nahi"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/hearPathText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="শোনার পথ (aakhiri): abhi tak koi turn nahi"
+            android:textSize="12sp" />
+
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
              dikhao — galat setting ek nazar me pakdi jaye. -->
         <TextView
@@ -306,6 +363,19 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)" />
+
+        <!-- v51: "offline kaan pehle" wala vaikalpik
+             badlav — chalu ho to command pehle offline
+             kaan (Vosk/Zipformer) se suna jayega:
+             bip kam, par sunna thoda kamzor. Default
+             band; band ho to sab bilkul pehle jaisa. -->
+        <Switch
+            android:id="@+id/offlineEarsFirstSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="অফলাইন কান আগে (বিপ কম, শোনা একটু কম)"
+            android:textSize="14sp" />
 
         <Button
             android:id="@+id/updateCheckButton"
