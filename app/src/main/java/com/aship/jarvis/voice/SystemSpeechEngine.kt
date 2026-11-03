@@ -115,6 +115,29 @@ class SystemSpeechEngine(
         }
     }
 
+    /**
+     * v51 (item 6c): band + shuru EK hi main-thread saans
+     * me. Purana raasta stop ko alag post se bhejta tha
+     * aur start dusre post se — dono ke beech recognizer
+     * aadha-band haalat me naya start paakar
+     * ERROR_RECOGNIZER_BUSY deta tha, jisse bip chakra
+     * (beep cycles) bante the. Yahan purana recognizer
+     * destroy karke taaza banta hai: destroy par koi
+     * error callback nahi aata, isliye jhooti error
+     * wali ghanti bhi nahi bajti. Sirf main thread se
+     * bulao (engine waisi hi shart rakhta hai)।
+     */
+    fun restartListening() {
+        try {
+            recognizer?.destroy()
+        } catch (e: Exception) {
+            // Destroy fail ho to bhi nayi koshish rukti nahi.
+        }
+        recognizer = null
+        listening = false
+        startListening()
+    }
+
     override fun destroy() {
         try {
             recognizer?.destroy()
