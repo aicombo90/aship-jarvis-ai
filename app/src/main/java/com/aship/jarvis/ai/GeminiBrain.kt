@@ -215,7 +215,7 @@ object GeminiBrain {
      * mari ho (neeche [requestWithChain] aur
      * ScreenAgent ka v48 wala nota dekho).
      */
-    enum class RequestClass { TEXT, VISION, VISION_LITE }
+    enum class RequestClass { TEXT, VISION, VISION_LITE, TEXT_MAIN_FIRST }
 
     /**
      * v25: [MAIN_MODELS] ki kataar par ek taiyaar-shuda body
@@ -242,6 +242,16 @@ object GeminiBrain {
             RequestClass.TEXT -> LITE_MODELS + MAIN_MODELS
             RequestClass.VISION -> MAIN_MODELS
             RequestClass.VISION_LITE -> LITE_MODELS
+            // v51 (item 9): wahi TEXT kataar ulti chaal
+            // me — mukhya model pehle. AgentBrain round-1
+            // poori tarah khaali laute (aur wajah kota na
+            // ho) tab ek hi baar is vaikalpik kataar se
+            // dobara koshish ke liye. Aam raasta TEXT hi
+            // rehta hai (Lite pehle — kota bachta hai,
+            // isiliye report me Lite ki koshishein zyada
+            // dikhti hain; woh bandobast hai, kharabi
+            // nahi)।
+            RequestClass.TEXT_MAIN_FIRST -> MAIN_MODELS + LITE_MODELS
         }
         // v43: jo model aaj 429 de chuka hai (khatm) ya
         // is project ke liye hai hi nahi (uplabdh-nahi),
