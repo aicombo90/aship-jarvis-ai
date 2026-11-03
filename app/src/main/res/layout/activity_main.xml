@@ -136,21 +136,35 @@
             android:text="Jarvis: —"
             android:textSize="15sp" />
 
+        <!-- v50: likhkar command bhejna — bolkar jo
+             hota hai, likhkar bhi wahi (pakke offline
+             hukm pehle, phir mastishk); sikhana aur
+             naam bandhna bhi yahin se hota hai. -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="✍️ লিখে কমান্ড পাঠান"
+            android:textStyle="bold" />
+
         <EditText
             android:id="@+id/commandInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:hint="Ya yahan command type kijiye (e.g. telegram kholo, battery kitna hai)"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_box_bg"
+            android:hint="এখানে কমান্ড লিখুন (যেমন: টেলিগ্রাম খোলো, লাইট, স্ক্রল ডাউন)"
             android:importantForAutofill="no"
             android:inputType="text"
-            android:maxLines="1" />
+            android:maxLines="1"
+            android:minHeight="52dp"
+            android:padding="12dp" />
 
         <Button
             android:id="@+id/sendButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Send command" />
+            android:text="কমান্ড পাঠাও" />
 
         <Button
             android:id="@+id/downloadModelButton"
@@ -264,6 +278,17 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="শেখা কাজ (mot): 0"
+            android:textSize="12sp" />
+
+        <!-- v50: sikhaye hue shabd-kaam (trigger)
+             jodon ki ginati — naam/jod bolkar
+             "কী কী শেখানো আছে" par milte hain. -->
+        <TextView
+            android:id="@+id/taughtText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="শেখানো কমান্ড (mot): 0"
             android:textSize="12sp" />
 
         <!-- v35: shune wali bhasha ek chhoti si label me bhi
