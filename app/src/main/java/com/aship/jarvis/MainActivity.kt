@@ -31,6 +31,7 @@ import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.QuotaManager
+import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
@@ -38,6 +39,8 @@ import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.SessionCommands
+import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
@@ -155,6 +158,7 @@ class MainActivity : Activity() {
     // dikhti hai (kaam ke naam yahan nahi, woh
     // "কী কী শিখেছ" bolne par awaaz se milte hain)।
     private lateinit var learnedText: TextView
+    private lateinit var taughtText: TextView
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -332,6 +336,7 @@ class MainActivity : Activity() {
         quotaText = findViewById(R.id.quotaText)
         personaText = findViewById(R.id.personaText)
         learnedText = findViewById(R.id.learnedText)
+        taughtText = findViewById(R.id.taughtText)
         banglaModelButton.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
@@ -739,6 +744,25 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     private fun processCommand(text: String) {
+        // v50: SHUTDOWN yahan bhi sabse pehle — background
+        // wala hi niyam: "শাটডাউন" bolte/likhte hi baat
+        // band, aur KUCH BOLA NAHI jayega (screen par
+        // chup-chaap band wala sandesh dikhega, bas)।
+        // Latka pushti-sawal ho to use saaf inkaar
+        // dekar agent ko chhodo — dwaar fail-closed।
+        if (SessionCommands.isShutdownCommand(text)) {
+            if (ScreenConfirm.hasPending()) {
+                ScreenConfirm.deliverAnswer("না")
+            }
+            try {
+                speaker.stop()
+            } catch (t: Throwable) {
+                // Boli rokna bonus hai — band hona asal hai.
+            }
+            recognizedText.text = "Aapne kaha: $text"
+            responseText.text = "Jarvis: (শাটডাউন — চুপচাপ বন্ধ)"
+            return
+        }
         // v37: screen-agent ka sawal latka ho (send ki
         // pushti / ask_user) to ye baat USI ka jawab hai —
         // naya command nahi. Jawab pul ko saunp do; agent
@@ -778,6 +802,23 @@ class MainActivity : Activity() {
         // [LearnCommands] ke bandhe niyam se)।
         // Bhasha: naam-pukar wali shaksiyat ki,
         // warna hukm ki apni।
+        // v50: SIKHANE WALE NAYE HUKM (wake service
+        // wala hi ek object, [TeachCommands]) —
+        // naam bandhna ("আমার নাম …") aur
+        // shabd-kaam sikhana ("'লাইট' বললে …")।
+        // Likha hua hukm bhi yahin se jata hai —
+        // type karke sikhana/naam bandhna bhi
+        // chalega। Sirf apne saaf roop pakadta
+        // hai; baaki [LearnCommands] ka hai।
+        TeachCommands.tryHandleAdmin(
+            this, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText)
+        )?.let { teachLine ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Maya: $teachLine"
+            speaker.speak(teachLine)
+            return
+        }
         LearnCommands.tryHandle(
             this, commandText,
             vocativeLang ?: PlayIntent.requestLanguage(commandText)
@@ -785,6 +826,33 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             responseText.text = "Maya: $learnLine"
             speaker.speak(learnLine)
+            return
+        }
+        // v50: SIKHAYA HUA SHABD-KAAM — baat bandhe
+        // shabd ka akela roop ho ("লাইট") to kaam
+        // seedha offline, mastishk se pehle (wake
+        // service wala hi niyam)। Bandha kaam
+        // screenshot ho to chalana background wale
+        // pakke raaste se hi hoga (capture ka
+        // intezaar main thread par nahi ho sakta —
+        // neeche wala screenshot niyam), isliye
+        // yahan sirf milan jaancha jata hai, chalana
+        // wahan hota hai।
+        val taughtMapping = TaughtCommands.matchTrigger(this, commandText)
+        if (taughtMapping != null &&
+            taughtMapping.action == TaughtCommands.ACTION_SCREENSHOT
+        ) {
+            runDirectScreenshot(commandText)
+            return
+        }
+        if (taughtMapping != null) {
+            val taughtExec = TaughtCommands.execute(
+                this, commandEngine, taughtMapping,
+                vocativeLang ?: PlayIntent.requestLanguage(commandText)
+            )
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: ${taughtExec.result.responseText}"
+            speaker.speak(taughtExec.result.responseText)
             return
         }
         // v38: pakka scroll hukm — agent se pehle pakke
@@ -1516,6 +1584,13 @@ class MainActivity : Activity() {
             if (::learnedText.isInitialized) {
                 learnedText.text =
                     "শেখা কাজ (mot): " + LearnedRoutines.count(this)
+            }
+            // v50: sikhaye hue shabd-kaam jodon ki
+            // ginati — bandha "লাইট" jod bhi isme
+            // gina jata hai।
+            if (::taughtText.isInitialized) {
+                taughtText.text =
+                    "শেখানো কমান্ড (mot): " + TaughtCommands.count(this)
             }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
