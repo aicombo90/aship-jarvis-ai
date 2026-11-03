@@ -74,6 +74,14 @@ class CommandEngine(
         if (text.isEmpty()) {
             return CommandResult("कुछ सुनाई नहीं दिया, फिर से बोलिए।", false)
         }
+        // v50: akele "লাইট" / "light" / "লাইট জ্বালাও"
+        // = torch ON — user ka pakka hukm: ek shabd
+        // bolte hi light jale, poora vakya nahi
+        // chahiye। Ye sikhaye hue bandhan
+        // (TaughtCommands) ka judwaa bandobast hai —
+        // wahan se mita bhi diya jaye to ye buniyaadi
+        // roop har raaste (handle) par bana rehta hai।
+        lightOnlyCommand(text)?.let { return it }
         val first = dispatch(text)
         if (first.handled) return first
         // v1.9: background Vosk aksar shabd thode galat sunta hai
@@ -155,6 +163,33 @@ class CommandEngine(
             curr = tmp
         }
         return prev[b.length]
+    }
+
+    /**
+     * v50: baat AKELE light wala hukm hai kya —
+     * poori baat light-shabd + bandhe kriya-shabdon
+     * (জ্বালাও/অন/করো...) tak hi simit ho, OFF wala
+     * shabd bilkul na ho (OFF ka pakka raasta
+     * [deterministicOffCommand] pehle chalta hai,
+     * aur yahan bhi wahi jeetega)। Ho to torch ON
+     * ka natija; warna null — aam baat ("ঘরে লাইট
+     * আছে") kabhi isme nahi phansti, kyunki usme
+     * bandhe shabdon ke bahar ke shabd hote hain।
+     */
+    private fun lightOnlyCommand(text: String): CommandResult? {
+        if (text.isEmpty() || hasOffWord(text)) return null
+        val tokens = text.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।') }
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty() || tokens.size > 4) return null
+        if (tokens.none { it in LIGHT_TOKENS }) return null
+        if (!tokens.all { it in LIGHT_ALLOWED_TOKENS }) return null
+        val ok = PhoneActions.setTorch(context, true)
+        return if (ok) {
+            CommandResult("टॉर्च जला दिया।", true)
+        } else {
+            CommandResult("इस फ़ोन पर टॉर्च कंट्रोल नहीं हो पाया।", true)
+        }
     }
 
     /** Normalize (aur filler-saaf) hue text par asal command matching. */
@@ -1042,8 +1077,12 @@ class CommandEngine(
     fun deterministicOffCommand(rawText: String): CommandResult? {
         val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
         if (text.isEmpty() || !hasOffWord(text)) return null
+        // v50: "লাইট" bhi torch ka hi naam hai user ki
+        // boli me — "লাইট বন্ধ করো" bhi pakka OFF hai,
+        // bilkul "টর্চ বন্ধ" ki tarah।
         if (text.contains("torch") || text.contains("flashlight") ||
-            text.contains("flash light")
+            text.contains("flash light") || text.contains("লাইট") ||
+            text.contains("लाइट") || hasWord(text, "light")
         ) {
             val ok = PhoneActions.setTorch(context, false)
             return if (ok) {
@@ -1088,16 +1127,49 @@ class CommandEngine(
      * report me suna hua hukm + disha + mashinari + natija
      * chaaron bandhte hain.
      */
-    fun deterministicScrollCommand(rawText: String): CommandResult? {
+    /**
+     * v50: scroll ki DISHA ki bandhi pehchan — sirf
+     * pehchanna, chalana nahi (true = neeche, false =
+     * upar, null = scroll hukm nahi / dono disha
+     * ghusi hui)।
+     *
+     * [deterministicScrollCommand] aur sikhaye hue
+     * kaamon ki pehchan ([com.aship.jarvis.ai.TaughtCommands])
+     * dono ke liye yahi ek pehchan hai — sikhate
+     * samay jo scroll mana gaya, chalte samay bhi
+     * wahi manega।
+     *
+     * v50 ki jad-ilaaj (live shikayat: "স্ক্রল ডাউন"
+     * bolne par bhi scroll nahi hota tha):
+     *  - Milaane ki satahon me ab [scrollSkeleton]
+     *    bhi hai: ZWNJ/ZWJ hatakar milaana। Bangla
+     *    recognizer "স্ক্রল" ko aksar স্‌ক্রল
+     *    (beech me ZWNJ) likhta hai — v42 ke exact
+     *    contains wahan chup-chaap haar jate the।
+     *  - Sanket-suchiyan bahut badha di gayin
+     *    (naye garble roop, Devanagari "स्कूल
+     *    डाउन", Roman "scroll daun", "পেজ ডাউন")।
+     *  - Scroll shabd mile par bandha wakya na
+     *    mile to disha wale alag shabd (নিচে/উপরে)
+     *    bhi disha bata sakte hain — "নিচে স্ক্রল
+     *    করো" jaisa wakya ab fisalta nahi।
+     */
+    fun classifyScrollDirection(rawText: String): Boolean? {
         val raw = rawText.lowercase(Locale.ROOT).trim()
         if (raw.isEmpty()) return null
-        // v42: milaane ke liye do satahein — kachha text aur
-        // normalize hua roop (Bangla ke bikhre swar-chinh
-        // ek-codepoint bante hain, jaise স্ক্রোল ka bikhra
-        // roop)। Sanket kisi me bhi mile to mila hua maano.
-        val haystacks = listOf(raw, normalize(raw))
+        // Milaane ki satahein — kachha text, normalize
+        // hua roop, aur dono ke skeleton (ZWNJ/ZWJ-
+        // mukt) roop। Sanket bhi skeleton bankar
+        // milte hain, isliye likhavat ka halka farq
+        // (স্‌ক্রল / স্ক্রল) milan nahi todta।
+        val surfaces = listOf(raw, normalize(raw))
+            .map { scrollSkeleton(it) }
+            .distinct()
         fun matched(markers: List<String>): Boolean =
-            markers.any { m -> haystacks.any { it.contains(m) } }
+            markers.any { marker ->
+                val needle = scrollSkeleton(marker)
+                surfaces.any { it.contains(needle) }
+            }
         // v42: "school" wala vakya scroll NAHI hai — Latin
         // me school aaye aur scroll ka koi aur pakka sanket
         // na ho to pakka hukm bilkul nahi banta.
@@ -1108,24 +1180,97 @@ class CommandEngine(
         }
         val up = matched(SCROLL_UP_MARKERS)
         val down = matched(SCROLL_DOWN_MARKERS)
-        val scrollDown: Boolean = when {
-            up && down -> return null
+        return when {
+            up && down -> null
             up -> false
             down -> true
             else -> {
-                // Nanga scroll shabd ("স্ক্রল করো" /
-                // "scroll karo") — chhota hukm-jaisa vakya
-                // ho ya "karo/করো" wali kriya saath ho to
-                // disha NEECHE (aam iraada wahi hota hai).
-                // Lamba vakya bina kriya ke scroll par
-                // sawaal/baatchit ho sakta hai — aam
-                // raaste par chhod do.
                 if (!matched(SCROLL_WORD_MARKERS)) return null
-                val tokenCount = raw.split(Regex("""\s+""")).size
-                val hasDoVerb = matched(SCROLL_DO_VERBS)
-                if (tokenCount > 4 && !hasDoVerb) return null
-                true
+                // Scroll shabd hai, bandha disha-wakya
+                // nahi — alag disha-shabd se disha bano
+                // ("নিচে স্ক্রল করো" / "scroll upar")।
+                // Dono taraf ke shabd hon to uljha hua
+                // hukm hai — aam raasta faisla karega।
+                val downToken = matched(SCROLL_DOWN_TOKENS)
+                val upToken = matched(SCROLL_UP_TOKENS)
+                when {
+                    downToken && upToken -> null
+                    downToken -> true
+                    upToken -> false
+                    else -> {
+                        // Nanga scroll shabd ("স্ক্রল করো" /
+                        // "scroll karo") — chhota hukm-jaisa vakya
+                        // ho ya "karo/করো" wali kriya saath ho to
+                        // disha NEECHE (aam iraada wahi hota hai).
+                        // Lamba vakya bina kriya ke scroll par
+                        // sawaal/baatchit ho sakta hai — aam
+                        // raaste par chhod do.
+                        // v50: nanga shabd POORA token hona
+                        // chahiye — "স্কুলে যাব" (school jaana)
+                        // ke "স্কুলে" me ghusa "স্কুল" scroll
+                        // NAHI hai; disha wale raaste par ye
+                        // sakhti nahi hai (wahan disha-shabd
+                        // iraada pakka karta hai)।
+                        if (!hasBareScrollToken(raw)) return null
+                        val tokenCount = raw.split(Regex("""\s+""")).size
+                        val hasDoVerb = matched(SCROLL_DO_VERBS)
+                        if (tokenCount > 4 && !hasDoVerb) null else true
+                    }
+                }
             }
+        }
+    }
+
+    /**
+     * v50: text me scroll shabd POORE token ki
+     * tarah hai kya (aakhir me টা/টি jud sakta
+     * hai) — nange-scroll wale raaste ki sakhti।
+     * "স্কুলে" jaisa ghusa hua roop yahan fail
+     * hota hai, "স্ক্রল" / "স্ক্রলটা" pass।
+     */
+    private fun hasBareScrollToken(rawText: String): Boolean {
+        val tokens = scrollSkeleton(rawText)
+            .split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return false
+        val needles = SCROLL_WORD_MARKERS.map { scrollSkeleton(it) }
+        return tokens.any { token ->
+            needles.any { needle ->
+                token == needle ||
+                    token == needle + "টা" ||
+                    token == needle + "টি"
+            }
+        }
+    }
+
+    /**
+     * v50: scroll milaane ke liye text ka bandha
+     * skeleton roop — chhote akshar, bikhre swar
+     * ek-codepoint me, aur ZWNJ (U+200C) / ZWJ
+     * (U+200D) poori tarah hataye hue। Dono taraf
+     * (suna text aur sanket) yahi lagta hai।
+     */
+    private fun scrollSkeleton(input: String): String {
+        var t = input.lowercase(Locale.ROOT)
+        t = t.replace("\u09C7\u09BE", "\u09CB")
+            .replace("\u09C7\u09D7", "\u09CC")
+        t = t.replace("\u200C", "").replace("\u200D", "")
+        return t
+    }
+
+    fun deterministicScrollCommand(rawText: String): CommandResult? {
+        val scrollDown: Boolean = classifyScrollDirection(rawText) ?: run {
+            // v50: baat scroll-jaisi thi par pehchan
+            // bani hi nahi to report me NOMATCH bandho
+            // — agli nakami par andaza nahi lagana
+            // padega: "last_scroll_command" khud
+            // batayega ki suna kya tha aur pehchan
+            // kyun nahi mili।
+            if (looksLikeScrollAttempt(rawText)) {
+                saveScrollNoMatchDiag(rawText)
+            }
+            return null
         }
         val lang = PlayIntent.requestLanguage(rawText)
         if (!JarvisAccessibilityService.isEnabled(context)) {
@@ -1220,6 +1365,36 @@ class CommandEngine(
                         " [" + mechanism + "]" +
                         " -> " + (if (ok) "OK" else "FAIL") +
                         " (" + detail.take(60) + ")"
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
+     * v50: baat scroll-jaisi hai kya — scroll wala
+     * koi shabd (uska garble roop bhi) text me ho।
+     * Sirf report ke liye: pehchan na bane par baat
+     * scroll-jaisi ho to NOMATCH bandhta hai।
+     */
+    private fun looksLikeScrollAttempt(rawText: String): Boolean {
+        val skeleton = scrollSkeleton(rawText.lowercase(Locale.ROOT))
+        if (skeleton.isEmpty()) return false
+        return SCROLL_WORD_MARKERS.any { marker ->
+            skeleton.contains(scrollSkeleton(marker))
+        }
+    }
+
+    /** v50: scroll pehchan na banne ki report — suna hua hukm jyon ka tyon। */
+    private fun saveScrollNoMatchDiag(rawText: String) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_scroll_command",
+                    "nomatch: " + rawText.trim().take(40) +
+                        " [none] -> NOMATCH"
                 )
                 .apply()
         } catch (t: Throwable) {
@@ -1594,7 +1769,21 @@ class CommandEngine(
             "ইস্ক্রল ডাউন", "এস্ক্রল ডাউন", "স্ক্রল ডাউন",
             "स्क्रॉल डाउन", "स्क्रोल डाउन",
             "নিচে নামাও", "নিচে নামা", "নিচে যাও", "নিচে করো", "নিচে কর",
-            "नीचे करो", "नीचे कर", "neeche karo", "neeche kar", "niche karo"
+            "नीचे करो", "नीचे कर", "neeche karo", "neeche kar", "niche karo",
+            // v50: aur garble / boli ke roop — recognizer
+            // "ডাউন" ko डাওন/দাউন, "স্ক্রল" ko স্করল/সক্রল
+            // bhi sunta hai; Hindi kaan Bangla boli ko
+            // "स्कूल डाउन" likhta hai; "পেজ ডাউন" bhi
+            // aam boli hai।
+            "স্ক্রল নামাও", "স্ক্রোল নামাও", "স্ক্রল করে নামাও",
+            "স্ক্রল ডাওন", "স্ক্রোল ডাওন", "স্ক্রল দাউন",
+            "স্কুল ডাওন", "স্করল ডাউন", "সক্রল ডাউন",
+            "স্ক্রল নিচে", "নিচে স্ক্রল", "স্কুল নিচে",
+            "নিচে নামিয়ে দাও", "নিচে নিয়ে যাও", "নিচে স্ক্রল করো",
+            "পেজ ডাউন", "page down", "scroll daun",
+            "skrol down", "scrol down",
+            "स्कूल डाउन", "स्कूल नीचे", "इसक्रॉल डाउन",
+            "एसक्रॉल डाउन", "डाउन करो", "डाउन कर"
         )
 
         /** v38 + v42: scroll-up ke pakke sanket (v42: wahi garble roop upar ke liye). */
@@ -1605,20 +1794,48 @@ class CommandEngine(
             "ইস্ক্রল আপ", "এস্ক্রল আপ", "স্ক্রল আপ",
             "स्क्रॉल अप", "स्क्रोल अप",
             "উপরে তোলো", "উপরে তোল", "উপরে ওঠো", "উপরে ওঠ", "উপরে করো",
-            "ऊपर करो", "ऊपर कर", "upar karo", "upore tolo"
+            "ऊपर करो", "ऊपर कर", "upar karo", "upore tolo",
+            // v50: wahi vistaar upar ke liye।
+            "স্ক্রল উপরে", "স্ক্রল ওপরে", "উপরে স্ক্রল",
+            "ওপরে স্ক্রল", "স্ক্রল উঠাও", "স্ক্রল তোলো",
+            "স্কুল ওপরে", "পেজ আপ", "page up",
+            "स्कूल अप", "स्कूल ऊपर", "ऊपर स्क्रॉल",
+            "स्क्रॉल ऊपर", "अप करो", "अप कर"
         )
 
         /**
          * v38 + v42: nanga scroll shabd — disha ka sanket na
          * mile to neeche wala iraada. v42: garble roop bhi —
          * স্কুল / ইস্ক্রল / স্ক্রল / এস্ক্রল aur Roman
-         * iskrol/escroll/skrol.
+         * iskrol/escroll/skrol. v50: aur garble roop —
+         * স্করল / সক্রল / স্কল / ইসক্রল / এসক্রল / scrol /
+         * स्कूल / इसक्रॉल।
          */
         val SCROLL_WORD_MARKERS = listOf(
             "scroll", "iskrol", "escroll", "skrol",
             "স্ক্রল", "স্ক্রোল", "স্ক্রল",
             "স্কুল", "ইস্ক্রল", "এস্ক্রল", "স্ক্রল",
-            "स्क्रॉल", "स्क्रोल"
+            "स्क्रॉल", "स्क्रोल",
+            "স্করল", "সক্রল", "স্কল", "ইসক্রল", "এসক্রল",
+            "scrol", "skroll",
+            "स्कूल", "इसक्रॉल", "एसक्रॉल", "स्क्राल"
+        )
+
+        /**
+         * v50: scroll shabd ke saath akele disha batane
+         * wale shabd — bandha disha-wakya na mile to
+         * yehi disha bante hain ("নিচে স্ক্রল করো")।
+         * Sirf scroll shabd ke saath hi inka matlab
+         * hai; akele inpar kabhi scroll nahi banta।
+         */
+        val SCROLL_DOWN_TOKENS = listOf(
+            "ডাউন", "ডাওন", "দাউন", "নিচে", "নীচে",
+            "down", "daun", "नीचे", "डाउन"
+        )
+
+        /** v50: upar wale disha-shabd (upar wala jod dekho)। */
+        val SCROLL_UP_TOKENS = listOf(
+            "আপ", "উপরে", "ওপরে", "up", "ऊपर", "अप"
         )
 
         /**
@@ -1635,9 +1852,28 @@ class CommandEngine(
             "school"
         )
 
-        /** v38: nange scroll shabd ke saath hukm wali kriya hai kya. */
+        /** v38: nange scroll shabd ke saath hukm wali kriya hai kya. v50: করে/দাও/do wale aur roop। */
         val SCROLL_DO_VERBS = listOf(
-            "করো", "কর", "करो", "कर", "karo", "koro", "do"
+            "করো", "কর", "করে", "করে দাও", "দাও", "দিন",
+            "करो", "कर", "दो", "दीजिए",
+            "karo", "koro", "do", "please", "now"
+        )
+
+        /** v50: akele "লাইট" wale hukm ke light-shabd। */
+        val LIGHT_TOKENS = setOf("লাইট", "light", "लाइट")
+
+        /**
+         * v50: akele-light wale hukm me light-shabd ke
+         * saath sirf ye shabd aa sakte hain — isse zyada
+         * ho to baat aam vakya hai, light hukm nahi
+         * ("ঘরে লাইট আছে" kabhi torch nahi jalayega)।
+         */
+        val LIGHT_ALLOWED_TOKENS = LIGHT_TOKENS + setOf(
+            "জ্বালাও", "জ্বালো", "জ্বালিয়ে", "জ্বালা",
+            "দাও", "দে", "অন", "on", "চালু",
+            "করো", "কর", "করুন",
+            "करो", "कर", "दो", "जलाओ", "जला", "दीजिए",
+            "টা"
         )
 
         /** v40: screenshot shabd ke saare roop — kachhe text par contains milaane ke liye. */
