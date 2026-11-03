@@ -169,9 +169,28 @@ object AgentBrain {
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
-            val raw = GeminiBrain.requestAgentRound(
+            var raw = GeminiBrain.requestAgentRound(
                 context, instruction, contents
             )
+            if (raw == null && round == 1 &&
+                !GeminiBrain.lastChainWasQuota(context)
+            ) {
+                // v51 (item 9): poori TEXT kataar (Lite
+                // pehle) chup rahi aur wajah kota NAHI
+                // hai — aksar ye dheele net par bikhre
+                // timeout hote hain. Haar maan-ne se
+                // pehle EK baar vaikalpik kataar (mukhya
+                // model pehle) aazmao. Kota wali haar par
+                // dobara koshish bekaar hai (har model
+                // bandh hai) — isliye woh shart upar hai।
+                raw = GeminiBrain.requestAgentRound(
+                    context, instruction, contents,
+                    GeminiBrain.RequestClass.TEXT_MAIN_FIRST
+                )
+                if (raw != null) {
+                    steps.add("retry-mainfirst=OK")
+                }
+            }
             if (raw == null) {
                 // Poori model kataar chup hai.
                 if (round == 1) {
