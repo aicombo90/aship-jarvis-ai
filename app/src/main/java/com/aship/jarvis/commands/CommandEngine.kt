@@ -98,7 +98,91 @@ class CommandEngine(
             val second = dispatch(stripFillers(normalize(corrected)))
             if (second.handled) return second
         }
+        // v51 (item 7): Hindi garble wala aakhiri raasta —
+        // Devanagari sune hue shabd aksar swar-chinh /
+        // sanyuktakshar ke halke badlav ke saath aate
+        // hain ("टार्च", "सकरोल", "जलावो"), jinhe na
+        // normalize ki bandhi suchi pakadti hai na fuzzy
+        // sudhaar (woh Latin-mukhi hai)। Shabd-dar-shabd
+        // skeleton-milan se pakke roop banao aur dispatch
+        // dobara aazmao। Jhoothi pehchan ki rok wahi
+        // hai: sirf jaane-pehchane pakke shabd badalte
+        // hain, aur natija dispatch ke pakke niyamon se
+        // hi guzarta hai।
+        val repaired = canonicaliseBySkeleton(rawText)
+        if (repaired != null) {
+            val third = dispatch(stripFillers(normalize(repaired)))
+            if (third.handled) return third
+        }
         return first
+    }
+
+    /**
+     * v51 (item 7): Devanagari-mukhi skeleton — suna
+     * text aur pakke shabd dono par ek hi bandha roop
+     * lagta hai, taaki likhavat ke halke farq milan na
+     * todein: chandrabindu -> anusvara, nukta hatao,
+     * halant (sanyuktakshar) ghatao, bade/chhote swar-
+     * chinh ek karo (ी->ि, ू->ु, ै->े, ौ->ो, ॉ->ो)।
+     * Buniyaad me v50 wala [scrollSkeleton] hai
+     * (ZWNJ/ZWJ mukt + Bangla swar-jod)।
+     */
+    fun hindiSkeleton(input: String): String {
+        var t = scrollSkeleton(input)
+        t = t.replace('\u0901', '\u0902') // chandrabindu -> anusvara
+        t = t.replace("\u093C", "") // nukta
+        t = t.replace("\u094D", "") // halant / virama
+        t = t.replace('\u0940', '\u093F') // ी -> ि
+        t = t.replace('\u0942', '\u0941') // ू -> ु
+        t = t.replace('\u0948', '\u0947') // ै -> े
+        t = t.replace('\u094C', '\u094B') // ौ -> ो
+        t = t.replace('\u0949', '\u094B') // ॉ -> ो
+        // Swatantra swar akshar bhi ek karo (shabd ke
+        // beech/aakhir me aane wale roop — "मोबाईल" ka
+        // ई chinh nahi, akshar hai)।
+        t = t.replace('\u0908', '\u0907') // ई -> इ
+        t = t.replace('\u090A', '\u0909') // ऊ -> उ
+        t = t.replace('\u0910', '\u090F') // ऐ -> ए
+        t = t.replace('\u0914', '\u0913') // औ -> ओ
+        return t
+    }
+
+    /** Skeleton bandhan ki jodi-suchi se bana shabd-naksha (skeleton -> pakka roop)। */
+    private val skeletonCanon: Map<String, String> by lazy {
+        val map = HashMap<String, String>()
+        for ((surface, canonical) in SKELETON_CANON_PAIRS) {
+            map[hindiSkeleton(surface)] = canonical
+        }
+        map
+    }
+
+    /**
+     * v51 (item 7): suna hua vakya shabd-dar-shabd
+     * skeleton-milan se sudhaaro — jo shabd pakke
+     * shabd ke skeleton se mile, use pakke roop se
+     * badal do; baaki shabd jaise hain waise rahen।
+     * Kuch badle hi na to null (bulane wala aam
+     * raasta hi rakhega)।
+     */
+    fun canonicaliseBySkeleton(rawText: String): String? {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return null
+        var changed = false
+        val out = raw.split(Regex("""\s+""")).map { token ->
+            val clean = token.trim(',', '.', '।', '!', '?', '"', '\'')
+            if (clean.length < 2) {
+                token
+            } else {
+                val canonical = skeletonCanon[hindiSkeleton(clean)]
+                if (canonical != null && canonical != clean) {
+                    changed = true
+                    canonical
+                } else {
+                    token
+                }
+            }
+        }
+        return if (changed) out.joinToString(" ") else null
     }
 
     /**
@@ -1162,13 +1246,28 @@ class CommandEngine(
         // mukt) roop। Sanket bhi skeleton bankar
         // milte hain, isliye likhavat ka halka farq
         // (স্‌ক্রল / স্ক্রল) milan nahi todta।
+        // v51 (item 7): Devanagari skeleton wali
+        // satahein bhi — "सकरोल" jaise sanyuktakshar-
+        // tode roop ab marker "स्क्रॉल" ke skeleton
+        // se mil jate hain।
         val surfaces = listOf(raw, normalize(raw))
-            .map { scrollSkeleton(it) }
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
             .distinct()
         fun matched(markers: List<String>): Boolean =
             markers.any { marker ->
-                val needle = scrollSkeleton(marker)
-                surfaces.any { it.contains(needle) }
+                // Sanket ki sui bhi dono skeleton roopon
+                // me — Devanagari sanket (halant wala)
+                // halant-mukt satah se tabhi milega jab
+                // sui bhi waisi hi ghatai hui ho (v51
+                // marammat: pehle sui sirf scrollSkeleton
+                // ki banti thi, isliye "सकरोल ऊपर" jaise
+                // roop disha-sanket se fisal jate the)।
+                val needles = listOf(
+                    scrollSkeleton(marker), hindiSkeleton(marker)
+                ).distinct()
+                surfaces.any { surface ->
+                    needles.any { surface.contains(it) }
+                }
             }
         // v42: "school" wala vakya scroll NAHI hai — Latin
         // me school aaye aur scroll ka koi aur pakka sanket
@@ -1229,12 +1328,16 @@ class CommandEngine(
      * hota hai, "স্ক্রল" / "স্ক্রলটা" pass।
      */
     private fun hasBareScrollToken(rawText: String): Boolean {
-        val tokens = scrollSkeleton(rawText)
-            .split(Regex("""\s+"""))
+        // v51 (item 7): Devanagari skeleton wale token
+        // bhi gino — "सकरोल" nanga shabd bhi scroll hai।
+        val tokens = listOf(scrollSkeleton(rawText), hindiSkeleton(rawText))
+            .flatMap { it.split(Regex("""\s+""")) }
             .map { it.trim(',', '.', '।', '!', '?') }
             .filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return false
-        val needles = SCROLL_WORD_MARKERS.map { scrollSkeleton(it) }
+        val needles = SCROLL_WORD_MARKERS.flatMap {
+            listOf(scrollSkeleton(it), hindiSkeleton(it))
+        }
         return tokens.any { token ->
             needles.any { needle ->
                 token == needle ||
@@ -1424,7 +1527,18 @@ class CommandEngine(
         val raw = rawText.lowercase(Locale.ROOT).trim()
         if (raw.isEmpty()) return false
         if (SCREENSHOT_SHARE_MARKERS.any { raw.contains(it) }) return false
-        if (SCREENSHOT_WORD_MARKERS.none { raw.contains(it) }) return false
+        // v51 (item 7): shabd-milan skeleton satahon par
+        // bhi — "सकरिनशॉट" jaise tode hue roop bhi
+        // screenshot shabd maane jayein. Pathane wala
+        // veto (upar) aur lene-wali kriya ki jaanch
+        // kachhe text par hi rehti hai (suraksha wahi)।
+        val surfaces = listOf(raw, hindiSkeleton(raw)).distinct()
+        fun wordMatched(markers: List<String>): Boolean =
+            markers.any { marker ->
+                val needle = hindiSkeleton(marker)
+                surfaces.any { it.contains(needle) }
+            }
+        if (!wordMatched(SCREENSHOT_WORD_MARKERS)) return false
         if (SCREENSHOT_TAKE_VERBS.any { raw.contains(it) }) return true
         val tokens = raw.split(Regex("""\s+""")).filter { it.isNotEmpty() }
         return tokens.size <= 4
@@ -1857,6 +1971,74 @@ class CommandEngine(
             "করো", "কর", "করে", "করে দাও", "দাও", "দিন",
             "करो", "कर", "दो", "दीजिए",
             "karo", "koro", "do", "please", "now"
+        )
+
+        /**
+         * v51 (item 7): skeleton-sudhaar ki jodi-suchi —
+         * (suna ja sakne wala roop -> pakka roop)। Pakka
+         * roop wahi hain jo [normalize] ki bandhi suchi
+         * jaanti hai; isliye sudhra vakya aam dispatch
+         * se hi guzarta hai. Zyada-tar jodiyan canonical
+         * shabd khud hain (skeleton-milan unke garble
+         * roopon ko khud pakad leta hai); kuch spasht
+         * variant jodiyan bhi hain jahan skeleton bhi
+         * ek nahi banta (टार्च/टर्च -> टॉर्च aadi)।
+         * Suchi jaan-boojh kar upar ke pakke hukmon
+         * (torch, data, kholne ki kriya, aam apps) tak
+         * simit hai — har shabd sudhaarna iska kaam
+         * nahi।
+         */
+        val SKELETON_CANON_PAIRS = listOf(
+            // Torch / light
+            "टॉर्च" to "टॉर्च", "टार्च" to "टॉर्च",
+            "टर्च" to "टॉर्च", "टोर्च" to "टॉर्च",
+            "फ्लैशलाइट" to "फ्लैशलाइट",
+            "लाइट" to "लाइट",
+            "টর্চ" to "টর্চ", "ফ্ল্যাশলাইট" to "ফ্ল্যাশলাইট",
+            "লাইট" to "লাইট",
+            // On / off / kriya shabd
+            "बंद" to "बंद", "बनद" to "बंद",
+            "বন্ধ" to "বন্ধ",
+            "जलाओ" to "जलाओ", "जलावो" to "जलाओ",
+            "जलादो" to "जलाओ", "जला" to "जलाओ",
+            "चालू" to "चालू", "চালু" to "চালু",
+            "खोलो" to "खोलो", "खुलो" to "खोलो",
+            "খোলো" to "খোলো",
+            "चलाओ" to "चलाओ", "চালাও" to "চালাও",
+            // Mobile data
+            "मोबाइल" to "मोबाइल", "डेटा" to "डेटा",
+            "डाटा" to "डेटा",
+            "মোবাইল" to "মোবাইল", "ডেটা" to "ডেটা",
+            "ডাটা" to "ডেটা",
+            // Aam auzaar / apps (normalize wale pakke roop)
+            "अलार्म" to "अलार्म", "टाइमर" to "टाइमर",
+            "बैटरी" to "बैटरी", "बॅटरी" to "बैटरी",
+            "वॉल्यूम" to "वॉल्यूम",
+            "समय" to "समय", "तारीख" to "तारीख",
+            "गाना" to "गाना", "गाणा" to "गाना",
+            "सर्च" to "सर्च", "गूगल" to "गूगल",
+            "दिखाओ" to "दिखाओ", "मिनट" to "मिनट",
+            "घंटा" to "घंटा", "म्यूट" to "म्यूट",
+            "आवाज़" to "आवाज़",
+            "यूट्यूब" to "यूट्यूब",
+            "व्हाट्सएप" to "व्हाट्सएप",
+            "वाट्सएप" to "व्हाट्सएप",
+            "व्हट्सएप" to "व्हाट्सएप",
+            "फेसबुक" to "फेसबुक",
+            "टेलीग्राम" to "टेलीग्राम",
+            "इंस्टाग्राम" to "इंस्टाग्राम",
+            "क्रोम" to "क्रोम", "कैमरा" to "कैमरा",
+            "सेटिंग्स" to "सेटिंग्स",
+            "जीमेल" to "जीमेल", "मैप्स" to "मैप्स",
+            "फ़ोनपे" to "फ़ोनपे",
+            "पेटीएम" to "पेटीएम",
+            "स्पॉटिफाई" to "स्पॉटिफाई",
+            "स्नैपचैट" to "स्नैपचैट",
+            "ইউটিউব" to "ইউটিউব",
+            "হোয়াটসঅ্যাপ" to "হোয়াটসঅ্যাপ",
+            "টেলিগ্রাম" to "টেলিগ্রাম",
+            "ফেসবুক" to "ফেসবুক",
+            "ক্যামেরা" to "ক্যামেরা", "ক্রোম" to "ক্রোম"
         )
 
         /** v50: akele "লাইট" wale hukm ke light-shabd। */
