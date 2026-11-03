@@ -18,10 +18,12 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.speech.SpeechRecognizer
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
@@ -36,7 +38,9 @@ import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.LearnCommands
+import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.SessionCommands
@@ -50,6 +54,8 @@ import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.service.JarvisWakeService
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.BanglaModelManager
+import com.aship.jarvis.voice.CascadeOrder
+import com.aship.jarvis.voice.MicArbiter
 import com.aship.jarvis.voice.ModelLanguage
 import com.aship.jarvis.voice.ModelManager
 import com.aship.jarvis.voice.SpeechEngine
@@ -159,6 +165,31 @@ class MainActivity : Activity() {
     // "কী কী শিখেছ" bolne par awaaz se milte hain)।
     private lateinit var learnedText: TextView
     private lateinit var taughtText: TextView
+
+    // v51 (item 1): sunne ki report wali teen nayi
+    // linein — background ne aakhiri kya suna
+    // (last_background_heard), saamne wali screen ne
+    // aakhiri kya suna (last_foreground_heard), aur
+    // sunne ka raasta (last_hear_path: engine +
+    // bhasha + error code)। Teeno jarvis_diag se
+    // aati hain — v50 tak pehli do sirf file me band
+    // hoti thi, screen par dikhti hi nahi thi।
+    private lateinit var backgroundHeardText: TextView
+    private lateinit var foregroundHeardText: TextView
+    private lateinit var hearPathText: TextView
+
+    // v51 (item 4): Hindi offline pack wali salaah
+    // line — pack safal hone ya malik ke band karne
+    // tak dikhti hai।
+    private lateinit var offlinePackHintText: TextView
+
+    // v51 (item 8): "offline kaan pehle" wala
+    // vaikalpik badlav (switch) — default band।
+    private lateinit var offlineEarsFirstSwitch: Switch
+
+    // v51 (item 2): saamne wale gate se ruka natija
+    // bina boli ke kitni baar phir suna gaya।
+    private var fgGateRestarts: Int = 0
 
     // v37: ye screen is pal saamne hai kya — screen-agent
     // ke sawal par khud sunna shuru karna ho to yahi jhanda
@@ -337,6 +368,27 @@ class MainActivity : Activity() {
         personaText = findViewById(R.id.personaText)
         learnedText = findViewById(R.id.learnedText)
         taughtText = findViewById(R.id.taughtText)
+        // v51 (item 1): sunne ki report wali linein।
+        backgroundHeardText = findViewById(R.id.backgroundHeardText)
+        foregroundHeardText = findViewById(R.id.foregroundHeardText)
+        hearPathText = findViewById(R.id.hearPathText)
+        // v51 (item 4): salaah line band karne wala
+        // button — ek baar band to phir nahi dikhegi
+        // (haalat prefs me bandh jati hai)।
+        offlinePackHintText = findViewById(R.id.offlinePackHintText)
+        findViewById<Button>(R.id.offlinePackHintClose).setOnClickListener {
+            prefs.offlinePackHintDismissed = true
+            refreshOfflinePackHint()
+        }
+        // v51 (item 8): offline kaan pehle wala badlav।
+        offlineEarsFirstSwitch = findViewById(R.id.offlineEarsFirstSwitch)
+        offlineEarsFirstSwitch.isChecked = prefs.offlineEarsFirst
+        offlineEarsFirstSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.offlineEarsFirst = checked
+            // Saamne wala engine bhi naye niyam se bane।
+            createEngine()
+            updateStatus()
+        }
         banglaModelButton.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
@@ -472,8 +524,34 @@ class MainActivity : Activity() {
     private fun createEngine() {
         engine?.destroy()
         systemStartFallbackUsed = false
-        engine = SpeechEngineFactory.create(this, prefs.mode, modelManager).also { created ->
-            created.listener = engineListener
+        // v51 (item 8): "offline kaan pehle" chalu ho to
+        // saamne wala engine bhi Vosk (offline) wala bane
+        // — model taiyaar na ho to factory khud system
+        // wala dega (createVoskOrSystem ka bandha niyam)।
+        val created = if (prefs.offlineEarsFirst) {
+            SpeechEngineFactory.createVoskOrSystem(this, modelManager)
+        } else {
+            SpeechEngineFactory.create(this, prefs.mode, modelManager)
+        }
+        engine = created.also { eng ->
+            eng.listener = engineListener
+            // v51 (item 5): engine bante hi pehli bhasha
+            // spasht bandh do — pehla startListening
+            // kabhi purani/pasand wali bhasha chup-chaap
+            // na le; kataar ka sir aakhiri shaksiyat se
+            // banta hai (resetCascade wala hi hisaab)।
+            (eng as? SystemSpeechEngine)?.languageOverride =
+                CascadeOrder.firstLanguage(lastForegroundPersona(), prefs.listenLanguage)
+        }
+    }
+
+    /** v51 (item 5): bandhi aakhiri saamne-wali shaksiyat, ya abhi tak koi na ho to null। */
+    private fun lastForegroundPersona(): Persona? {
+        val name = prefs.lastForegroundPersonaName ?: return null
+        return try {
+            Persona.valueOf(name)
+        } catch (e: IllegalArgumentException) {
+            null
         }
     }
 
@@ -504,6 +582,39 @@ class MainActivity : Activity() {
         }
 
         override fun onFinalResult(text: String) {
+            // v51 (item 2): saamne wala gate — kachra
+            // (bahut chhota + bina pehchan shabd) hukm
+            // bankar processCommand tak NAHI jayega।
+            // Bina kuch bole wahi kataar par phir suno
+            // (seema 2 baar); seema ke baad imaandaar
+            // status dikhakar turn khatm। Likha hua
+            // hukm (type-and-send) is gate se NAHI
+            // guzarta — woh malik ki saaf marzi hai।
+            val gate = HearingGate.evaluate(
+                text = text,
+                persona = lastForegroundPersona(),
+                scriptReliable = engine is SystemSpeechEngine,
+                extraAccepted = fgGateExtraAccepted()
+            )
+            if (!gate.accepted) {
+                saveFgHearPath(text, gateReason = gate.reason)
+                if (fgGateRestarts < FG_MAX_GATE_RESTARTS) {
+                    fgGateRestarts++
+                    // Mic ka daava phir bandh do — sunna
+                    // band hone wale callback ne use chhod
+                    // diya hoga, par turn abhi chal raha
+                    // hai (v51 item 6a)।
+                    MicArbiter.claim(this@MainActivity, MicArbiter.OWNER_FOREGROUND)
+                    statusText.text =
+                        "ঠিক শোনা গেল না — আবার শুনছি, বলুন..."
+                    engine?.startListening()
+                } else {
+                    resumeWakeService()
+                    statusText.text =
+                        "কিছু ঠিক শোনা গেল না — আবার ট্যাপ করে বলুন।"
+                }
+                return
+            }
             // Session khatm ho gaya hai. Kuch flows me iske baad
             // onListeningStateChanged(false) aata hi nahi — wahi
             // v1.5 wala atkav tha — isliye mic yahin se wake
@@ -516,6 +627,10 @@ class MainActivity : Activity() {
         }
 
         override fun onError(message: String) {
+            // v51 (item 1): error wala turn bhi sunne ke
+            // raaste ki report me bandhe — engine +
+            // bhasha + code + turant-fail ka nishan।
+            saveFgHearPath(null, gateReason = null)
             val sys = engine as? SystemSpeechEngine
             if (sys != null) {
                 // v35: kuch samajh nahi aaya (no match / khaali
@@ -591,9 +706,20 @@ class MainActivity : Activity() {
         engine?.startListening()
     }
 
-    /** v35: cascade ki kataar — pasand pehle, phir bn-IN, phir hi-IN (dohraaye bina). */
+    /**
+     * v35: cascade ki kataar.
+     * v51 (item 5): kataar ab aakhiri saamne-wali
+     * shaksiyat se shuru hoti hai — Maya se baat chal
+     * rahi ho to pehla kaan hi-IN ka (v50 tak pasand
+     * wali bn-IN pehle aakar Maya ki baat bhi Bangla
+     * kaan se sun leti thi aur wahi text pakka maan
+     * liya jata tha)। Shaksiyat bandhi hi na ho to
+     * purana bartao: pasand pehle, phir bn-IN, hi-IN।
+     */
     private fun resetCascade() {
-        cascadeLanguages = listOf(prefs.listenLanguage, "bn-IN", "hi-IN").distinct()
+        cascadeLanguages = CascadeOrder.languagesFor(
+            lastForegroundPersona(), prefs.listenLanguage
+        )
         cascadeIndex = 0
         (engine as? SystemSpeechEngine)?.languageOverride =
             cascadeLanguages.firstOrNull()
@@ -608,6 +734,9 @@ class MainActivity : Activity() {
         val sys = engine as? SystemSpeechEngine ?: return false
         if (cascadeIndex >= cascadeLanguages.lastIndex) return false
         cascadeIndex++
+        // v51 (item 6a): kataar badalkar phir sunna bhi
+        // isi turn ka hissa hai — mic ka daava taaza rakho।
+        MicArbiter.claim(this, MicArbiter.OWNER_FOREGROUND)
         val lang = cascadeLanguages[cascadeIndex]
         sys.languageOverride = lang
         statusText.text = when (lang) {
@@ -640,6 +769,64 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             // Report bonus hai — asal kaam isse nahi rukta.
         }
+        // v51 (item 1): raaste wali report me bhi bandho
+        // (fg- wala naam — background wali se alag dikhe)।
+        saveFgHearPath(text, gateReason = null)
+    }
+
+    /**
+     * v51 (item 1): saamne wale sunne ke raaste ki
+     * report — wake service wali hi "last_hear_path"
+     * chaabi, "fg-" wala naam taaki dono raaste ek hi
+     * line par pehchane jayein kiski baari thi। Natija
+     * ho to [text] ke saath, error ho to engine ke
+     * bandhe code ke saath, gate ne roka ho to
+     * [gateReason] ke saath।
+     */
+    private fun saveFgHearPath(text: String?, gateReason: String?) {
+        try {
+            val sb = StringBuilder()
+            when (val e = engine) {
+                is SystemSpeechEngine -> {
+                    sb.append("fg-system")
+                    val lang = e.currentLanguage
+                    if (lang.isNotBlank()) sb.append(' ').append(lang)
+                    if (text == null && gateReason == null) {
+                        sb.append(" err=").append(e.lastErrorCode)
+                            .append(" imm=").append(e.lastErrorWasImmediate)
+                    }
+                }
+                is VoskSpeechEngine -> sb.append("fg-vosk hi-IN")
+                else -> sb.append("fg-?")
+            }
+            if (gateReason != null) {
+                sb.append(" gate:rejected(").append(gateReason).append(')')
+            }
+            if (!text.isNullOrBlank()) {
+                sb.append(": ").append(text.trim())
+            }
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE).edit()
+                .putString("last_hear_path", sb.toString())
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal kaam isse nahi rukta.
+        }
+    }
+
+    /** v51 (item 2): saamne wale gate ke pehchan shabd — sikhaye hue shabd + seekhe kaamon ke naam। */
+    private fun fgGateExtraAccepted(): List<String> {
+        val out = mutableListOf<String>()
+        try {
+            out.addAll(TaughtCommands.readAll(this).map { it.trigger })
+        } catch (t: Throwable) {
+            // Na milein to gate apne niyam par chalega.
+        }
+        try {
+            out.addAll(LearnedRoutines.readAll(this).map { it.name })
+        } catch (t: Throwable) {
+            // Na milein to gate apne niyam par chalega.
+        }
+        return out
     }
 
     private fun toggleListening() {
@@ -664,6 +851,26 @@ class MainActivity : Activity() {
         // wale bole jawab ki ginati bhi taaza karo.
         resetCascade()
         politeFailureSpokenThisTurn = false
+        // v51 (item 2): gate wala hisaab bhi har naye
+        // turn par taaza।
+        fgGateRestarts = 0
+        // v51 (item 6a): mic ka daava pehle bandh do
+        // (arbiter) aur wake service ko chal raha
+        // COMMAND session bhi rokne ko kaho — sirf
+        // wake sunna rokna (purana PAUSE) kaafi nahi
+        // tha: beech session me tap karne par dono
+        // recognizer takrakar bip chakra banta tha।
+        // Sunna sach me shuru hone par PAUSE wala
+        // purana bandobast bhi chalega hi
+        // (onListeningStateChanged)।
+        MicArbiter.claim(this, MicArbiter.OWNER_FOREGROUND)
+        if (prefs.wakeServiceRunning) {
+            try {
+                startService(JarvisWakeService.yieldIntent(this))
+            } catch (e: Exception) {
+                // Service nahi mila — saamne wala sunna phir bhi try karo.
+            }
+        }
         // Mic-sharing (v1.3, v1.6): wake service ko rokna YAHAN
         // nahi hai — woh onListeningStateChanged(true) me hota hai,
         // jab sunna sach me shuru ho jata hai. Do recorder ek saath
@@ -694,6 +901,10 @@ class MainActivity : Activity() {
      * kiye laut jata hai.
      */
     private fun resumeWakeService() {
+        // v51 (item 6a): mic ka daava har raaste par
+        // chhodo — ye function sunne ke har ant par
+        // (natija / error / screen peeche) chalta hai।
+        MicArbiter.release(this, MicArbiter.OWNER_FOREGROUND)
         if (!wakePauseSent) return
         wakePauseSent = false
         if (!prefs.wakeServiceRunning) return
@@ -787,6 +998,15 @@ class MainActivity : Activity() {
         val vocative = PersonaVocative.stripVocative(text)
         val commandText = vocative?.second ?: text
         val vocativeLang = vocative?.first?.spokenLang()
+        // v51 (item 5): shaksiyat bandhi ho to yaad
+        // rakho — agli baar saamne wala sunna usi
+        // shaksiyat ki bhasha se shuru hoga (kataar
+        // ka sir)। Likha hua hukm bhi yahi raasta
+        // leta hai, isliye naam-pukar likhkar dene
+        // par bhi bandh jayega।
+        if (vocative != null) {
+            prefs.lastForegroundPersonaName = vocative.first.name
+        }
         // v49: SEEKHNE WALE PAKKE HUKM — wake service
         // wala hi ek object ([LearnCommands]) yahan
         // bhi: "মনে রেখো" aakhiri SAFAL screen-kaam
@@ -1592,9 +1812,40 @@ class MainActivity : Activity() {
                 taughtText.text =
                     "শেখানো কমান্ড (mot): " + TaughtCommands.count(this)
             }
+            // v51 (item 1): sunne ki report wali
+            // linein — background ne aakhiri kya suna,
+            // saamne wali screen ne aakhiri kya suna,
+            // aur sunne ka raasta (engine + bhasha +
+            // error)। Teeno chaabiyan service aur ye
+            // screen dono bandhte hain।
+            if (::backgroundHeardText.isInitialized) {
+                val bg = diag.getString("last_background_heard", null)
+                backgroundHeardText.text = if (bg.isNullOrBlank()) {
+                    "Background (aakhiri suna): abhi tak kuch nahi"
+                } else {
+                    "Background (aakhiri suna): $bg"
+                }
+            }
+            if (::foregroundHeardText.isInitialized) {
+                val fg = diag.getString("last_foreground_heard", null)
+                foregroundHeardText.text = if (fg.isNullOrBlank()) {
+                    "Saamne (aakhiri suna): abhi tak kuch nahi"
+                } else {
+                    "Saamne (aakhiri suna): $fg"
+                }
+            }
+            if (::hearPathText.isInitialized) {
+                val path = diag.getString("last_hear_path", null)
+                hearPathText.text = if (path.isNullOrBlank()) {
+                    "শোনার পথ (aakhiri): abhi tak koi turn nahi"
+                } else {
+                    "শোনার পথ (aakhiri): $path"
+                }
+            }
         } catch (t: Throwable) {
             // Report bonus hai — asal screen isse nahi rukti.
         }
+        refreshOfflinePackHint()
         // v41: Bangla model ki haalat wali line/button bhi
         // isi chakkar me taaza rahe (download ka percent).
         refreshBanglaModelUi()
@@ -1622,6 +1873,34 @@ class MainActivity : Activity() {
         // hai, isliye wake service se hui koshish ki report
         // bhi screen par khud dikh jayegi.
         refreshGeminiDiag()
+    }
+
+    /**
+     * v51 (item 4): Hindi offline pack wali salaah
+     * line ki dikhat — tab tak dikhe jab tak (a)
+     * offline engine asal me safal na ho jaye
+     * (service jarvis_diag me "offline_system_ok"
+     * bandhta hai), ya (b) malik use khud band na
+     * kar de। refreshDiagLines ke chakkar (2 s) me
+     * chalti hai, isliye safalta ke baad line khud
+     * chhup jati hai।
+     */
+    private fun refreshOfflinePackHint() {
+        if (!::offlinePackHintText.isInitialized) return
+        val packOk = try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .getString("offline_system_ok", null) == "1"
+        } catch (t: Throwable) {
+            false
+        }
+        val show = !prefs.offlinePackHintDismissed && !packOk
+        offlinePackHintText.visibility = if (show) View.VISIBLE else View.GONE
+        try {
+            findViewById<Button>(R.id.offlinePackHintClose).visibility =
+                if (show) View.VISIBLE else View.GONE
+        } catch (t: Throwable) {
+            // Button na mile to line ki dikhat hi kaafi hai.
+        }
     }
 
     /**
@@ -1868,6 +2147,9 @@ class MainActivity : Activity() {
         private const val REQUEST_RECORD_AUDIO = 1001
         private const val REQUEST_READ_CONTACTS = 1004
         private const val WAKE_REFRESH_MS = 2_000L
+
+        /** v51 (item 2): saamne wala gate ruke to bina bole zyada se zyada itni baar phir sunna. */
+        private const val FG_MAX_GATE_RESTARTS = 2
 
         /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
         private const val MAX_GEMINI_HISTORY_ENTRIES = 20
