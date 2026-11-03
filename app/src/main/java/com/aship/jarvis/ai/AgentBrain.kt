@@ -247,6 +247,14 @@ object AgentBrain {
                 "these things; use them to answer personal " +
                 "questions directly, with NO tool call:\n" + block
         }
+        // v50: MALIK KA NAAM — user ne khud bolkar
+        // bandha ho to mastishk use beech-beech me
+        // naam lekar pukare (har line me nahi —
+        // bandha block khud yehi kehta hai)। Naam
+        // na bandha ho to block aata hi nahi।
+        UserProfile.nameInstruction(context)?.let { block ->
+            text += "\n\n" + block
+        }
         // v49: SEEKHE KAAM — bandhe routines ke
         // sirf naam (kadam app khud screen_task me
         // jodta hai); mastishk in naamon se milan
