@@ -318,6 +318,16 @@
             android:text="শেখানো কমান্ড (mot): 0"
             android:textSize="12sp" />
 
+        <!-- v52: kaam ke niyamon (brain rules) ki kul
+             ginati — niyam bolkar sunne par milte hain. -->
+        <TextView
+            android:id="@+id/rulesText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="মনে রাখা নিয়ম (mot): 0"
+            android:textSize="12sp" />
+
         <!-- v51: sunne ki report — background ne
              aakhiri kya suna, saamne wali screen ne
              aakhiri kya suna, aur sunne ka raasta

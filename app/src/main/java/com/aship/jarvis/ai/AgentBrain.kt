@@ -281,6 +281,12 @@ object AgentBrain {
         LearnedRoutines.instructionBlock(context)?.let { block ->
             text += "\n\n" + block
         }
+        // v52: KAAM KE NIYAM — bandhe niyam (shart
+        // wale aur pasand wale) — mastishk inhe har
+        // baar bina bole mane।
+        BrainRules.instructionBlock(context)?.let { block ->
+            text += "\n\n" + block
+        }
         // v49: TAANA SESSION ka sandarbh — session
         // ke pichhle hukm/natije aur pehle liye
         // gaye screenshot ka sanket, taaki "তিন
@@ -605,5 +611,13 @@ object AgentBrain {
             "step, then finish with a final that confirms ONLY what the " +
             "tool results actually said. NEVER claim a step succeeded " +
             "when its result says FAILED — say honestly what went wrong.\n" +
-            "- Keep every \"say\" to 1–2 short spoken sentences."
+            "- Keep every \"say\" to 1–2 short spoken sentences.\n" +
+            "- The app's OWN send button: the user can say " +
+            "'সেন্ড করো / send karo' and the app itself presses " +
+            "its own Send button for the text typed in its command " +
+            "box — that is allowed and built in. NEVER say the send " +
+            "button can't be pressed for safety reasons. If the user " +
+            "asks why you can't press the send button, answer that " +
+            "you CAN — just type text in the box and say " +
+            "'সেন্ড করো'.\n" +
 }

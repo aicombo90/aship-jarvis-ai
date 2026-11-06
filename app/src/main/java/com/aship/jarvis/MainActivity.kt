@@ -28,6 +28,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
@@ -43,6 +44,8 @@ import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.RuleCommands
+import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
@@ -165,6 +168,7 @@ class MainActivity : Activity() {
     // "কী কী শিখেছ" bolne par awaaz se milte hain)।
     private lateinit var learnedText: TextView
     private lateinit var taughtText: TextView
+    private lateinit var rulesText: TextView
 
     // v51 (item 1): sunne ki report wali teen nayi
     // linein — background ne aakhiri kya suna
@@ -325,11 +329,7 @@ class MainActivity : Activity() {
         micButton.setOnClickListener { toggleListening() }
 
         findViewById<Button>(R.id.sendButton).setOnClickListener {
-            val typed = commandInput.text.toString()
-            if (typed.isNotBlank()) {
-                processCommand(typed)
-                commandInput.text.clear()
-            }
+            submitTypedCommand()
         }
 
         findViewById<Button>(R.id.downloadModelButton).setOnClickListener {
@@ -368,6 +368,7 @@ class MainActivity : Activity() {
         personaText = findViewById(R.id.personaText)
         learnedText = findViewById(R.id.learnedText)
         taughtText = findViewById(R.id.taughtText)
+        rulesText = findViewById(R.id.rulesText)
         // v51 (item 1): sunne ki report wali linein।
         backgroundHeardText = findViewById(R.id.backgroundHeardText)
         foregroundHeardText = findViewById(R.id.foregroundHeardText)
@@ -954,6 +955,26 @@ class MainActivity : Activity() {
     // Command handling
     // ------------------------------------------------------------------
 
+    /**
+     * v52: SEND BUTTON — box me likha hua hukm bhejne
+     * ka EK hi raasta: button dabao ya "সেন্ড করো"
+     * bolo — dono yahi se jate hain, isliye bilkul
+     * wahi hota hai jo button dabane par hota hai।
+     * Box PEHLE khaali karke phir [processCommand]
+     * bulaya jata hai — taaki box me "সেন্ড করো"
+     * likha ho to bhi dobara send na baje (warna
+     * bheja hua hukm khud hi send hukm bankar
+     * phir se dabega)। Box khaali ho to false,
+     * kuch bheja hi nahi।
+     */
+    private fun submitTypedCommand(): Boolean {
+        val typed = commandInput.text.toString()
+        if (typed.isBlank()) return false
+        commandInput.text.clear()
+        processCommand(typed)
+        return true
+    }
+
     private fun processCommand(text: String) {
         // v50: SHUTDOWN yahan bhi sabse pehle — background
         // wala hi niyam: "শাটডাউন" bolte/likhte hi baat
@@ -1007,6 +1028,30 @@ class MainActivity : Activity() {
         if (vocative != null) {
             prefs.lastForegroundPersonaName = vocative.first.name
         }
+        // v52: SEND BUTTON WALA HUKM — "সেন্ড করো" /
+        // "কমান্ড পাঠাও" bolte hi apna hi send button
+        // dabega: box me jo likha hai wohi bheja jayega
+        // (button dabane wala hi raasta —
+        // [submitTypedCommand])। Box khaali ho to
+        // imaandaar jawab, aur kuch nahi। Baat
+        // mastishk (online) tak jayegi hi nahi —
+        // isliye "safety rules" wala manaahi ab
+        // kabhi aayega nahi। Screen-agent ka sawal
+        // latka ho to woh upar pehle hi pakda gaya
+        // hai — ye baat uska jawab nahi, naya hukm
+        // hai। Bheja gaya hukm khud [processCommand]
+        // se hokar chalega — uska jawab wahi bolega।
+        if (SendButtonCommands.isSendCommand(commandText)) {
+            if (!submitTypedCommand()) {
+                val emptyLine = SendButtonCommands.emptyReply(
+                    vocativeLang ?: PlayIntent.requestLanguage(commandText)
+                )
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $emptyLine"
+                speaker.speak(emptyLine)
+            }
+            return
+        }
         // v49: SEEKHNE WALE PAKKE HUKM — wake service
         // wala hi ek object ([LearnCommands]) yahan
         // bhi: "মনে রেখো" aakhiri SAFAL screen-kaam
@@ -1037,6 +1082,26 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             responseText.text = "Maya: $teachLine"
             speaker.speak(teachLine)
+            return
+        }
+        // v52: KAAM KE NIYAM — "নিয়ম মনে রাখো: যখন
+        // … তখন …" (ya "মনে রাখো, যখন … তখন …") se
+        // niyam bandhna, "কী কী নিয়ম মনে আছে" se
+        // suchi, "… ভুলে যাও" se ek niyam mitana।
+        // Sirf saaf niyam wale roop pakadta hai;
+        // baaki [LearnCommands] ka hai — isliye
+        // [LearnCommands] se PEHLE bulaya jata hai,
+        // par bina apne roop ke null dekar raasta
+        // chhod deta hai (tathya wala "মনে রেখো,
+        // <baat>" mastishk ke remember_fact par hi
+        // jayega, bilkul pehle jaisa)।
+        RuleCommands.tryHandleAdmin(
+            this, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText)
+        )?.let { ruleLine ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Maya: $ruleLine"
+            speaker.speak(ruleLine)
             return
         }
         LearnCommands.tryHandle(
@@ -1075,6 +1140,19 @@ class MainActivity : Activity() {
             speaker.speak(taughtExec.result.responseText)
             return
         }
+        // v52: KAAM KE NIYAM — baat kisi bandhe
+        // niyam ki shart se mile to uska kaam pehle
+        // chup-chaap chalega (screenshot wala niyam
+        // saamne wali screen par nahi — woh
+        // background wale raaste se chalega), phir
+        // asal hukm apne aam raaste se chalega।
+        // Return NAHI hota — niyam lagna asal hukm
+        // ko rokta nahi, usse pehle kaam karwata hai।
+        RuleCommands.tryApplyRule(
+            this, commandEngine, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText),
+            allowScreenshot = false
+        )
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -1811,6 +1889,13 @@ class MainActivity : Activity() {
             if (::taughtText.isInitialized) {
                 taughtText.text =
                     "শেখানো কমান্ড (mot): " + TaughtCommands.count(this)
+            }
+            // v52: kaam ke niyamon ki ginati —
+            // godam se taaza ginati (niyam bolkar
+            // sunne par milte hain)।
+            if (::rulesText.isInitialized) {
+                rulesText.text =
+                    "মনে রাখা নিয়ম (mot): " + BrainRules.count(this)
             }
             // v51 (item 1): sunne ki report wali
             // linein — background ne aakhiri kya suna,

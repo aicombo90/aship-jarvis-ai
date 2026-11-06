@@ -45,6 +45,8 @@ import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.RuleCommands
+import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
@@ -2792,6 +2794,23 @@ class JarvisWakeService : Service() {
             startWakeSession()
             return
         }
+        // v52: SEND BUTTON — background me koi box hota
+        // hi nahi, isliye yahan sirf imaandaar jawab:
+        // screen kholo, likho, phir "সেন্ড করো" bolo।
+        // Kuch invent karke bheja nahi jata — box ka
+        // kaam sirf saamne wali screen par hota hai।
+        if (SendButtonCommands.isSendCommand(text)) {
+            val sendLine = SendButtonCommands.backgroundReply(
+                personaSpokenLang()
+            )
+            setStatus("Send button — screen khuli nahi hai")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(sendLine)
+            armReplyFallback(sendLine)
+            orbOverlay.setReply(sendLine)
+            return
+        }
         // v49: "আর কিছু?" ke jawab me saaf NA / bas —
         // session vinamrata se band (aam boli wali
         // vida, gola thaharkar gayab, wake sunna
@@ -2818,6 +2837,26 @@ class JarvisWakeService : Service() {
             speaker.speak(teachLine)
             armReplyFallback(teachLine)
             orbOverlay.setReply(teachLine)
+            return
+        }
+        // v52: KAAM KE NIYAM — "নিয়ম মনে রাখো: যখন
+        // … তখন …" (ya "মনে রাখো, যখন … তখন …") se
+        // niyam bandhna, "কী কী নিয়ম মনে আছে" se
+        // suchi, "… ভুলে যাও" se ek niyam mitana।
+        // Sirf saaf niyam wale roop pakadta hai;
+        // baaki [LearnCommands] ka hai — isliye
+        // [LearnCommands] se PEHLE bulaya jata hai,
+        // par bina apne roop ke null dekar raasta
+        // chhod deta hai।
+        RuleCommands.tryHandleAdmin(
+            applicationContext, text, personaSpokenLang()
+        )?.let { ruleLine ->
+            setStatus("Niyam wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(ruleLine)
+            armReplyFallback(ruleLine)
+            orbOverlay.setReply(ruleLine)
             return
         }
         // v49: SEEKHNE WALE PAKKE HUKM — session ke
@@ -2903,6 +2942,17 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, taughtExec.result)
             return
         }
+        // v52: KAAM KE NIYAM — baat kisi bandhe
+        // niyam ki shart se mile to uska kaam pehle
+        // chup-chaap chalega (screenshot wala niyam
+        // bhi yahan chalta hai — background wala
+        // raasta), phir asal hukm apne aam raaste se
+        // chalega। Return NAHI hota — niyam lagna
+        // asal hukm ko rokta nahi।
+        RuleCommands.tryApplyRule(
+            applicationContext, commandEngine, text,
+            personaSpokenLang(), allowScreenshot = true
+        )
         addaNoSpeechCount = 0
         // v49: asal hukm ki koshish shuru — lagatar
         // na-samajhne ki ginati yahan se taaza (ye
