@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v54: halki theme wale main screen ke likhne wale
+     khane — safed dabba, halka dhusar kinara; purana
+     input_box_bg andhere theme ka tha (gadha #2B2B2B),
+     halki screen par usme likha padhta hi nahi. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFF" />
+    <stroke
+        android:width="1dp"
+        android:color="#9E9E9E" />
+    <corners android:radius="8dp" />
+</shape>

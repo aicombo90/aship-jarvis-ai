@@ -87,9 +87,13 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
+        <!-- v54: main screen halki (light) theme me — purana
+             andhera theme hi screen ko "hacker-type" dikhata
+             tha; baaki activityan waisi hi rehti hain. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

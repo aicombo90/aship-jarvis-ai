@@ -619,5 +619,5 @@ object AgentBrain {
             "button can't be pressed for safety reasons. If the user " +
             "asks why you can't press the send button, answer that " +
             "you CAN — just type text in the box and say " +
-            "'সেন্ড করো'.\n" +
+            "'সেন্ড করো'.\n"
 }

@@ -179,6 +179,12 @@ class MainActivity : Activity() {
     private lateinit var historyList: LinearLayout
     private lateinit var historyClearButton: Button
 
+    // v54: "এক নজরে" wala summary card + aakhiri hukm
+    // dobara chalane wala button (voice wala "আবার
+    // করো" hi, sirf button wala roop)।
+    private lateinit var summaryText: TextView
+    private lateinit var repeatLastButton: Button
+
     // v51 (item 1): sunne ki report wali teen nayi
     // linein — background ne aakhiri kya suna
     // (last_background_heard), saamne wali screen ne
@@ -325,6 +331,8 @@ class MainActivity : Activity() {
         banglaModelManager = BanglaModelManager(this)
 
         statusText = findViewById(R.id.statusText)
+        // v54: "এক নজরে" card — taaza ginati yahin dikhegi।
+        summaryText = findViewById(R.id.summaryText)
         recognizedText = findViewById(R.id.recognizedText)
         responseText = findViewById(R.id.responseText)
         micButton = findViewById(R.id.micButton)
@@ -445,6 +453,23 @@ class MainActivity : Activity() {
             CommandHistory.clear(this)
             refreshHistoryUi()
             Toast.makeText(this, "ইতিহাস মুছে দেওয়া হয়েছে।", Toast.LENGTH_SHORT).show()
+        }
+        // v54: "🔁 আবার চালাও" — aakhiri hukm ek tap me
+        // phir chalao (voice wala "আবার করো" hi — wahi
+        // [HistoryCommands.lastRepeatable], isliye kabhi
+        // loop nahi banta)। Kuch na ho to sirf Toast।
+        repeatLastButton = findViewById(R.id.repeatLastButton)
+        repeatLastButton.setOnClickListener {
+            val last = HistoryCommands.lastRepeatable(this)
+            if (last == null) {
+                Toast.makeText(
+                    this,
+                    "এখনো কোনো কমান্ড দেওয়া হয়নি।",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                processCommand(last)
+            }
         }
         refreshHistoryUi()
         // v37: screen-agent ke sawalon ki mezbaani is
@@ -1042,8 +1067,42 @@ class MainActivity : Activity() {
             }
             historyClearButton.visibility =
                 if (items.isEmpty()) View.GONE else View.VISIBLE
+            // v54: "আবার চালাও" tabhi dikhao jab dobara
+            // chalane layak koi hukm ho (sirf "আবার করো"
+            // bhara ho to bhi chhupa rahega)।
+            if (::repeatLastButton.isInitialized) {
+                repeatLastButton.visibility =
+                    if (HistoryCommands.lastRepeatable(this) == null) {
+                        View.GONE
+                    } else {
+                        View.VISIBLE
+                    }
+            }
         } catch (t: Throwable) {
             // History ki list kabhi asal kaam na roke.
+        }
+    }
+
+    /**
+     * v54: "এক নজরে" wala card — API key kitni set hain,
+     * niyam / seekhe kaam / shikhaye command kitne hain,
+     * history me kitne hukm hain; ek nazar me sab। Ye
+     * [refreshDiagLines] ke chakkar (onResume + har 2 s)
+     * me taza hota hai, isliye ginati hamesha taaza।
+     */
+    private fun refreshSummaryCard() {
+        try {
+            if (!::summaryText.isInitialized) return
+            val keysDone = ProviderKeys.configuredCount(this)
+            val keysTotal = ProviderKeys.Provider.values().size
+            summaryText.text =
+                "🔑 API Keys: $keysDone/$keysTotal সেট" +
+                    "  •  🧠 নিয়ম: ${BrainRules.count(this)}" +
+                    "  •  শেখা কাজ: ${LearnedRoutines.count(this)}" +
+                    "  •  শেখানো কমান্ড: ${TaughtCommands.count(this)}" +
+                    "\n📜 ইতিহাস: ${CommandHistory.list(this).size}টি কমান্ড"
+        } catch (t: Throwable) {
+            // Summary bonus hai — asal kaam kabhi na ruke.
         }
     }
 
@@ -2063,6 +2122,8 @@ class MainActivity : Activity() {
         // hai, isliye wake service se hui koshish ki report
         // bhi screen par khud dikh jayegi.
         refreshGeminiDiag()
+        // v54: "এক নজরে" card bhi isi chakkar me taza rahe।
+        refreshSummaryCard()
     }
 
     /**
