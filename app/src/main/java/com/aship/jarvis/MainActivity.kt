@@ -21,6 +21,7 @@ import android.speech.SpeechRecognizer
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Switch
@@ -30,6 +31,7 @@ import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.LearnedRoutines
+import com.aship.jarvis.ai.ProviderKeys
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
@@ -38,8 +40,10 @@ import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
+import com.aship.jarvis.commands.CommandHistory
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.HearingGate
+import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
@@ -169,6 +173,11 @@ class MainActivity : Activity() {
     private lateinit var learnedText: TextView
     private lateinit var taughtText: TextView
     private lateinit var rulesText: TextView
+
+    // v53: API Keys wala button + command history wali list।
+    private lateinit var apiKeysButton: Button
+    private lateinit var historyList: LinearLayout
+    private lateinit var historyClearButton: Button
 
     // v51 (item 1): sunne ki report wali teen nayi
     // linein — background ne aakhiri kya suna
@@ -420,6 +429,24 @@ class MainActivity : Activity() {
             updateStatus()
             Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
         }
+        // v53: API Keys — saare free provideron ki key ek
+        // alag screen par; Gemini wala hissa upar waisa hi
+        // rehta hai aur waisa hi kaam karega।
+        apiKeysButton = findViewById(R.id.apiKeysButton)
+        apiKeysButton.setOnClickListener {
+            startActivity(Intent(this, ApiKeysActivity::class.java))
+        }
+        refreshApiKeysButton()
+        // v53: command history — aakhiri 5 hukm tappable
+        // list; tap karte hi wohi hukm phir chalega।
+        historyList = findViewById(R.id.historyList)
+        historyClearButton = findViewById(R.id.historyClearButton)
+        historyClearButton.setOnClickListener {
+            CommandHistory.clear(this)
+            refreshHistoryUi()
+            Toast.makeText(this, "ইতিহাস মুছে দেওয়া হয়েছে।", Toast.LENGTH_SHORT).show()
+        }
+        refreshHistoryUi()
         // v37: screen-agent ke sawalon ki mezbaani is
         // screen ke naam bandho (onDestroy me hat ti hai).
         ScreenConfirm.registerActivityHost(screenConfirmHost)
@@ -443,6 +470,8 @@ class MainActivity : Activity() {
         // par khud sunna shuru karne ka jhanda.
         activityInForeground = true
         refreshDiagLines()
+        refreshApiKeysButton()
+        refreshHistoryUi()
         // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
         mainHandler.postDelayed(wakeRefreshRunnable, WAKE_REFRESH_MS)
@@ -975,6 +1004,49 @@ class MainActivity : Activity() {
         return true
     }
 
+    /**
+     * v53: API Keys wale button par kitni key set hain,
+     * wohi dikhao — "🔑 API Keys (2/6 সেট)"। Key ka
+     * text kabhi dikhta nahi।
+     */
+    private fun refreshApiKeysButton() {
+        try {
+            if (!::apiKeysButton.isInitialized) return
+            val done = ProviderKeys.configuredCount(this)
+            val total = ProviderKeys.Provider.values().size
+            apiKeysButton.text = "🔑 API Keys ($done/$total সেট)"
+        } catch (t: Throwable) {
+            // Button ka label kabhi asal kaam na roke.
+        }
+    }
+
+    /**
+     * v53: history wali list taza karo — aakhiri 5 hukm
+     * chhote button bankar; tap karte hi wohi hukm
+     * [processCommand] se phir chalega। Koi gadbad ho
+     * to list chup-chaap khaali — asal kaam kabhi na ruke।
+     */
+    private fun refreshHistoryUi() {
+        try {
+            if (!::historyList.isInitialized) return
+            historyList.removeAllViews()
+            val items = CommandHistory.list(this).take(CommandHistory.SHOWN)
+            for (item in items) {
+                val button = Button(this)
+                button.text = item
+                button.textSize = 13f
+                button.isSingleLine = true
+                button.ellipsize = android.text.TextUtils.TruncateAt.END
+                button.setOnClickListener { processCommand(item) }
+                historyList.addView(button)
+            }
+            historyClearButton.visibility =
+                if (items.isEmpty()) View.GONE else View.VISIBLE
+        } catch (t: Throwable) {
+            // History ki list kabhi asal kaam na roke.
+        }
+    }
+
     private fun processCommand(text: String) {
         // v50: SHUTDOWN yahan bhi sabse pehle — background
         // wala hi niyam: "শাটডাউন" bolte/likhte hi baat
@@ -1008,6 +1080,11 @@ class MainActivity : Activity() {
                 "Maya: jawab mil gaya — screen wala kaam aage badh raha hai..."
             return
         }
+        // v53: COMMAND HISTORY — naya hukm yaad rakho
+        // (shutdown aur latke sawal ka jawab nahi —
+        // woh upar pehle hi pakde gaye)।
+        CommandHistory.record(this, text)
+        refreshHistoryUi()
         recognizedText.text = "Aapne kaha: $text"
         // v48: baat kisi shaksiyat ko NAAM lekar shuru
         // ho ("মায়া, ..." / "তারা, ...") to naam
@@ -1050,6 +1127,34 @@ class MainActivity : Activity() {
                 responseText.text = "Maya: $emptyLine"
                 speaker.speak(emptyLine)
             }
+            return
+        }
+        // v53: HISTORY WALE HUKM — "আবার করো" (aakhiri
+        // hukm phir chalao) aur "ইতিহাস মুছে দাও"।
+        // Dono offline; mastishk tak jayenge hi nahi।
+        if (HistoryCommands.isRepeatCommand(commandText)) {
+            val last = HistoryCommands.lastRepeatable(this)
+            if (last == null) {
+                val line = HistoryCommands.emptyReply(
+                    vocativeLang ?: PlayIntent.requestLanguage(commandText)
+                )
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $line"
+                speaker.speak(line)
+            } else {
+                processCommand(last)
+            }
+            return
+        }
+        if (HistoryCommands.isClearHistoryCommand(commandText)) {
+            CommandHistory.clear(this)
+            refreshHistoryUi()
+            val line = HistoryCommands.clearedReply(
+                vocativeLang ?: PlayIntent.requestLanguage(commandText)
+            )
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Maya: $line"
+            speaker.speak(line)
             return
         }
         // v49: SEEKHNE WALE PAKKE HUKM — wake service

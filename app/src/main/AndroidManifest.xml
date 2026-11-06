@@ -111,6 +111,11 @@
             android:name=".SamsungSetupActivity"
             android:exported="false" />
 
+        <!-- v53: API Keys wali screen — saare free provideron ki key ek jagah। -->
+        <activity
+            android:name=".ApiKeysActivity"
+            android:exported="false" />
+
         <!-- Phase 2: wake-word foreground service. Not exported; only
              this app's UI starts and stops it. -->
         <service

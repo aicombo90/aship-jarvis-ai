@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v53: API Keys wali screen — saare free provideron
+     ki key ek jagah. Har provider ki row code se banti
+     hai ([ApiKeysActivity]) — XML me sirf dabba, upar
+     ki baat aur peeche wala button. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔑 API Keys"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="সব ফ্রি প্রোভাইডারের key এখানে রাখো — key শুধু এই ফোনেই থাকে, যে প্রোভাইডারকে ডাকা হবে শুধু তার কাছেই যাবে। Gemini-র key এখান থেকেও বদলানো যায় — মূল স্ক্রিনের জায়গাটাও আগের মতোই কাজ করবে।"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/apiKeysContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical" />
+
+        <Button
+            android:id="@+id/apiKeysBackButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="← ফিরে যাও" />
+
+    </LinearLayout>
+
+</ScrollView>

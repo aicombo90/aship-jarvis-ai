@@ -139,6 +139,17 @@
             android:layout_height="wrap_content"
             android:text="KEY HATAO" />
 
+        <!-- v53: API Keys — saare free provideron ki key
+             ek alag screen par (Gemini wala hissa upar
+             waisa hi rehta hai)। Button par kitni key
+             set hain, wohi dikhta hai। -->
+        <Button
+            android:id="@+id/apiKeysButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="🔑 API Keys (0/6 সেট)" />
+
         <Button
             android:id="@+id/micButton"
             android:layout_width="match_parent"
@@ -192,6 +203,35 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="কমান্ড পাঠাও" />
+
+        <!-- v53: command history — aakhiri 5 hukm;
+             tap karte hi wohi hukm phir chalega। -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="📜 আগের কমান্ড"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/historyClearButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ইতিহাস মুছুন" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/historyList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical" />
 
         <Button
             android:id="@+id/downloadModelButton"
