@@ -35,6 +35,7 @@ import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.DataButtonVision
 import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.LearnedRoutines
+import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.ProviderKeys
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
@@ -1928,7 +1929,10 @@ class MainActivity : Activity() {
         // (agentAlreadyTried ki shart isliye: kataar ka
         // natija ISI baat ki taaza daud ka hai, purani
         // band report ka nahi.)
-        if (agentAlreadyTried && GeminiBrain.lastChainWasQuota(this)) {
+        if (agentAlreadyTried &&
+            (GeminiBrain.lastChainWasQuota(this) ||
+                ProviderChain.lastChainWasQuota(this))
+        ) {
             val line = PlayIntent.quotaReply(PlayIntent.requestLanguage(text))
             politeFailureSpokenThisTurn = true
             responseText.text = "Maya: $line"
@@ -2061,10 +2065,13 @@ class MainActivity : Activity() {
     /**
      * v21 gate (wake service wala hi niyam): mode pure-Offline
      * na ho, key set ho aur net chalu ho — tabhi Gemini bulao.
+     * v58: key kisi bhi ek provider ki ho — chain Gemini se
+     * shuru hokar baaki provideron par jati hai (isliye sirf
+     * Gemini key ki shart ab nahi rahi)।
      */
     private fun geminiBrainAllowed(): Boolean {
         if (prefs.mode == JarvisMode.OFFLINE) return false
-        if (!GeminiBrain.isConfigured(this)) return false
+        if (!ProviderChain.anyProviderConfigured(this)) return false
         return isNetworkUp()
     }
 

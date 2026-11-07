@@ -34,6 +34,7 @@ import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.LearnedRoutines
+import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.SessionShot
 import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.ai.UserProfile
@@ -3169,10 +3170,12 @@ class JarvisWakeService : Service() {
      * aakhiri shabd hai), user ne Gemini key di ho, aur is pal
      * net sach me chalu ho. Ek bhi na mile to Gemini ka naam
      * bhi nahi liya jata — purana offline raasta hi chalega.
+     * v58: key kisi bhi ek provider ki ho — chain Gemini se
+     * shuru hokar baaki provideron par jati hai।
      */
     private fun geminiBrainAllowed(): Boolean {
         if (prefs.mode == JarvisMode.OFFLINE) return false
-        if (!GeminiBrain.isConfigured(applicationContext)) return false
+        if (!ProviderChain.anyProviderConfigured(applicationContext)) return false
         return isNetworkUp()
     }
 
@@ -3303,7 +3306,8 @@ class JarvisWakeService : Service() {
             // imaandaar "online seema khatm" wala jawab —
             // user ki bhasha me, handled bankar (retry nahi).
             if (!engineResult.handled &&
-                GeminiBrain.lastChainWasQuota(applicationContext)
+                (GeminiBrain.lastChainWasQuota(applicationContext) ||
+                    ProviderChain.lastChainWasQuota(applicationContext))
             ) {
                 finishCommandResult(
                     text,

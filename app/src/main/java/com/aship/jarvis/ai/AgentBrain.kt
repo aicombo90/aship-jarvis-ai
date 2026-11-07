@@ -169,11 +169,19 @@ object AgentBrain {
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
-            var raw = GeminiBrain.requestAgentRound(
+            // v58: poori provider chain — Gemini pehle
+            // (uski purani kataar), phir Groq/OpenRouter/
+            // Cloudflare/SambaNova/Cohere (jinki key set
+            // hai). Koi provider fail ho ya 429 de to
+            // chain chup-chaap agle par jati hai.
+            var raw = ProviderChain.agentRound(
                 context, instruction, contents
             )
             if (raw == null && round == 1 &&
-                !GeminiBrain.lastChainWasQuota(context)
+                !GeminiBrain.lastChainWasQuota(context) &&
+                !ProviderChain.lastChainWasQuota(context) &&
+                GeminiBrain.isConfigured(context) &&
+                ProviderChain.configuredCount(context) == 1
             ) {
                 // v51 (item 9): poori TEXT kataar (Lite
                 // pehle) chup rahi aur wajah kota NAHI
@@ -183,6 +191,10 @@ object AgentBrain {
                 // model pehle) aazmao. Kota wali haar par
                 // dobara koshish bekaar hai (har model
                 // bandh hai) — isliye woh shart upar hai।
+                // v58: ye dobara koshish sirf tab jab
+                // chain me Gemini ke alawa koi provider
+                // tha hi nahi — warna chain ne pehle hi
+                // baaki provider aazma liye hain।
                 raw = GeminiBrain.requestAgentRound(
                     context, instruction, contents,
                     GeminiBrain.RequestClass.TEXT_MAIN_FIRST
