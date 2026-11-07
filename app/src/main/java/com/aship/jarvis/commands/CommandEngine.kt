@@ -2065,9 +2065,14 @@ class CommandEngine(
          * laut aata hai, lambi seema sirf fallback par
          * lagti hai. v62: 25s se 45s — vivo par har baar
          * pura vision raasta chalta hai (AgentTools wali
-         * seema ke barabar)।
+         * seema ke barabar)। v65: 45s se 60s — vision
+         * kataar (3 mukhya model, har koshish 30s judna
+         * + 60s padhna) dheeme net par 45s se zyada le
+         * sakti hai; seema beetne par Maya jhootha "tile
+         * nahi mila" bolti hai jabki service abhi kaam kar
+         * rahi hoti hai।
          */
-        const val DATA_COMMAND_WAIT_MS = 45_000L
+        const val DATA_COMMAND_WAIT_MS = 60_000L
 
         /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
         const val SCROLL_COMMAND_WAIT_MS = 5_000L

@@ -23,6 +23,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.aship.jarvis.ai.DataButtonVision
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.commands.DataButtonLearner
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -281,6 +283,93 @@ class JarvisAccessibilityService : AccessibilityService() {
     private var scanBestScore = 0
     private var scanTileLabel: String? = null
     private var pendingScanReport: String? = null
+
+    /**
+     * v65: toggle ki koshish ka ek-line wala rasta — kaun sa
+     * raasta chala, kaun sa kyun chhoda. Sirf worker thread
+     * chhoota hai (worker ek hi thread hai). Har toggle ki
+     * shuruaat me saaf hota hai; aakhir me report me judta
+     * hai taaki agli baar "tile nahi mila" par ye bhi dikhe
+     * ki seekhi jagah / vision aazmaya gaya tha ya nahi, aur
+     * aazmaya gaya to kis kadam par ruka. 17:05 wali jaanch
+     * me ye khaali tha — report me sirf text-scan dikha tha,
+     * vision ka koi nishan nahi.
+     */
+    private val toggleTrace = StringBuilder()
+
+    /**
+     * v65: QS tile SIRF SystemUI ki khidki me hota hai
+     * ("com.android.systemui"). Neeche wali app ki khidki
+     * (jaise Jarvis ki apni বিস্তারিত রিপোর্ট) ke ped me
+     * "mobile data" shabd milna tile NAHI hai — 17:05 me
+     * report ki apni line ("...of mobile data...") 3 number
+     * pakar tile ban gayi thi, phir us par tap fail hua aur
+     * vision wala raasta kabhi chala hi nahi. Isliye data-tile
+     * se judi saari khoj (text-scan, haalat-padhna, seekhi
+     * jagah ka rakshak) sirf SystemUI ped par. Gair-SystemUI
+     * ped turant saaf kar diye jate hain (ek hi node do baar
+     * aaye to ek hi baar saaf ho — dobara saaf karna mana)।
+     */
+    private fun systemUiRootsOnly(
+        roots: List<AccessibilityNodeInfo>
+    ): List<AccessibilityNodeInfo> {
+        val kept = ArrayList<AccessibilityNodeInfo>()
+        val seen = Collections.newSetFromMap(
+            IdentityHashMap<AccessibilityNodeInfo, Boolean>()
+        )
+        for (root in roots) {
+            if (!seen.add(root)) continue
+            val isSysui = try {
+                root.packageName?.toString() == SYSTEMUI_PACKAGE
+            } catch (t: Throwable) {
+                false
+            }
+            if (isSysui) {
+                kept.add(root)
+            } else {
+                try {
+                    root.recycle()
+                } catch (t: Throwable) {
+                    // Pehle se saaf: kuch nahi karna.
+                }
+            }
+        }
+        return kept
+    }
+
+    /**
+     * v65: node tile-jaisi chhoti hai ya panel ka bada
+     * background hissa — seekhi jagah ke rakshak ke liye।
+     * Tile ka khana screen ki chaudaai ka ~1/4 aur unchai
+     * ka ~8% hota hai; panel ka container poori screen
+     * hota hai. Bade container par koi naam ho (jaise
+     * "Quick settings") to woh "aur tile" NAHI hai — use
+     * dekhkar seekhi jagah dabana rokna galat hai (is vivo
+     * par ped me tile grid hai hi nahi, isliye sabse gehra
+     * node aksar container hi hota hai)।
+     */
+    private fun isTileSizedNode(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) return false
+            val metrics = resources.displayMetrics
+            val w = metrics.widthPixels
+            val h = metrics.heightPixels
+            if (w <= 0 || h <= 0) return false
+            bounds.width() <= w * 0.45f &&
+                bounds.height() <= h * 0.25f &&
+                bounds.top >= h * 0.08f
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** v65: report me jodne layak rasta — khaali ho to kuch nahi। */
+    private fun toggleTraceSuffix(): String {
+        val trace = toggleTrace.toString().trim()
+        return if (trace.isEmpty()) "" else " | " + trace
+    }
 
     // v26: YouTube tap ki haalat. tapBusy ek jhanda hai jo
     // kisi bhi thread se padha jata hai (@Volatile) — ek
@@ -1742,7 +1831,9 @@ class JarvisAccessibilityService : AccessibilityService() {
         var lastLabelCount = -1
         var lastLabelChangeMs = SystemClock.uptimeMillis()
         while (tile == null && SystemClock.uptimeMillis() < deadline) {
-            val roots = collectRoots()
+            // v65: sirf SystemUI ped — neeche wali app (Jarvis ki
+            // apni report) ke shabd tile nahi ban sakte (17:05)।
+            val roots = systemUiRootsOnly(collectRoots())
             scanRootsScanned += roots.size
             for (root in roots) {
                 if (root.packageName?.toString() == SYSTEMUI_PACKAGE) {
@@ -1837,6 +1928,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     /** Asal kaam — sirf worker thread se bulana. */
     private fun runToggle(turnOn: Boolean): DataResult {
+        toggleTrace.clear()
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
             // Panel khula tha par text se tile nahi mila —
@@ -1875,6 +1967,13 @@ class JarvisAccessibilityService : AccessibilityService() {
             tapped = tapTileCenter(clickTarget)
         }
         if (!tapped) {
+            // v65: tile mila tha par dab hi nahi paya (click +
+            // gesture dono false) — report me ye likho, warna
+            // agle report me sirf scan dikhega aur lagega ki
+            // tile mila hi nahi tha (17:05 wali bhram)।
+            toggleTrace.append("text-tile tap failed; ")
+            pendingScanReport =
+                (pendingScanReport ?: "") + toggleTraceSuffix()
             performGlobalAction(GLOBAL_ACTION_BACK)
             return DataResult.TILE_NOT_FOUND
         }
@@ -1907,6 +2006,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     /** v18: asal ulta-karne wala kaam — sirf worker thread se bulana. */
     private fun runFlip(): DataOutcome {
+        toggleTrace.clear()
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
             // v57: text fail ho to vision wala raasta.
@@ -1929,6 +2029,11 @@ class JarvisAccessibilityService : AccessibilityService() {
             tapped = tapTileCenter(clickTarget)
         }
         if (!tapped) {
+            // v65: runToggle jaisa — tile mila tha par dab hi
+            // nahi paya, report me ye likho।
+            toggleTrace.append("text-tile tap failed; ")
+            pendingScanReport =
+                (pendingScanReport ?: "") + toggleTraceSuffix()
             performGlobalAction(GLOBAL_ACTION_BACK)
             return DataOutcome.TILE_NOT_FOUND
         }
@@ -1975,25 +2080,38 @@ class JarvisAccessibilityService : AccessibilityService() {
     private fun visionToggle(turnOn: Boolean): DataResult {
         val result = visionTapForData(turnOn)
         performGlobalAction(GLOBAL_ACTION_BACK)
+        // v65: har shakha me rasta report me — khaas karke
+        // NotFound me (17:05 me wahi khaali tha, isliye laga
+        // vision chala hi nahi)।
+        val suffix = toggleTraceSuffix()
         return when (result) {
             is VisionTapResult.Success -> {
                 if (result.afterState == turnOn) {
                     pendingScanReport =
-                        "OK vision state=" + if (turnOn) "on" else "off"
+                        "OK vision state=" + if (turnOn) "on" else "off" +
+                            suffix
                     DataResult.SUCCESS
                 } else {
+                    pendingScanReport =
+                        (pendingScanReport ?: "") + suffix
                     DataResult.TILE_NOT_FOUND
                 }
             }
             VisionTapResult.TappedUnknown -> {
-                pendingScanReport = "vision tapped, state unknown"
+                pendingScanReport =
+                    "vision tapped, state unknown" + suffix
                 DataResult.TAPPED_UNKNOWN
             }
             VisionTapResult.NoKey -> {
-                pendingScanReport = "vision needs Gemini key (not set)"
+                pendingScanReport =
+                    "vision needs Gemini key (not set)" + suffix
                 DataResult.NO_GEMINI_KEY
             }
-            VisionTapResult.NotFound -> DataResult.TILE_NOT_FOUND
+            VisionTapResult.NotFound -> {
+                pendingScanReport =
+                    (pendingScanReport ?: "") + suffix
+                DataResult.TILE_NOT_FOUND
+            }
         }
     }
 
@@ -2001,24 +2119,33 @@ class JarvisAccessibilityService : AccessibilityService() {
     private fun visionFlip(): DataOutcome {
         val result = visionTapForData(null)
         performGlobalAction(GLOBAL_ACTION_BACK)
+        // v65: har shakha me rasta report me (visionToggle jaisa)।
+        val suffix = toggleTraceSuffix()
         return when (result) {
             is VisionTapResult.Success -> {
                 val outcome =
                     if (result.afterState) DataOutcome.TURNED_ON
                     else DataOutcome.TURNED_OFF
                 pendingScanReport =
-                    "OK vision state=" + if (result.afterState) "on" else "off"
+                    "OK vision state=" + if (result.afterState) "on" else "off" +
+                        suffix
                 outcome
             }
             VisionTapResult.TappedUnknown -> {
-                pendingScanReport = "vision tapped, state unknown"
+                pendingScanReport =
+                    "vision tapped, state unknown" + suffix
                 DataOutcome.TOGGLED_UNKNOWN
             }
             VisionTapResult.NoKey -> {
-                pendingScanReport = "vision needs Gemini key (not set)"
+                pendingScanReport =
+                    "vision needs Gemini key (not set)" + suffix
                 DataOutcome.NO_GEMINI_KEY
             }
-            VisionTapResult.NotFound -> DataOutcome.TILE_NOT_FOUND
+            VisionTapResult.NotFound -> {
+                pendingScanReport =
+                    (pendingScanReport ?: "") + suffix
+                DataOutcome.TILE_NOT_FOUND
+            }
         }
     }
 
@@ -2045,6 +2172,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (desired != null) {
             val current = readCurrentDataState()
             if (current != null && current == desired) {
+                toggleTrace.append("already desired; ")
                 return VisionTapResult.Success(current)
             }
         }
@@ -2057,46 +2185,78 @@ class JarvisAccessibilityService : AccessibilityService() {
         } catch (t: Throwable) {
             null
         }
-        if (learned != null &&
-            DataButtonVision.isPlausibleTilePosition(learned.x, learned.y) &&
-            !pointLooksLikeOtherTile(learned.x, learned.y)
+        // v65: rakshak ke har faisle ka kaaran likho — 17:05 me
+        // seekhi jagah thi ("ডেটা বাটন শেখা হয়েছে") phir bhi
+        // (a) chala ya nahi, report se pata hi nahi chala।
+        // Koi bhi shakha chhoote to (b) wala raasta chalta hai।
+        if (learned == null) {
+            toggleTrace.append("learned: none; ")
+        } else if (!DataButtonVision.isPlausibleTilePosition(
+                learned.x, learned.y
+            )
         ) {
-            if (tapVisionPoint(learned.x, learned.y)) {
-                SystemClock.sleep(CLICK_SETTLE_MS)
-                val after = readCurrentDataState()
-                if (after != null) {
-                    if (desired == null || after == desired) {
-                        return VisionTapResult.Success(after)
-                    }
-                    // Haalat padh paye aur wahi purani hai —
-                    // seekhi jagah purani ho gayi; taazi
-                    // tasveer se dhoondho (neeche)।
-                } else if (beforeSystem != null) {
-                    val afterSystem = readSystemDataState()
-                    if (afterSystem != null && afterSystem != beforeSystem) {
-                        return VisionTapResult.Success(afterSystem)
-                    }
+            toggleTrace.append(
+                "learned: bad pos (${learned.x},${learned.y}); "
+            )
+        } else if (pointLooksLikeOtherTile(learned.x, learned.y)) {
+            toggleTrace.append(
+                "learned: looks-like-other (${learned.x},${learned.y}); "
+            )
+        } else if (!tapVisionPoint(learned.x, learned.y)) {
+            toggleTrace.append(
+                "learned: tap failed (${learned.x},${learned.y}); "
+            )
+        } else {
+            SystemClock.sleep(CLICK_SETTLE_MS)
+            val after = readCurrentDataState()
+            if (after != null) {
+                if (desired == null || after == desired) {
+                    toggleTrace.append("learned: tapped ok; ")
+                    return VisionTapResult.Success(after)
                 }
+                // Haalat padh paye aur wahi purani hai —
+                // seekhi jagah purani ho gayi; taazi
+                // tasveer se dhoondho (neeche)।
+                toggleTrace.append("learned: tapped, state unchanged; ")
+            } else if (beforeSystem != null) {
+                val afterSystem = readSystemDataState()
+                if (afterSystem != null && afterSystem != beforeSystem) {
+                    toggleTrace.append("learned: tapped ok (system); ")
+                    return VisionTapResult.Success(afterSystem)
+                }
+                toggleTrace.append("learned: tapped, state unreadable; ")
+            } else {
                 // Haalat padh hi nahi paye — taazi tasveer
                 // se dhoondho (neeche); wahan ki haalat
                 // dekhkar dobara dabane se bacha jayega।
+                toggleTrace.append("learned: tapped, state unreadable; ")
             }
         }
         // (b) Taazi tasveer + Gemini vision। Key set hi nahi ho to
         // tasveer lena bekaar — seedha sach batao (seekhi jagah
         // wala offline raasta upar aazmaya ja chuka hai)।
         if (!GeminiBrain.isConfigured(this)) {
+            toggleTrace.append("vision: no key; ")
             return VisionTapResult.NoKey
         }
-        val shot = captureScreenshotSync() ?: return VisionTapResult.NotFound
+        val shot = captureScreenshotSync()
+        if (shot == null) {
+            toggleTrace.append("vision: no screenshot; ")
+            return VisionTapResult.NotFound
+        }
         val hit = try {
             DataButtonVision.findDataIcon(this, shot)
         } catch (t: Throwable) {
             null
-        } ?: return VisionTapResult.NotFound
+        }
+        if (hit == null) {
+            toggleTrace.append("vision: gemini found:false; ")
+            return VisionTapResult.NotFound
+        }
         // v62: Gemini ne status-bar ki patti (y < 80) dikhayi to
         // woh tile nahi — wahan kabhi mat dabao।
         if (!DataButtonVision.isPlausibleTilePosition(hit.x, hit.y)) {
+            toggleTrace.append("vision: bad pos (${hit.x},${hit.y}); ")
             return VisionTapResult.NotFound
         }
         // Tasveer me tile pehle se chahi hui haalat me hai
@@ -2104,9 +2264,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         // ho jayega (on tha to off)।
         if (desired != null && hit.on != null && hit.on == desired) {
             saveLearnedDataButton(hit)
+            toggleTrace.append("vision: already desired; ")
             return VisionTapResult.Success(hit.on)
         }
         if (!tapVisionPoint(hit.x, hit.y)) {
+            toggleTrace.append("vision: tap failed (${hit.x},${hit.y}); ")
             return VisionTapResult.NotFound
         }
         SystemClock.sleep(CLICK_SETTLE_MS)
@@ -2114,10 +2276,14 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (after != null) {
             if (desired == null || after == desired) {
                 saveLearnedDataButton(hit)
+                toggleTrace.append("vision: tapped ok; ")
                 return VisionTapResult.Success(after)
             }
             // Vision wali jagah dabayi, par haalat wahi —
             // galat jagah yaad mat karo।
+            toggleTrace.append(
+                "vision: tapped (${hit.x},${hit.y}), state unchanged; "
+            )
             return VisionTapResult.NotFound
         }
         val afterSystem = readSystemDataState()
@@ -2125,11 +2291,13 @@ class JarvisAccessibilityService : AccessibilityService() {
             afterSystem != beforeSystem
         ) {
             saveLearnedDataButton(hit)
+            toggleTrace.append("vision: tapped ok (system); ")
             return VisionTapResult.Success(afterSystem)
         }
         // Dab to gaya, haalat padh nahi paye — chihn
         // Gemini ne dekha tha, isliye jagah yaad rakho।
         saveLearnedDataButton(hit)
+        toggleTrace.append("vision: tapped, state unreadable; ")
         return VisionTapResult.TappedUnknown
     }
 
@@ -2287,14 +2455,18 @@ class JarvisAccessibilityService : AccessibilityService() {
                 }
             }
         }
-        pendingScanReport = report
+        // v65: report me rasta bhi — text-tile ke baad wali
+        // aakhiri jaanch ka natija akele na dikhe।
+        pendingScanReport = report + toggleTraceSuffix()
         performGlobalAction(GLOBAL_ACTION_BACK)
         return result
     }
 
     /** v57: panel ke taaza ped se tile ki haalat — ek baar, bina intezaar। */
     private fun findDataTileStateNow(): Boolean? {
-        val roots = collectRoots()
+        // v65: sirf SystemUI ped — app ki apni report ka "mobile
+        // data" shabd tile ki haalat nahi (17:05)।
+        val roots = systemUiRootsOnly(collectRoots())
         var state: Boolean? = null
         try {
             for (root in roots) {
@@ -2385,13 +2557,22 @@ class JarvisAccessibilityService : AccessibilityService() {
             val metrics = resources.displayMetrics
             val xPx = (x1000 * metrics.widthPixels / 1000).toFloat()
             val yPx = (y1000 * metrics.heightPixels / 1000).toFloat()
-            val roots = collectRoots()
+            // v65: sirf SystemUI ped — neeche wali app (report
+            // screen) ke shabd yahan "aur tile" nahi; aur sirf
+            // tile-jaisi chhoti node hi "aur tile" — panel ka
+            // bada container (poori screen) label hone par bhi
+            // tile nahi (is vivo par ped me tile grid hai hi
+            // nahi, isliye sabse gehra node aksar container hi
+            // hota hai — pehle yahi seekhi jagah dabana rok
+            // deta tha)।
+            val roots = systemUiRootsOnly(collectRoots())
             var other = false
             try {
                 for (root in roots) {
                     val node = deepestNodeAt(root, xPx, yPx) ?: continue
                     val label = nodeLabel(node)
-                    if (label.isNotEmpty() && dataLabelScore(node) == 0) {
+                    if (label.isEmpty() || dataLabelScore(node) > 0) continue
+                    if (isTileSizedNode(node)) {
                         other = true
                         break
                     }
