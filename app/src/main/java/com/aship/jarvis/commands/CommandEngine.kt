@@ -7,6 +7,7 @@ import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.ai.ScreenshotStore
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -395,6 +396,19 @@ class CommandEngine(
             }
         }
 
+        // --- v59: naam bolkar call / message -------------------------------
+        // Fixed app list se PEHLE — "messages"/"phone" app ke
+        // keyword hain, isliye call/message wala hukm yahin
+        // pakda jata hai, warna Messages/Phone app khul jata।
+        ContactCallCommands.tryHandle(context, text, fromBackgroundService)
+            ?.let { return it }
+
+        // --- v59: voice reminders ------------------------------------------
+        ReminderCommands.tryHandle(context, text)?.let { return it }
+
+        // --- v59: phone lock -------------------------------------------------
+        lockCommand(text)?.let { return it }
+
         // --- Volume (v1.4) ----------------------------------------------------
         // AudioManager se seedha hota hai — activity nahi chahiye, isliye
         // background se bhi bina overlay ke chalega.
@@ -479,15 +493,31 @@ class CommandEngine(
         }
 
         // --- Time -----------------------------------------------------------
+        // v59: Bangla me bhi — "এখন কটা বাজে" / "এখন সময় কত"।
+        // "সময়" normalize hokar "samay" banta hai, isliye woh
+        // purani shart me hi aata hai; "কটা বাজে" ke liye nayi
+        // shart chahiye (usme "baje hain" nahi hota)।
         if (text.contains("time") || text.contains("samay") ||
-            text.contains("baje hain") || text.contains("baj rahe")
+            text.contains("baje hain") || text.contains("baj rahe") ||
+            isBanglaTimeRequest(text)
         ) {
+            if (isBanglaText(text)) {
+                return CommandResult("এখন ${banglaTimePhrase()}।", true)
+            }
             val time = SimpleDateFormat("h:mm a", Locale.US).format(Date())
             return CommandResult("अभी समय है $time।", true)
         }
 
         // --- Date -----------------------------------------------------------
-        if (text.contains("date") || text.contains("tarikh") || text.contains("taarikh")) {
+        // v59: Bangla me bhi — "আজ কত তারিখ" / "আজ কী বার"।
+        // "বার" POORA token hona chahiye — "আবার" ke andar
+        // chhupa "বার" tarikh nahi hai।
+        if (text.contains("date") || text.contains("tarikh") || text.contains("taarikh") ||
+            hasBanglaWeekdayWord(text)
+        ) {
+            if (isBanglaText(text)) {
+                return CommandResult(banglaDateReply(text), true)
+            }
             val date = SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US).format(Date())
             return CommandResult("आज की तारीख़ है $date।", true)
         }
@@ -913,6 +943,149 @@ class CommandEngine(
             JarvisAccessibilityService.DataOutcome.PANEL_NOT_OPENED,
             null -> CommandResult(DATA_NOT_FOUND_REPLY, true)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // v59: phone lock + Bangla samay/tarikh
+    // ------------------------------------------------------------------
+
+    /**
+     * "ফোন লক করো" / "phone lock karo" — Accessibility
+     * service ka GLOBAL_ACTION_LOCK_SCREEN। Service band
+     * ho to imaandaar manaahi, koshish hi nahi।
+     *
+     * "clock" ke andar chhupa "lock" pakda na jaye isliye
+     * lock shabd POORE token ki tarah milna chahiye; aur
+     * "unlock"/"আনলক" ho to ye raasta bilkul nahi (unlock
+     * awaaz se hota hi nahi)।
+     */
+    private fun lockCommand(text: String): CommandResult? {
+        val tokens = text.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+            .filter { it.isNotEmpty() }
+        val hasLockWord = tokens.any {
+            it == "lock" || it == "লক" || it == "लॉक"
+        }
+        if (!hasLockWord) return null
+        if (tokens.any { it == "unlock" || it == "আনলক" || it == "अनलॉक" }) {
+            return null
+        }
+        val hasVerb = tokens.any { it in LOCK_VERBS } ||
+            tokens.any { it.contains("কর") || it.contains("कर") } ||
+            tokens.any { it.contains("ফোন") || it == "phone" }
+        if (!hasVerb && tokens.size > 2) return null
+        val lang = PlayIntent.requestLanguage(text)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(
+                when (lang) {
+                    PlayIntent.SpokenLang.BENGALI ->
+                        "লক করতে পারলাম না — Accessibility চালু নেই। " +
+                            "অ্যাপ খুলে Accessibility অন করো।"
+                    PlayIntent.SpokenLang.HINDI ->
+                        "लॉक नहीं कर पाई — Accessibility ऑन नहीं है। " +
+                            "ऐप खोलकर Accessibility ऑन कर लो।"
+                    PlayIntent.SpokenLang.ENGLISH ->
+                        "Couldn't lock — Accessibility is off. " +
+                            "Turn it on from the app first."
+                },
+                true
+            )
+        }
+        val ok = try {
+            JarvisAccessibilityService.lockScreen(context)
+        } catch (t: Throwable) {
+            false
+        }
+        return if (ok) {
+            CommandResult(
+                when (lang) {
+                    PlayIntent.SpokenLang.BENGALI -> "ফোন লক করে দিলাম।"
+                    PlayIntent.SpokenLang.HINDI -> "फ़ोन लॉक कर दिया।"
+                    PlayIntent.SpokenLang.ENGLISH -> "Phone locked."
+                },
+                true
+            )
+        } else {
+            CommandResult(
+                when (lang) {
+                    PlayIntent.SpokenLang.BENGALI ->
+                        "লক করতে পারলাম না — একবার নিজে লক করে দেখো।"
+                    PlayIntent.SpokenLang.HINDI ->
+                        "लॉक नहीं हो पाया — एक बार खुद लॉक करके देखो।"
+                    PlayIntent.SpokenLang.ENGLISH ->
+                        "Couldn't lock the phone — please lock it manually once."
+                },
+                true
+            )
+        }
+    }
+
+    /** Bangla akshar hai kya (bhasha pehchanne ke liye)। */
+    private fun isBanglaText(t: String): Boolean =
+        t.any { it in '\u0980'..'\u09FF' }
+
+    /** "এখন কটা বাজে" jaise Bangla samay-sawal। */
+    private fun isBanglaTimeRequest(text: String): Boolean {
+        if (!isBanglaText(text)) return false
+        val tokens = text.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+        return text.contains("baje") ||
+            tokens.any { it == "কটা" || it == "কয়টা" }
+    }
+
+    /** "আজ কী বার" — "বার" poora token hona chahiye ("আবার" nahi)। */
+    private fun hasBanglaWeekdayWord(text: String): Boolean {
+        if (!isBanglaText(text)) return false
+        val tokens = text.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+        return tokens.any { it == "বার" }
+    }
+
+    /** "০"-"৯" wale ank — Bangla jawab ke liye। */
+    private fun toBanglaDigits(s: String): String =
+        s.map { ch ->
+            when (ch) {
+                '0' -> '০'; '1' -> '১'; '2' -> '২'; '3' -> '৩'; '4' -> '৪'
+                '5' -> '৫'; '6' -> '৬'; '7' -> '৭'; '8' -> '৮'; '9' -> '৯'
+                else -> ch
+            }
+        }.joinToString("")
+
+    /** "রাত ১০টা ২১ মিনিট বাজে" — din ke hisse ke saath। */
+    private fun banglaTimePhrase(): String {
+        val cal = Calendar.getInstance()
+        val h24 = cal.get(Calendar.HOUR_OF_DAY)
+        val minute = cal.get(Calendar.MINUTE)
+        val h12 = when (val h = h24 % 12) { 0 -> 12; else -> h }
+        val part = when (h24) {
+            in 0..3 -> "রাত"
+            in 4..11 -> "সকাল"
+            in 12..15 -> "দুপুর"
+            in 16..18 -> "বিকেল"
+            else -> "রাত"
+        }
+        val h = toBanglaDigits(h12.toString())
+        return if (minute == 0) {
+            "$part ${h}টা বাজে"
+        } else {
+            "$part ${h}টা ${toBanglaDigits(minute.toString())} মিনিট বাজে"
+        }
+    }
+
+    /**
+     * "আজ শনিবার, ৭ নভেম্বর ২০২৬" — sirf "কী বার" poochha
+     * ho to "আজ শনিবার" hi।
+     */
+    private fun banglaDateReply(text: String): String {
+        val cal = Calendar.getInstance()
+        val weekday = BANGLA_WEEKDAYS[cal.get(Calendar.DAY_OF_WEEK) - 1]
+        if (hasBanglaWeekdayWord(text) && !text.contains("tarikh")) {
+            return "আজ $weekday।"
+        }
+        val day = toBanglaDigits(cal.get(Calendar.DAY_OF_MONTH).toString())
+        val month = BANGLA_MONTHS[cal.get(Calendar.MONTH)]
+        val year = toBanglaDigits(cal.get(Calendar.YEAR).toString())
+        return "আজ $weekday, $day $month $year।"
     }
 
     // ------------------------------------------------------------------
@@ -2075,6 +2248,21 @@ class CommandEngine(
             "টা"
         )
 
+        /** v59: lock hukm ke kriya shabd। */
+        val LOCK_VERBS = setOf(
+            "করো", "করুন", "কর", "দাও", "karo", "do", "करो", "कर"
+        )
+
+        /** v59: Bangla saptah / maas (Calendar ke kram me)। */
+        val BANGLA_WEEKDAYS = listOf(
+            "রবিবার", "সোমবার", "মঙ্গলবার", "বুধবার",
+            "বৃহস্পতিবার", "শুক্রবার", "শনিবার"
+        )
+        val BANGLA_MONTHS = listOf(
+            "জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন",
+            "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর"
+        )
+
         /** v40: screenshot shabd ke saare roop — kachhe text par contains milaane ke liye. */
         val SCREENSHOT_WORD_MARKERS = listOf(
             "স্ক্রিনশট", "স্ক্রীনশট", "স্ক্রিন শট",
@@ -2152,6 +2340,8 @@ class CommandEngine(
             "ভলিউম", "গান", "অ্যালার্ম", "টাইমার", "গুগল",
             "সার্চ", "দেখাও", "খোলো", "সময়", "বাজে", "তারিখ",
             "চালাও", "থামাও", "বন্ধ", "পরের", "মিউট", "আওয়াজ",
+            // v59: call / message / reminder ke shabd
+            "ফোন", "মেসেজ", "করিয়ে", "মনে",
             // v1.10: naye apps (Latin + Devanagari/Bangla roop)
             "instagram", "insta", "telegram", "gmail", "maps",
             "store", "photos", "gallery", "phonepe", "phone",

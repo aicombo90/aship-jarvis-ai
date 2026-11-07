@@ -2839,6 +2839,21 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         /**
+         * v59: kahin se bhi phone lock karne ki koshish —
+         * GLOBAL_ACTION_LOCK_SCREEN. Service band ho to
+         * false (bulane wala [isEnabled] se farq batata
+         * hai); lock hote hi true.
+         */
+        fun lockScreen(context: Context): Boolean {
+            val service = instance ?: return false
+            return try {
+                service.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            } catch (t: Throwable) {
+                false
+            }
+        }
+
+        /**
          * v26: kahin se bhi YouTube ke pehle-result par tap
          * ki koshish: service band ho to turant
          * [TapOutcome.SERVICE_OFF] (report bhi band karke),
