@@ -495,16 +495,17 @@ object ContactCallCommands {
         )
     }
 
-    companion object {
-        /**
-         * v60: CALL_PHONE wale runtime dialog ka jawab —
-         * MainActivity ke onRequestPermissionsResult me
-         * isi code se pehchana jata hai (wahan bandha
-         * hukm [takePendingDirectCall] se lekar dobara
-         * chalaya jata hai)।
-         */
-        const val REQUEST_CALL_PHONE = 1005
-    }
+    /**
+     * v60: CALL_PHONE wale runtime dialog ka jawab —
+     * MainActivity ke onRequestPermissionsResult me
+     * isi code se pehchana jata hai (wahan bandha
+     * hukm [takePendingDirectCall] se lekar dobara
+     * chalaya jata hai)।
+     * (const val object ke andar seedha — companion
+     * standalone object me allowed nahi; v55 wali
+     * galti dobara na ho, isiliye yahan rakha hai।)
+     */
+    const val REQUEST_CALL_PHONE = 1005
 
     private fun openMessageComposer(
         context: Context,
