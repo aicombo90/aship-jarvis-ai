@@ -34,6 +34,7 @@ import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.DataButtonVision
 import com.aship.jarvis.ai.BrainRules
+import com.aship.jarvis.ai.ComboRules
 import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.ProviderKeys
@@ -44,6 +45,7 @@ import com.aship.jarvis.ai.QuotaManager
 import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
+import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandHistory
 import com.aship.jarvis.commands.CommandResult
@@ -1175,6 +1177,7 @@ class MainActivity : Activity() {
             summaryText.text =
                 "🔑 API Keys: $keysDone/$keysTotal সেট" +
                     "  •  🧠 নিয়ম: ${BrainRules.count(this)}" +
+                    "  •  🎛️ কম্বো: ${ComboRules.count(this)}" +
                     "  •  শেখা কাজ: ${LearnedRoutines.count(this)}" +
                     "  •  শেখানো কমান্ড: ${TaughtCommands.count(this)}" +
                     "\n📜 ইতিহাস: ${CommandHistory.list(this).size}টি কমান্ড" +
@@ -1747,6 +1750,25 @@ class MainActivity : Activity() {
             speaker.speak(teachLine)
             return
         }
+        // v69: COMBO — "কম্বো মনে রাখো: যখন … তখন
+        // <kaam1>, <kaam2>" se combo bandhna, "কী কী
+        // কম্বো মনে আছে" se suchi, "… কম্বোটা ভুলে
+        // যাও" se ek combo mitana। Sirf saaf combo
+        // wale roop pakadta hai — "মনে রাখো, যখন…"
+        // wala roop bhi tabhi jab "তখন" ke baad 2+
+        // sahi dhap hon (ek dhap ho to niyam hi
+        // rehta hai); isliye [RuleCommands] se PEHLE
+        // bulaya jata hai, par bina apne roop ke null
+        // dekar raasta chhod deta hai।
+        ComboCommands.tryHandleAdmin(
+            this, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText)
+        )?.let { comboLine ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Maya: $comboLine"
+            speaker.speak(comboLine)
+            return
+        }
         // v52: KAAM KE NIYAM — "নিয়ম মনে রাখো: যখন
         // … তখন …" (ya "মনে রাখো, যখন … তখন …") se
         // niyam bandhna, "কী কী নিয়ম মনে আছে" se
@@ -1821,6 +1843,25 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             responseText.text = "Jarvis: ${taughtExec.result.responseText}"
             speaker.speak(taughtExec.result.responseText)
+            return
+        }
+        // v69: COMBO — baat kisi bandhe combo ka bol
+        // ho ("গুড নাইট") ya "… কম্বোটা চালাও" ho to
+        // dhap ek ke baad ek chalte hain aur hisaab
+        // bola jata hai। Combo khud ASAL hukm hai —
+        // chala to aam raasta aage nahi badhta
+        // (sikhaye hue shabd wala hi niyam)।
+        // Screenshot wala dhap saamne wali screen par
+        // chhoda jata hai (v40 wala niyam), baaki
+        // dhap chalte hain।
+        ComboCommands.tryRunCombo(
+            this, commandEngine, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText),
+            allowScreenshot = false
+        )?.let { comboLine ->
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: $comboLine"
+            speaker.speak(comboLine)
             return
         }
         // v52: KAAM KE NIYAM — baat kisi bandhe
@@ -2621,7 +2662,8 @@ class MainActivity : Activity() {
             // sunne par milte hain)।
             if (::rulesText.isInitialized) {
                 rulesText.text =
-                    "মনে রাখা নিয়ম (mot): " + BrainRules.count(this)
+                    "মনে রাখা নিয়ম (mot): " + BrainRules.count(this) +
+                    "  •  কম্বো: " + ComboRules.count(this)
             }
             // v51 (item 1): sunne ki report wali
             // linein — background ne aakhiri kya suna,

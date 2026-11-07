@@ -40,6 +40,7 @@ import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.ai.UserProfile
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
+import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.HearingGate
@@ -2841,6 +2842,27 @@ class JarvisWakeService : Service() {
             orbOverlay.setReply(teachLine)
             return
         }
+        // v69: COMBO — "কম্বো মনে রাখো: যখন … তখন
+        // <kaam1>, <kaam2>" se combo bandhna, "কী কী
+        // কম্বো মনে আছে" se suchi, "… কম্বোটা ভুলে
+        // যাও" se ek combo mitana। Sirf saaf combo
+        // wale roop pakadta hai — "মনে রাখো, যখন…"
+        // wala roop bhi tabhi jab "তখন" ke baad 2+
+        // sahi dhap hon (ek dhap ho to niyam hi
+        // rehta hai); isliye [RuleCommands] se PEHLE
+        // bulaya jata hai, par bina apne roop ke null
+        // dekar raasta chhod deta hai।
+        ComboCommands.tryHandleAdmin(
+            applicationContext, text, personaSpokenLang()
+        )?.let { comboLine ->
+            setStatus("Combo wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(comboLine)
+            armReplyFallback(comboLine)
+            orbOverlay.setReply(comboLine)
+            return
+        }
         // v52: KAAM KE NIYAM — "নিয়ম মনে রাখো: যখন
         // … তখন …" (ya "মনে রাখো, যখন … তখন …") se
         // niyam bandhna, "কী কী নিয়ম মনে আছে" se
@@ -2942,6 +2964,19 @@ class JarvisWakeService : Service() {
                 }
             }
             finishCommandResult(text, taughtExec.result)
+            return
+        }
+        // v69: COMBO — baat kisi bandhe combo ka bol
+        // ho ("গুড নাইট") ya "… কম্বোটা চালাও" ho to
+        // dhap ek ke baad ek chalte hain aur hisaab
+        // bola jata hai। Combo khud ASAL hukm hai —
+        // chala to aam raasta aage nahi badhta
+        // (sikhaye hue shabd wala hi niyam)।
+        ComboCommands.tryRunCombo(
+            applicationContext, commandEngine, text,
+            personaSpokenLang(), allowScreenshot = true
+        )?.let { comboLine ->
+            finishCommandResult(text, CommandResult(comboLine, true))
             return
         }
         // v52: KAAM KE NIYAM — baat kisi bandhe
