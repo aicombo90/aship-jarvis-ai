@@ -15,9 +15,12 @@ import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
+import com.aship.jarvis.ai.DataButtonVision
+import com.aship.jarvis.commands.DataButtonLearner
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -125,6 +128,13 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         /** Quick-settings panel khula hi nahi. */
         PANEL_NOT_OPENED,
+
+        /**
+         * v57: vision se tile dab to gaya, par dabane ke
+         * baad ki haalat padh nahi paye — dabna pakka,
+         * natija nahi.
+         */
+        TAPPED_UNKNOWN,
 
         /** Service band hai (ya beech me band ho gayi). */
         SERVICE_OFF
@@ -1783,12 +1793,12 @@ class JarvisAccessibilityService : AccessibilityService() {
     private fun runToggle(turnOn: Boolean): DataResult {
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
-            // Panel khula tha par tile nahi mila to panel band
-            // karke batao; panel khula hi nahi to BACK mat bhejo —
-            // woh neeche wali app ko peeche dhakel dega.
+            // Panel khula tha par text se tile nahi mila —
+            // v57: tasveer wala raasta (vision fallback);
+            // panel khula hi nahi to BACK mat bhejo — woh
+            // neeche wali app ko peeche dhakel dega.
             if (search.panelSeen) {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                return DataResult.TILE_NOT_FOUND
+                return visionToggle(turnOn)
             }
             return DataResult.PANEL_NOT_OPENED
         }
@@ -1822,9 +1832,9 @@ class JarvisAccessibilityService : AccessibilityService() {
     private fun runFlip(): DataOutcome {
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
+            // v57: text fail ho to vision wala raasta.
             if (search.panelSeen) {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                return DataOutcome.TILE_NOT_FOUND
+                return visionFlip()
             }
             return DataOutcome.PANEL_NOT_OPENED
         }
@@ -1865,6 +1875,319 @@ class JarvisAccessibilityService : AccessibilityService() {
                     else -> "unknown"
                 }
         return outcome
+    }
+
+    // ------------------------------------------------------------------
+    // v57: SCREENSHOT-VISION fallback — chihn dekhkar data tile
+    // ------------------------------------------------------------------
+
+    /** Vision se tile dabane ka natija — dabne ke BAAD ki padhi hui haalat ke saath। */
+    private sealed class VisionTapResult {
+        class Success(val afterState: Boolean) : VisionTapResult()
+        object TappedUnknown : VisionTapResult()
+        object NotFound : VisionTapResult()
+    }
+
+    /** v57: disha wala toggle — text fail ho to vision se; panel yehi band karta hai। */
+    private fun visionToggle(turnOn: Boolean): DataResult {
+        val result = visionTapForData(turnOn)
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return when (result) {
+            is VisionTapResult.Success -> {
+                if (result.afterState == turnOn) {
+                    pendingScanReport =
+                        "OK vision state=" + if (turnOn) "on" else "off"
+                    DataResult.SUCCESS
+                } else {
+                    DataResult.TILE_NOT_FOUND
+                }
+            }
+            VisionTapResult.TappedUnknown -> {
+                pendingScanReport = "vision tapped, state unknown"
+                DataResult.TAPPED_UNKNOWN
+            }
+            VisionTapResult.NotFound -> DataResult.TILE_NOT_FOUND
+        }
+    }
+
+    /** v57: bina disha wala toggle — text fail ho to vision se; panel yehi band karta hai। */
+    private fun visionFlip(): DataOutcome {
+        val result = visionTapForData(null)
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return when (result) {
+            is VisionTapResult.Success -> {
+                val outcome =
+                    if (result.afterState) DataOutcome.TURNED_ON
+                    else DataOutcome.TURNED_OFF
+                pendingScanReport =
+                    "OK vision state=" + if (result.afterState) "on" else "off"
+                outcome
+            }
+            VisionTapResult.TappedUnknown -> {
+                pendingScanReport = "vision tapped, state unknown"
+                DataOutcome.TOGGLED_UNKNOWN
+            }
+            VisionTapResult.NotFound -> DataOutcome.TILE_NOT_FOUND
+        }
+    }
+
+    /**
+     * v57: vision wala asal kaam — sirf worker thread se
+     * bulana (panel khula hua hai)।
+     *
+     * Kram: (a) seekhi hui jagah dabao + haalat padho
+     * (bina net, sasti koshish); (b) haalat na badle ya
+     * jagah na ho to TAAZI tasveer Gemini ko dikhakar
+     * chihn se dhoondho, dabao, haalat padho, jagah
+     * NAHI karke yaad rakho। [desired] null ho to
+     * disha-mukt flip hai। Seekhi jagah par koi AUR
+     * naam wala tile dikhe to wahan dabate hi nahi —
+     * tile sark gaya ho to galat tile (Wi-Fi waghera)
+     * kabhi nahi dabta।
+     */
+    private fun visionTapForData(desired: Boolean?): VisionTapResult {
+        val beforeGlobal = readGlobalDataState()
+        // (a) Seekhi hui jagah — bina net।
+        val learned = try {
+            DataButtonLearner.read(this)
+        } catch (t: Throwable) {
+            null
+        }
+        if (learned != null && !pointLooksLikeOtherTile(learned.x, learned.y)) {
+            if (tapVisionPoint(learned.x, learned.y)) {
+                SystemClock.sleep(CLICK_SETTLE_MS)
+                val after = readCurrentDataState()
+                if (after != null) {
+                    if (desired == null || after == desired) {
+                        return VisionTapResult.Success(after)
+                    }
+                    // Haalat padh paye aur wahi purani hai —
+                    // seekhi jagah purani ho gayi; taazi
+                    // tasveer se dhoondho (neeche)।
+                } else if (beforeGlobal != null) {
+                    val afterGlobal = readGlobalDataState()
+                    if (afterGlobal != null && afterGlobal != beforeGlobal) {
+                        return VisionTapResult.Success(afterGlobal)
+                    }
+                }
+                // Haalat padh hi nahi paye — taazi tasveer
+                // se dhoondho (neeche); wahan ki haalat
+                // dekhkar dobara dabane se bacha jayega।
+            }
+        }
+        // (b) Taazi tasveer + Gemini vision।
+        val shot = captureScreenshotSync() ?: return VisionTapResult.NotFound
+        val hit = try {
+            DataButtonVision.findDataIcon(this, shot)
+        } catch (t: Throwable) {
+            null
+        } ?: return VisionTapResult.NotFound
+        // Tasveer me tile pehle se chahi hui haalat me hai
+        // to dobara mat dabao — warna (a) wala kaam ulta
+        // ho jayega (on tha to off)।
+        if (desired != null && hit.on != null && hit.on == desired) {
+            saveLearnedDataButton(hit)
+            return VisionTapResult.Success(hit.on)
+        }
+        if (!tapVisionPoint(hit.x, hit.y)) {
+            return VisionTapResult.NotFound
+        }
+        SystemClock.sleep(CLICK_SETTLE_MS)
+        val after = readCurrentDataState()
+        if (after != null) {
+            if (desired == null || after == desired) {
+                saveLearnedDataButton(hit)
+                return VisionTapResult.Success(after)
+            }
+            // Vision wali jagah dabayi, par haalat wahi —
+            // galat jagah yaad mat karo।
+            return VisionTapResult.NotFound
+        }
+        val afterGlobal = readGlobalDataState()
+        if (afterGlobal != null && beforeGlobal != null &&
+            afterGlobal != beforeGlobal
+        ) {
+            saveLearnedDataButton(hit)
+            return VisionTapResult.Success(afterGlobal)
+        }
+        // Dab to gaya, haalat padh nahi paye — chihn
+        // Gemini ne dekha tha, isliye jagah yaad rakho।
+        saveLearnedDataButton(hit)
+        return VisionTapResult.TappedUnknown
+    }
+
+    /** v57: system ki mobile-data setting (1 = on, 0 = off) — na mile to null। */
+    private fun readGlobalDataState(): Boolean? {
+        return try {
+            when (Settings.Global.getInt(contentResolver, "mobile_data", -1)) {
+                1 -> true
+                0 -> false
+                else -> null
+            }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** v57: panel ke taaza ped se tile ki haalat — ek baar, bina intezaar। */
+    private fun findDataTileStateNow(): Boolean? {
+        val roots = collectRoots()
+        var state: Boolean? = null
+        try {
+            for (root in roots) {
+                val tile = findDataTile(root) ?: continue
+                state = readTileState(tile)
+                    ?: readTileState(findClickableAncestor(tile) ?: tile)
+                if (state != null) break
+            }
+        } catch (t: Throwable) {
+            // Ped badal gaya: neeche wala raasta।
+        } finally {
+            roots.forEach { root ->
+                try {
+                    root.recycle()
+                } catch (t: Throwable) {
+                    // Pehle se saaf: kuch nahi karna.
+                }
+            }
+        }
+        return state
+    }
+
+    /** v57: data ki haalat — pehle tile se, na mile to system setting se। */
+    private fun readCurrentDataState(): Boolean? {
+        return try {
+            findDataTileStateNow() ?: readGlobalDataState()
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** v57: tasveer ka bandha hua intezaar (6s tak) — na mile to null। */
+    private fun captureScreenshotSync(): Bitmap? {
+        val latch = CountDownLatch(1)
+        var shot: Bitmap? = null
+        try {
+            captureScreenshot { bitmap ->
+                shot = bitmap
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        return try {
+            latch.await(6, TimeUnit.SECONDS)
+            shot
+        } catch (e: InterruptedException) {
+            null
+        }
+    }
+
+    /** v57: 0..1000 wali jagah ko asal pixel me badalkar tap karo। */
+    private fun tapVisionPoint(x1000: Int, y1000: Int): Boolean {
+        return try {
+            val metrics = resources.displayMetrics
+            val x = x1000 * metrics.widthPixels / 1000f
+            val y = y1000 * metrics.heightPixels / 1000f
+            tapAtPoint(x, y)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** v57: vision se mili jagah yaad rakho — agli baar bina net kaam aayegi। */
+    private fun saveLearnedDataButton(hit: DataButtonVision.VisionHit) {
+        try {
+            DataButtonLearner.save(this, hit.x, hit.y, hit.icon)
+        } catch (t: Throwable) {
+            // Yaad na rahe to agle vision se phir milega.
+        }
+    }
+
+    /**
+     * v57: seekhi jagah par koi AUR naam wala tile to
+     * nahi (tile sark gaya ho to galat tile na dabe) —
+     * jagah par sabse chhote node ka naam padho; naam
+     * ho aur data jaisa bilkul na ho to "aur tile" maano।
+     * Naam na ho (sirf chihn wala tile) ya ped na mile
+     * to dabane do — jaanch baad me haalat se hogi।
+     */
+    private fun pointLooksLikeOtherTile(x1000: Int, y1000: Int): Boolean {
+        return try {
+            val metrics = resources.displayMetrics
+            val xPx = (x1000 * metrics.widthPixels / 1000).toFloat()
+            val yPx = (y1000 * metrics.heightPixels / 1000).toFloat()
+            val roots = collectRoots()
+            var other = false
+            try {
+                for (root in roots) {
+                    val node = deepestNodeAt(root, xPx, yPx) ?: continue
+                    val label = nodeLabel(node)
+                    if (label.isNotEmpty() && dataLabelScore(node) == 0) {
+                        other = true
+                        break
+                    }
+                }
+            } catch (t: Throwable) {
+                other = false
+            } finally {
+                roots.forEach { root ->
+                    try {
+                        root.recycle()
+                    } catch (t: Throwable) {
+                        // Pehle se saaf: kuch nahi karna.
+                    }
+                }
+            }
+            other
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** v57: (x, y) ko chhoone wala sabse chhota (sabse gehra) node — na mile to null। */
+    private fun deepestNodeAt(
+        root: AccessibilityNodeInfo,
+        x: Float,
+        y: Float
+    ): AccessibilityNodeInfo? {
+        val bounds = Rect()
+        try {
+            root.getBoundsInScreen(bounds)
+        } catch (t: Throwable) {
+            return null
+        }
+        if (!bounds.contains(x.toInt(), y.toInt())) return null
+        var current: AccessibilityNodeInfo = root
+        while (true) {
+            var bestChild: AccessibilityNodeInfo? = null
+            var bestArea = Int.MAX_VALUE
+            try {
+                for (i in 0 until current.childCount) {
+                    val child = try {
+                        current.getChild(i)
+                    } catch (t: Throwable) {
+                        null
+                    } ?: continue
+                    try {
+                        child.getBoundsInScreen(bounds)
+                    } catch (t: Throwable) {
+                        continue
+                    }
+                    if (!bounds.contains(x.toInt(), y.toInt())) continue
+                    val area = bounds.width() * bounds.height()
+                    if (area < bestArea) {
+                        bestArea = area
+                        bestChild = child
+                    }
+                }
+            } catch (t: Throwable) {
+                break
+            }
+            if (bestChild == null) break
+            current = bestChild
+        }
+        return current
     }
 
     /**

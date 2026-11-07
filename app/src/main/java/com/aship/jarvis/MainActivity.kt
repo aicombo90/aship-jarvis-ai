@@ -1,6 +1,7 @@
 package com.aship.jarvis
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
@@ -9,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -30,6 +32,7 @@ import android.widget.Toast
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
+import com.aship.jarvis.ai.DataButtonVision
 import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.ProviderKeys
@@ -43,6 +46,7 @@ import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandHistory
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.DataButtonLearner
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.LearnCommands
@@ -193,7 +197,10 @@ class MainActivity : Activity() {
     // কন্টাক্ট) + শেখার দৌড়ের হাল।
     private lateinit var startLearnButton: Button
     private lateinit var phoneLearnStatusText: TextView
+    private lateinit var learnDataButton: Button
+    private lateinit var dataButtonStatusText: TextView
     private var phoneLearning = false
+    private var dataButtonLearning = false
     private var learnWaitingForContacts = false
     private var learnContactsGranted = false
     private var learnContactsLatch: CountDownLatch? = null
@@ -490,6 +497,11 @@ class MainActivity : Activity() {
         phoneLearnStatusText = findViewById(R.id.phoneLearnStatusText)
         startLearnButton.setOnClickListener { startPhoneLearning() }
         refreshPhoneLearnStatus()
+        // v57: ডেটা বাটন শেখানো।
+        learnDataButton = findViewById(R.id.learnDataButton)
+        dataButtonStatusText = findViewById(R.id.dataButtonStatusText)
+        learnDataButton.setOnClickListener { startDataButtonLearning() }
+        refreshDataButtonStatus()
         // v37: screen-agent ke sawalon ki mezbaani is
         // screen ke naam bandho (onDestroy me hat ti hai).
         ScreenConfirm.registerActivityHost(screenConfirmHost)
@@ -1131,6 +1143,11 @@ class MainActivity : Activity() {
                         "\n📱 ফোন চেনা হয়েছে ✓ (${PhoneLearner.summaryLine(this)})"
                     } else {
                         ""
+                    } +
+                    if (DataButtonLearner.isLearned(this)) {
+                        "\n📶 ডেটা বাটন শেখা হয়েছে ✓ (${DataButtonLearner.summaryLine(this)})"
+                    } else {
+                        ""
                     }
         } catch (t: Throwable) {
             // Summary bonus hai — asal kaam kabhi na ruke.
@@ -1347,6 +1364,189 @@ class MainActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // v57: ডেটা বাটন শেখানো — tasveer dekhkar chihn se
+    // ------------------------------------------------------------------
+
+    /** v57: "ডেটা বাটন শিখে নাও" jaisi baat pehchano (bolkar seekhao)। */
+    private fun isLearnDataButtonCommand(text: String): Boolean {
+        val t = text.trim().lowercase(Locale.ROOT)
+        if (t.isEmpty()) return false
+        val hasButton = t.contains("ডেটা বাটন") ||
+            t.contains("ডাটা বাটন") ||
+            t.contains("डेटा बटन") ||
+            t.contains("data button")
+        if (!hasButton) return false
+        return t.contains("শিখে নাও") ||
+            t.contains("শিখে নেও") ||
+            t.contains("শেখাও") ||
+            t.contains("শেখা") ||
+            t.contains("सीख") ||
+            t.contains("sikha") ||
+            t.contains("seekh") ||
+            t.contains("learn")
+    }
+
+    /** v57: ডেটা বাটন শেখা — haalat line। */
+    private fun refreshDataButtonStatus() {
+        try {
+            if (!::dataButtonStatusText.isInitialized) return
+            if (dataButtonLearning) return
+            if (DataButtonLearner.isLearned(this)) {
+                dataButtonStatusText.text =
+                    "✅ ডেটা বাটন শেখা হয়েছে — ${DataButtonLearner.summaryLine(this)}"
+            } else {
+                dataButtonStatusText.text =
+                    "ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।"
+            }
+        } catch (t: Throwable) {
+            // Status bonus hai — asal kaam kabhi na ruke.
+        }
+    }
+
+    /** v57: ডেটা বাটন শেখাও (button ya bolkar) — daud chalao। */
+    private fun startDataButtonLearning() {
+        if (dataButtonLearning) {
+            speaker.speak("ডেটা বাটন শেখা এখনো চলছে, একটু অপেক্ষা করো।")
+            return
+        }
+        dataButtonLearning = true
+        mainHandler.post {
+            try {
+                learnDataButton.text = "শেখাচ্ছি…"
+                learnDataButton.isEnabled = false
+            } catch (t: Throwable) {
+                // Button na mile to daud phir bhi chalegi.
+            }
+        }
+        background.execute {
+            try {
+                runDataButtonLearning()
+            } catch (t: Throwable) {
+                learnSay("ডেটা বাটন শেখা থেমে গেল, আবার চেষ্টা করো।")
+            } finally {
+                dataButtonLearning = false
+                mainHandler.post {
+                    try {
+                        learnDataButton.text = "📶 ডেটা বাটন শেখাও"
+                        learnDataButton.isEnabled = true
+                    } catch (t: Throwable) {
+                        // Button na mile to koi baat nahi.
+                    }
+                    refreshDataButtonStatus()
+                    refreshSummaryCard()
+                }
+            }
+        }
+    }
+
+    /**
+     * v57: ডেটা বাটন শেখার daud — panel kholo, tasveer
+     * lo, Gemini ko chihn dikhao, jagah yaad rakho। Har
+     * kadam bolkar; koi kadam fail ho to imaandaar line
+     * bolkar ruko — daud kabhi crash nahi karti।
+     */
+    private fun runDataButtonLearning() {
+        learnSay("ডেটা বাটনটা শিখছি — প্যানেল খুলছি।")
+        Thread.sleep(1300)
+        if (!GeminiBrain.isConfigured(this)) {
+            learnSay("Gemini key সেট নেই — API Keys থেকে Gemini key দিলে তবেই ছবি দেখে শেখাতে পারবো।")
+            return
+        }
+        if (!JarvisAccessibilityService.isEnabled(this)) {
+            learnSay("Accessibility চালু নেই — আগে Accessibility অন করো, তারপর শেখাবো।")
+            return
+        }
+        if (!openPanelBlocking()) {
+            learnSay("প্যানেল খুলতে পারলাম না, আবার চেষ্টা করো।")
+            return
+        }
+        Thread.sleep(1500)
+        val shot = screenshotBlocking()
+        if (shot == null) {
+            closePanelBlocking()
+            learnSay("স্ক্রিনশট নিতে পারলাম না, আবার চেষ্টা করো।")
+            return
+        }
+        learnSay("ছবিটা Gemini-কে দেখাচ্ছি।")
+        val hit = try {
+            DataButtonVision.findDataIcon(this, shot)
+        } catch (t: Throwable) {
+            null
+        }
+        closePanelBlocking()
+        if (hit == null) {
+            learnSay("ছবিতে ডেটা বাটনটা খুঁজে পেলাম না — প্যানেলটা পুরো খুলে আবার চেষ্টা করো।")
+            return
+        }
+        try {
+            DataButtonLearner.save(this, hit.x, hit.y, hit.icon)
+        } catch (t: Throwable) {
+            learnSay("শিখলাম, কিন্তু মনে রাখতে পারলাম না — আবার চেষ্টা করো।")
+            return
+        }
+        mainHandler.post {
+            try {
+                dataButtonStatusText.text =
+                    "✅ ডেটা বাটন শেখা হয়েছে — ${DataButtonLearner.summaryLine(this)}"
+            } catch (t: Throwable) {
+                // Screen na dikhe to boli hi kaafi hai.
+            }
+        }
+        val iconLine =
+            if (hit.icon.isNotEmpty()) "${hit.icon} চিহ্নটা" else "ডেটা বাটনটা"
+        learnSay("শিখে নিলাম — $iconLine, মনে রাখলাম। এখন থেকে লেখা না থাকলেও চিনতে পারবো।")
+    }
+
+    /** v57: panel kholne ka intezaar karo (5s tak)। */
+    private fun openPanelBlocking(): Boolean {
+        val latch = CountDownLatch(1)
+        var opened = false
+        try {
+            JarvisAccessibilityService.screenGlobalAction(
+                this,
+                AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS
+            ) { ok ->
+                opened = ok
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        return opened
+    }
+
+    /** v57: panel band karne ki koshish (BACK) — natija bonus। */
+    private fun closePanelBlocking() {
+        try {
+            val latch = CountDownLatch(1)
+            JarvisAccessibilityService.screenGlobalAction(
+                this,
+                AccessibilityService.GLOBAL_ACTION_BACK
+            ) { latch.countDown() }
+            latch.await(3, TimeUnit.SECONDS)
+        } catch (t: Throwable) {
+            // Panel khula reh gaya to user BACK dabakar band kar lega.
+        }
+    }
+
+    /** v57: screenshot ka intezaar karo (8s tak) — null = nahi mila। */
+    private fun screenshotBlocking(): Bitmap? {
+        val latch = CountDownLatch(1)
+        var shot: Bitmap? = null
+        try {
+            JarvisAccessibilityService.captureScreenshot(this) { bitmap ->
+                shot = bitmap
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        latch.await(8, TimeUnit.SECONDS)
+        return shot
+    }
+
     /** v56: "ফোন চিনে নাও" jaisi baat pehchano (bolkar START)। */
     private fun isStartLearningCommand(text: String): Boolean {
         val t = text.trim().lowercase(Locale.ROOT)
@@ -1538,6 +1738,16 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             responseText.text = "Jarvis: শেখা শুরু করছি — ফোনটাকে চিনে নিচ্ছি।"
             startPhoneLearning()
+            return
+        }
+        // v57: ডেটা বাটন শেখানো — "ডেটা বাটন শিখে
+        // নাও" বলতেই tasveer dekhkar chihn se seekhne
+        // wali daud chalegi (START jaisi hi, sirf
+        // saamne wali screen par)।
+        if (isLearnDataButtonCommand(commandText)) {
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: ডেটা বাটনটা শিখছি — ছবি দেখে চিহ্নটা চিনে নিচ্ছি।"
+            startDataButtonLearning()
             return
         }
         // v50: SIKHAYA HUA SHABD-KAAM — baat bandhe

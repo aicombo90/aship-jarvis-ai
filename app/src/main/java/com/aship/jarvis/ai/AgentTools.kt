@@ -1071,6 +1071,15 @@ class AgentTools(
                 false,
                 "The quick-settings panel did not open."
             )
+            // v57: vision se tile dab to gaya, par dabane
+            // ke baad ki haalat padh nahi paye — dabna
+            // pakka, natija nahi (agent jhootha ON/OFF
+            // kabhi nahi bolega)।
+            JarvisAccessibilityService.DataResult.TAPPED_UNKNOWN -> ToolResult(
+                false,
+                "The mobile-data tile was tapped from a screenshot, " +
+                    "but the new state could not be read."
+            )
             null -> ToolResult(
                 false,
                 "No answer from the accessibility service in time."
@@ -2188,8 +2197,10 @@ class AgentTools(
          * (CommandEngine wali 4 s wali seema se alag, kyunki
          * agent ka raasta pehle se hi bandha intezaar wala
          * hai aur der ka jawab jhooth se behtar hai).
+         * v57: 12s se 25s — vision fallback ko samay
+         * chahiye (text khoj + Gemini round trip + jaanch)।
          */
-        const val DATA_WAIT_MS = 12_000L
+        const val DATA_WAIT_MS = 25_000L
 
         /** v26: YouTube app ka package naam. */
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"

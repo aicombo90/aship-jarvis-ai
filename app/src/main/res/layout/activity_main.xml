@@ -146,6 +146,25 @@
                 android:layout_marginTop="8dp"
                 android:text="এখনো ফোন চেনা হয়নি — START চাপুন।"
                 android:textSize="14sp" />
+
+            <!-- v57: ডেটা বাটন শেখানো — chihn dekhkar -->
+            <Button
+                android:id="@+id/learnDataButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#0E7490"
+                android:text="📶 ডেটা বাটন শেখাও"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/dataButtonStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।"
+                android:textSize="14sp" />
         </LinearLayout>
 
         <!-- 4. Bolkar command -->

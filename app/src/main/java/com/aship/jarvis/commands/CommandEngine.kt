@@ -857,6 +857,8 @@ class CommandEngine(
             )
             JarvisAccessibilityService.DataResult.SERVICE_OFF ->
                 CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
+            JarvisAccessibilityService.DataResult.TAPPED_UNKNOWN ->
+                CommandResult(DATA_VISION_UNKNOWN_REPLY, true)
             JarvisAccessibilityService.DataResult.TILE_NOT_FOUND,
             JarvisAccessibilityService.DataResult.PANEL_NOT_OPENED,
             null -> CommandResult(DATA_NOT_FOUND_REPLY, true)
@@ -1862,8 +1864,23 @@ class CommandEngine(
         const val DATA_TOGGLED_REPLY =
             "डेटा का बटन दबा दिया — ऑन था तो बंद, बंद था तो ऑन हो गया।"
 
-        /** v17: Accessibility toggle ke natije ka adhiktam intezaar. */
-        const val DATA_COMMAND_WAIT_MS = 4_000L
+        /**
+         * v57: vision se tile dab to gaya, par dabane ke
+         * baad ki haalat padh nahi paye to Maya ka sachha
+         * jawab (Devanagari shaili) — dabna pakka, natija nahi.
+         */
+        const val DATA_VISION_UNKNOWN_REPLY =
+            "डेटा वाला बटन छवि देखकर दबा दिया, पर ऑन हुआ या नहीं, यह पढ़ नहीं पाई।"
+
+        /**
+         * v17: Accessibility toggle ke natije ka adhiktam
+         * intezaar. v57: 4s se 25s — vision fallback ko
+         * samay chahiye (text khoj 8s tak + Gemini round
+         * trip + jaanch); aam raasta ab bhi 1-3s me hi
+         * laut aata hai, lambi seema sirf fallback par
+         * lagti hai.
+         */
+        const val DATA_COMMAND_WAIT_MS = 25_000L
 
         /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
         const val SCROLL_COMMAND_WAIT_MS = 5_000L
