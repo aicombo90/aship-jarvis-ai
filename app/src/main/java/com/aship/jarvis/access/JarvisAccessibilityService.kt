@@ -868,6 +868,14 @@ class JarvisAccessibilityService : AccessibilityService() {
     )
 
     /**
+     * v67: clipboard-paste ka sachha natija — PASTED
+     * (clipboard + ACTION_PASTE se chipka), TYPED
+     * (paste nahi baitha, ACTION_SET_TEXT se bhara),
+     * FAILED (dono raaste nahi chale)।
+     */
+    enum class PasteResult { PASTED, TYPED, FAILED }
+
+    /**
      * v37: is pal focus wale (ya pehle dikhai dene wale
      * editable) khane me [text] likho — ACTION_SET_TEXT,
      * woh na chale to clipboard + paste wala raasta.
@@ -934,6 +942,29 @@ class JarvisAccessibilityService : AccessibilityService() {
         callback: (Boolean) -> Unit
     ) {
         runOnWorker(callback, false) { runTypeIntoText(label, text) }
+    }
+
+    /**
+     * v67: focus wale khane me clipboard se [text]
+     * chipkao — [PasteResult] sachha natija (PASTED /
+     * TYPED / FAILED)। Lambe Bangla text ke liye type
+     * se tez aur akshar-akshar sateek hai।
+     */
+    fun pasteScreenText(text: String, callback: (PasteResult) -> Unit) {
+        runOnWorker(callback, PasteResult.FAILED) { runPasteText(text) }
+    }
+
+    /**
+     * v67: NAAM wale khane me clipboard se chipkao —
+     * [typeIntoScreenText] wala hi khana-dhoondhna,
+     * paste wala bharna।
+     */
+    fun pasteIntoScreenText(
+        label: String,
+        text: String,
+        callback: (PasteResult) -> Unit
+    ) {
+        runOnWorker(callback, PasteResult.FAILED) { runPasteIntoText(label, text) }
     }
 
     /**
@@ -1496,33 +1527,123 @@ class JarvisAccessibilityService : AccessibilityService() {
      * dono ka natija jo sach hai wahi laut-ta hai.
      */
     private fun runTypeText(text: String): Boolean {
-        var target: AccessibilityNodeInfo? = null
+        val node = findEditableField() ?: return false
+        return setTextOnNode(node, text)
+    }
+
+    /**
+     * v67: is pal focus wala input khana, woh na mile to
+     * saamne wali app ka pehla dikhai dene wala editable
+     * khana — [runTypeText] / [runPasteText] / jaanch
+     * teeno ka ek hi raasta (pehle [runTypeText] ke andar
+     * bandha tha, ab baahar — vyavhaar bilkul waisa hi)।
+     */
+    private fun findEditableField(): AccessibilityNodeInfo? {
         for (root in collectRoots()) {
             try {
                 root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    ?.let { target = it }
+                    ?.let { return it }
             } catch (t: Throwable) {
                 // Is ped me focus nahi: agli khidki dekho.
             }
-            if (target != null) break
         }
-        if (target == null) {
-            val root = foregroundRoot()
-            if (root != null) {
-                for (node in collectInDocumentOrder(root)) {
-                    try {
-                        if (node.isEditable && node.isVisibleToUser) {
-                            target = node
-                            break
-                        }
-                    } catch (t: Throwable) {
-                        // Ped badal raha hai: aage badho.
-                    }
-                }
+        val root = foregroundRoot() ?: return null
+        for (node in collectInDocumentOrder(root)) {
+            try {
+                if (node.isEditable && node.isVisibleToUser) return node
+            } catch (t: Throwable) {
+                // Ped badal raha hai: aage badho.
             }
         }
-        val node = target ?: return false
-        return setTextOnNode(node, text)
+        return null
+    }
+
+    /**
+     * v67: focus wale (ya pehle dikhai dene wale
+     * editable) khane me clipboard se [text] chipkao —
+     * [pasteIntoNode] wala raasta।
+     */
+    private fun runPasteText(text: String): PasteResult {
+        val node = findEditableField() ?: return PasteResult.FAILED
+        return pasteIntoNode(node, text)
+    }
+
+    /**
+     * v67: NAAM wale khane me clipboard se chipkao —
+     * khana [findFieldByLabel] se, bharna [pasteIntoNode] se।
+     */
+    private fun runPasteIntoText(labelRaw: String, text: String): PasteResult {
+        val field = findFieldByLabel(labelRaw) ?: return PasteResult.FAILED
+        return pasteIntoNode(field, text)
+    }
+
+    /**
+     * v67: ek khane me clipboard se chipkao — pehle
+     * clipboard + ACTION_PASTE (tez aur akshar-akshar
+     * sateek, lambe Bangla text ke liye), phir jaanch
+     * (khane me likhai dikhi ya nahi), na chipke to
+     * ACTION_SET_TEXT wala raasta ([setTextOnNode]) —
+     * natija hamesha sachha: PASTED / TYPED / FAILED.
+     */
+    private fun pasteIntoNode(
+        node: AccessibilityNodeInfo,
+        text: String
+    ): PasteResult {
+        if (text.isEmpty()) return PasteResult.FAILED
+        try {
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        } catch (t: Throwable) {
+            // Focus bonus hai — paste phir bhi chalega.
+        }
+        val pasteOk = try {
+            val clipboard = getSystemService(
+                Context.CLIPBOARD_SERVICE
+            ) as? ClipboardManager ?: return PasteResult.FAILED
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText("jarvis screen agent", text)
+            )
+            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (t: Throwable) {
+            false
+        }
+        if (pasteOk) {
+            SystemClock.sleep(PASTE_VERIFY_WAIT_MS)
+            if (fieldContainsText(text)) return PasteResult.PASTED
+        }
+        // Paste nahi baitha (ya dikha nahi) — set-text
+        // wala raasta aazmao; uska natija bhi sachha.
+        if (setTextOnNode(node, text)) {
+            SystemClock.sleep(PASTE_VERIFY_WAIT_MS)
+            if (fieldContainsText(text)) return PasteResult.TYPED
+            // Action ne haan kahi, par jaanch khane ki
+            // likhai padh nahi payi (WebView jaisa khana) —
+            // action ke natije par bharosa (aaj ka type
+            // kadam bhi isi par chalta hai); aage wala
+            // vision kadam bhejne se pehle khana dobara
+            // dekhega hi.
+            return PasteResult.TYPED
+        }
+        return PasteResult.FAILED
+    }
+
+    /**
+     * v67: focus wale / pehle editable khane me [text]
+     * dikh raha hai ya nahi — taaza ped se dobara
+     * dhoondhkar (paste ke baad ped badal jata hai,
+     * purana node stale ho sakta hai)। Lambe text ke
+     * liye pehle 40 akshar kaafi hain (khana poora text
+     * dikhata hai, par beech me kata bhi ho to pehla
+     * hissa hi pehchan hai)।
+     */
+    private fun fieldContainsText(text: String): Boolean {
+        val probe = text.take(40)
+        if (probe.isEmpty()) return false
+        val node = findEditableField() ?: return false
+        return try {
+            (node.text?.toString() ?: "").contains(probe)
+        } catch (t: Throwable) {
+            false
+        }
     }
 
     /**
@@ -1581,8 +1702,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             })).trim()
 
     /**
-     * v45: naam se khana dhoondhkar likhna — sirf worker
-     * thread se. Do chaal:
+     * v45: naam se khana dhoondhna — sirf worker thread
+     * se. Do chaal:
      * 1. APNA NAAM: koi dikhai dene wala editable khana
      *    jiska apna naam/hint mange hue naam se mile
      *    (hubahu pehle, warna naam rakhne wala sabse
@@ -1591,13 +1712,16 @@ class JarvisAccessibilityService : AccessibilityService() {
      *    woh label jo mange hue naam se milta ho aur
      *    uske thik neeche/paas koi editable khana ho
      *    (formon me label khane ke upar likha rehta hai)।
-     * Dono na mile to imaandaar false — andaze se kisi
-     * bhi khane me nahi likhenge.
+     * Dono na mile to imaandaar null — andaze se kisi
+     * bhi khane ko nahi chunte.
+     * v67: pehle ye khoj [runTypeIntoText] ke andar bandhi
+     * thi, ab [runTypeIntoText] aur [runPasteIntoText]
+     * dono ka ek hi raasta hai — vyavhaar bilkul waisa hi।
      */
-    private fun runTypeIntoText(labelRaw: String, text: String): Boolean {
+    private fun findFieldByLabel(labelRaw: String): AccessibilityNodeInfo? {
         val wanted = labelRaw.trim().lowercase(Locale.ROOT)
-        if (wanted.isEmpty()) return false
-        val root = foregroundRoot() ?: return false
+        if (wanted.isEmpty()) return null
+        val root = foregroundRoot() ?: return null
         val nodes = collectInDocumentOrder(root)
         var best: AccessibilityNodeInfo? = null
         var bestExact = false
@@ -1629,9 +1753,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 // Ped badal raha hai: aage badho.
             }
         }
-        if (best != null) {
-            return setTextOnNode(best!!, text)
-        }
+        if (best != null) return best
         // Chaal 2: paas wala label — uske neeche sabse
         // paas wala editable khana (bandhi doori ke andar)।
         val labelBounds = Rect()
@@ -1683,7 +1805,15 @@ class JarvisAccessibilityService : AccessibilityService() {
                 // Ped badal raha hai: aage badho.
             }
         }
-        val field = bestField ?: return false
+        return bestField
+    }
+
+    /**
+     * v45: naam se khana dhoondhkar likhna — sirf worker
+     * thread se ([findFieldByLabel] + [setTextOnNode])।
+     */
+    private fun runTypeIntoText(labelRaw: String, text: String): Boolean {
+        val field = findFieldByLabel(labelRaw) ?: return false
         return setTextOnNode(field, text)
     }
 
@@ -3504,6 +3634,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             service.typeIntoScreenText(label, text, callback)
         }
 
+        /** v67: kahin se bhi clipboard-paste — service band ho to turant FAILED. */
+        fun pasteScreenText(
+            context: Context,
+            text: String,
+            callback: (PasteResult) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(PasteResult.FAILED)
+                return
+            }
+            service.pasteScreenText(text, callback)
+        }
+
+        /** v67: kahin se bhi naam wale khane me clipboard-paste — service band ho to turant FAILED. */
+        fun pasteIntoScreenText(
+            context: Context,
+            label: String,
+            text: String,
+            callback: (PasteResult) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(PasteResult.FAILED)
+                return
+            }
+            service.pasteIntoScreenText(label, text, callback)
+        }
+
         /** v45: kahin se bhi focus wale khane par IME enter — service band ho to turant false. */
         fun submitFocusedField(
             context: Context,
@@ -3551,6 +3710,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val MAX_DURATION_NODES = 120
         private const val DIAG_KEY_LAST_YOUTUBE_TAP = "last_youtube_tap"
         private const val CLICK_SETTLE_MS = 350L
+        // v67: paste ke baad khane ki likhai padhne se pehle ka intezaar।
+        private const val PASTE_VERIFY_WAIT_MS = 400L
         // v37: screen-agent wale bandobosto — saar me zyada
         // se zyada 60 hisse, har naam 90 akshar tak kata
         // hua; scroll wala swipe ~320 ms ka.

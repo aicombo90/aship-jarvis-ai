@@ -1031,6 +1031,33 @@ class ScreenAgent(
                     )
                     settle(deadline)
                 }
+                is ScreenAction.Paste -> {
+                    // Chipkana apne-aap me bhejna nahi hai —
+                    // pushti sirf bhejne/dabane wale kadam par
+                    // lagti hai (type wala hi niyam)।
+                    val result = pasteSync(action.value)
+                    val ok = result !=
+                        JarvisAccessibilityService.PasteResult.FAILED
+                    // v66: chipka diya — agla kadam aam taur par
+                    // bhejne wala batan hi hai; use tasveer ke
+                    // saath DEKHA jayega (teer-aikon bina naam ke)।
+                    if (ok) forceVisionNextRound = true
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. paste -> " + when (result) {
+                            JarvisAccessibilityService.PasteResult.PASTED ->
+                                "PASTED (clipboard)"
+                            JarvisAccessibilityService.PasteResult.TYPED ->
+                                "TYPED (paste did not take, typed instead)"
+                            JarvisAccessibilityService.PasteResult.FAILED ->
+                                "FAILED (could not put the text in the field)"
+                        }
+                    )
+                    pendingVerify = PendingVerify(
+                        "pasting text", null, null, true
+                    )
+                    settle(deadline)
+                }
                 is ScreenAction.TapText -> {
                     val kind = sensitiveKind(action.value)
                         ?: snapshotKindForText(snapshot, action.value)
@@ -1391,6 +1418,35 @@ class ScreenAgent(
                     )
                     pendingVerify = PendingVerify(
                         "typing into \"" + action.label + "\"",
+                        null, null, true
+                    )
+                    settle(deadline)
+                }
+                is ScreenAction.PasteInto -> {
+                    // Chipkana (paste ki tarah) apne-aap me
+                    // bhejna nahi hai — pushti yahan nahi
+                    // lagti; bhejne wala kadam (submit/tap)
+                    // apni jaanch khud rakhta hai.
+                    val result = pasteIntoSync(action.label, action.text)
+                    val ok = result !=
+                        JarvisAccessibilityService.PasteResult.FAILED
+                    // v66: type wala hi niyam — agla kadam
+                    // tasveer ke saath, bhejne wala batan DEKHNE ke liye।
+                    if (ok) forceVisionNextRound = true
+                    stepsDone++
+                    history.add(
+                        "$stepsDone. paste_into \"" + action.label +
+                            "\" -> " + when (result) {
+                            JarvisAccessibilityService.PasteResult.PASTED ->
+                                "PASTED (clipboard)"
+                            JarvisAccessibilityService.PasteResult.TYPED ->
+                                "TYPED (paste did not take, typed instead)"
+                            JarvisAccessibilityService.PasteResult.FAILED ->
+                                "FAILED (no matching editable field)"
+                        }
+                    )
+                    pendingVerify = PendingVerify(
+                        "pasting into \"" + action.label + "\"",
                         null, null, true
                     )
                     settle(deadline)
@@ -1890,6 +1946,9 @@ class ScreenAgent(
         class Scroll(val down: Boolean) : ScreenAction()
         class Type(val value: String) : ScreenAction()
 
+        /** v67: clipboard se chipkao — focus wale khane me (type se tez/sateek). */
+        class Paste(val value: String) : ScreenAction()
+
         /** v45: naam ya package se app kholo / usi me jao. */
         class OpenApp(val value: String) : ScreenAction()
 
@@ -1909,6 +1968,9 @@ class ScreenAgent(
 
         /** v45: NAAM wale khane me likho (focus wala [Type] se alag). */
         class TypeInto(val label: String, val text: String) : ScreenAction()
+
+        /** v67: clipboard se chipkao — NAAM wale khane me. */
+        class PasteInto(val label: String, val text: String) : ScreenAction()
 
         /** v45: focus wale khane ko submit karo (enter / Search batan). */
         object Submit : ScreenAction()
@@ -1970,6 +2032,10 @@ class ScreenAgent(
             "type" -> obj.optString("value")
                 .takeIf { it.isNotEmpty() }
                 ?.let { ScreenAction.Type(it) }
+            // v67: clipboard-paste — focus wala khana।
+            "paste" -> obj.optString("value")
+                .takeIf { it.isNotEmpty() }
+                ?.let { ScreenAction.Paste(it) }
             // v45: app kholna — kunji "app" pasandeeda,
             // "value" bhi chalegi (doosre kadmon wali aadat).
             "open_app" -> {
@@ -2024,6 +2090,18 @@ class ScreenAgent(
                     .ifEmpty { obj.optString("text") }
                 if (field.isNotEmpty() && text.isNotEmpty()) {
                     ScreenAction.TypeInto(field, text)
+                } else {
+                    null
+                }
+            }
+            // v67: clipboard-paste — naam wala khana।
+            "paste_into" -> {
+                val field = obj.optString("label").trim()
+                    .ifEmpty { obj.optString("target").trim() }
+                val text = obj.optString("value")
+                    .ifEmpty { obj.optString("text") }
+                if (field.isNotEmpty() && text.isNotEmpty()) {
+                    ScreenAction.PasteInto(field, text)
                 } else {
                     null
                 }
@@ -2441,6 +2519,24 @@ class ScreenAgent(
             )
         }
 
+    // v67: clipboard-paste wale kadmon ke bandhe raaste —
+    // natija [JarvisAccessibilityService.PasteResult] hai,
+    // isliye aam [opSyncValue] par chalte hain।
+    private fun pasteSync(text: String): JarvisAccessibilityService.PasteResult =
+        opSyncValue(JarvisAccessibilityService.PasteResult.FAILED) { callback ->
+            JarvisAccessibilityService.pasteScreenText(context, text, callback)
+        }
+
+    private fun pasteIntoSync(
+        label: String,
+        text: String
+    ): JarvisAccessibilityService.PasteResult =
+        opSyncValue(JarvisAccessibilityService.PasteResult.FAILED) { callback ->
+            JarvisAccessibilityService.pasteIntoScreenText(
+                context, label, text, callback
+            )
+        }
+
     private fun submitImeSync(): Boolean =
         opSync { callback ->
             JarvisAccessibilityService.submitFocusedField(context, callback)
@@ -2536,6 +2632,31 @@ class ScreenAgent(
         }
         awaitLatch(latch)
         return delivered && result
+    }
+
+    /**
+     * v67: [opSync] ka aam roop — Boolean ke alawa koi
+     * natija (jaise [JarvisAccessibilityService.PasteResult])
+     * chahiye ho to; na aaye to [fallback] hi natija।
+     */
+    private fun <T> opSyncValue(
+        fallback: T,
+        start: ((T) -> Unit) -> Unit
+    ): T {
+        val latch = CountDownLatch(1)
+        var result = fallback
+        var delivered = false
+        try {
+            start { value ->
+                result = value
+                delivered = true
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return fallback
+        }
+        awaitLatch(latch)
+        return if (delivered) result else fallback
     }
 
     private fun awaitLatch(latch: CountDownLatch) {
@@ -2805,6 +2926,11 @@ class ScreenAgent(
                 "{\"action\":\"type_into\",\"label\":\"<label of " +
                 "the input field>\",\"value\":\"<text>\"} — type " +
                 "into a NAMED field\n" +
+                "{\"action\":\"paste\",\"value\":\"<text to paste into " +
+                "the focused input field (clipboard — fast and exact)>\"}\n" +
+                "{\"action\":\"paste_into\",\"label\":\"<label of " +
+                "the input field>\",\"value\":\"<text>\"} — paste " +
+                "into a NAMED field\n" +
                 "{\"action\":\"submit\"} — submit the focused " +
                 "field (enter / search) after typing\n" +
                 "{\"action\":\"wait_for\",\"value\":\"<text that " +
@@ -2859,6 +2985,17 @@ class ScreenAgent(
                 "is not focused or the screen has several fields. " +
                 "After typing into a search or form field, use " +
                 "submit to run the search / submit the form.\n" +
+                "- \"paste\" puts text into the focused field from " +
+                "the clipboard — it is fast and exact, especially " +
+                "for long text. Prefer paste over type when the " +
+                "task says paste / copy-paste, or the text is long; " +
+                "\"paste_into\" is the named-field version. The " +
+                "result tells you whether it PASTED, fell back to " +
+                "TYPED, or FAILED — check the text is in the " +
+                "field before sending either way; if paste fails, " +
+                "try type once; if that fails too, say \"fail\" " +
+                "honestly. Never claim the text was pasted when " +
+                "the result says FAILED.\n" +
                 "- To SEND a typed message in a chat app (ChatGPT, " +
                 "WhatsApp, Telegram, Gemini): the send button is " +
                 "usually a round ARROW icon at the right end of the " +

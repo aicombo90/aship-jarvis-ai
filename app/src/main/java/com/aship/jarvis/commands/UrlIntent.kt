@@ -123,7 +123,8 @@ object UrlIntent {
      * bandhan me aata hai (kaam poora / model ne
      * imaandaari se roka)। Na mile to null।
      */
-    private fun extractOwnSummary(text: String): String? {
+    /** v67: [PasteSendIntent] bhi yahi saar istemal karta hai — isliye public. */
+    fun extractOwnSummary(text: String): String? {
         val match = Regex("language: \"(.+?)\" —").find(text) ?: return null
         return match.groupValues[1].trim().takeIf { it.isNotEmpty() }
     }

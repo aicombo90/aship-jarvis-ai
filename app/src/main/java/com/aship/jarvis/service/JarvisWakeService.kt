@@ -44,6 +44,7 @@ import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.LearnCommands
+import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
@@ -3052,6 +3053,19 @@ class JarvisWakeService : Service() {
             runDirectScreenTask(text, urlTask)
             return
         }
+        // v67: PASTE / SEND-TEXT wala kaam (app + paste/
+        // send verb) — agent se pehle pakka screen_task
+        // raasta (saamne wali screen wala hi niyam,
+        // [PasteSendIntent])। "পেস্ট করো" par mastishk
+        // mana kar deta tha — ab woh raasta aata hi nahi।
+        val pasteTask = PasteSendIntent.extractPasteSendTask(text)
+        if (pasteTask != null) {
+            // v49: ye bhi screen-kaam hai — taana
+            // session yahin se shuru/aage।
+            enterContinuousSession()
+            runDirectPasteSendTask(text, pasteTask)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -3444,6 +3458,59 @@ class JarvisWakeService : Service() {
             }
             UrlIntent.saveRouteDiag(applicationContext, result.ok)
             val line = UrlIntent.spokenSummary(result, personaSpokenLang())
+            executor.execute {
+                if (destroyed || state != State.REPLY) return@execute
+                setStatus("Screen wale kaam ka jawab mila — bol rahi hoon")
+                updateNotification("Jarvis jawab de raha hai...")
+                pendingEndReason = SESSION_END_COMPLETED
+                // v49: session ke sandarbh me ye
+                // len-den bhi bandh jaye।
+                noteSessionOutcome(text, line)
+                lightScreenOnWake()
+                speaker.speak(line)
+                armReplyFallback(line)
+                orbOverlay.setReply(line)
+            }
+        }.start()
+    }
+
+    /**
+     * v67: bina mastishk ke seedha screen_task — PASTE /
+     * SEND-TEXT wala kaam ([PasteSendIntent]) background
+     * me bhi pakke taur par yahin aata hai (saamne wali
+     * screen wala hi niyam). Auzaar bandha (sync) hai
+     * aur kadam lambe ho sakte hain, isliye apne thread
+     * par; natija wapas executor par aakar aam jawab ki
+     * tarah bola jayega. Bola jaane wala saar
+     * [PasteSendIntent.spokenSummary] se — screen agent
+     * ke apne shabd milein to wohi, warna shaksiyat ki
+     * bhasha me natije ki imaandaar bandhi line.
+     */
+    private fun runDirectPasteSendTask(text: String, task: String) {
+        setStatus("Lekha paste karke bhej rahi hoon...")
+        updateNotification("Screen wala kaam chal raha hai...")
+        Thread {
+            val tools = AgentTools(
+                applicationContext, commandEngine, fromBackgroundService = true
+            )
+            // v49: bulane wale ne session pehle hi
+            // shuru kar diya hai (paste wala screen-kaam
+            // session banata hai) — hukm ka bhejne
+            // wala aadesh aur session sandarbh auzaar
+            // tak jayein (askAgentBrain wala hi niyam)।
+            // v66: sirf "পেস্ট করো" ho to jhanda nahi
+            // lagta — paste hoga, bhejna tabhi jab
+            // screen agent ko saaf aadesh mile।
+            tools.userDirectedSend = sessionActive &&
+                SessionCommands.isSendInstruction(text)
+            tools.sessionContext = sessionContextText()
+            val result = try {
+                tools.execute("screen_task", JSONObject().put("task", task))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            PasteSendIntent.saveRouteDiag(applicationContext, result.ok)
+            val line = PasteSendIntent.spokenSummary(result, personaSpokenLang())
             executor.execute {
                 if (destroyed || state != State.REPLY) return@execute
                 setStatus("Screen wale kaam ka jawab mila — bol rahi hoon")

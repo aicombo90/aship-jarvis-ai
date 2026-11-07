@@ -497,7 +497,7 @@ object AgentBrain {
             "will get another turn — continue with the next tool or " +
             "finish with final):\n" +
             "- open_app, args {\"app\": \"<common app name, e.g. YouTube, " +
-            "WhatsApp, Camera, Settings>\"} — opens an installed app. " +
+            "WhatsApp, ChatGPT, Gemini, Camera, Settings>\"} — opens an installed app. " +
             "Result says whether it really opened.\n" +
             "- mobile_data, args {\"state\": \"on\" | \"off\" | \"toggle\"} " +
             "— switches mobile data through the phone's quick-settings " +
@@ -583,13 +583,20 @@ object AgentBrain {
             "- screen_task, args {\"task\": \"<the task in the " +
             "user's own words>\"} — drives the screen of another " +
             "app step by step (reading the screen, tapping, " +
-            "scrolling, typing) to complete a multi-step task " +
-            "INSIDE an app that no other tool covers — e.g. " +
-            "sending a live location in WhatsApp, or picking the " +
-            "latest gallery video into the CapCut editor. If the " +
+            "scrolling, typing AND PASTING text) to complete a " +
+            "multi-step task INSIDE an app that no other tool " +
+            "covers — e.g. pasting a text into ChatGPT or " +
+            "Gemini and sending it, sending a live location " +
+            "in WhatsApp, or picking the latest gallery video " +
+            "into the CapCut editor. The screen agent puts " +
+            "text into another app by PASTING it from the " +
+            "clipboard (or typing it) — that IS the paste " +
+            "mechanism, and it works in ChatGPT, Gemini, " +
+            "WhatsApp, Telegram and any other app. If the " +
             "app is not open yet, first call open_app for it, " +
-            "then screen_task with the full task (including the " +
-            "app and person's names, in the user's own words). " +
+            "then screen_task with the full task (including " +
+            "the app and person's names AND the FULL text to " +
+            "paste/send, in the user's own words). " +
             "Send/pay/delete taps inside are confirmed with the " +
             "user by the app itself — the task stops if the user " +
             "does not say yes. The result says honestly whether " +
@@ -612,6 +619,17 @@ object AgentBrain {
             "screen visible.\n" +
             "\n" +
             "RULES:\n" +
+            "- Paste / copy-paste / send this text in another app " +
+            "(ChatGPT, Gemini, WhatsApp, Telegram, any app): " +
+            "ALWAYS route it to open_app (if the app is not open " +
+            "yet) + screen_task with the FULL text in the user's " +
+            "own words. NEVER refuse with 'no tool' or 'no " +
+            "clipboard tool' — the screen agent IS the paste " +
+            "tool: it pastes from the clipboard into the app's " +
+            "message box and can send it. If the user asks " +
+            "'can you copy-paste?' the answer is YES — offer " +
+            "to do it right away (or just do it when they give " +
+            "you the text and the app).\n" +
             "- Emptying a gallery Trash / Recently deleted folder: " +
             "ALWAYS route it to screen_task with the task in the " +
             "user's own words — the app attaches its own " +

@@ -52,6 +52,7 @@ import com.aship.jarvis.commands.DataButtonLearner
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.LearnCommands
+import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PhoneLearner
@@ -1888,6 +1889,23 @@ class MainActivity : Activity() {
             runDirectScreenTask(commandText, urlTask, vocativeLang)
             return
         }
+        // v67: PASTE / SEND-TEXT wala kaam (app ka naam +
+        // paste / send-text ka iraada) baatchit nahi hai —
+        // pakka screen_task hai. Live test (2026-11-07) me
+        // "পেস্ট করো" bolne par baatchit wala mastishk
+        // seedha mana kar gaya tha ("পেস্ট করার কোনো টুল
+        // আমার কাছে নেই") — uski instruction me paste ka
+        // zikr hi nahi tha. Isliye agent se pehle ye pakki
+        // jaanch (UrlIntent ke baad — link wala iraada
+        // pehle jeetta hai): kaam seedha screen_task
+        // auzaar ko, user ke apne shabdon me, paste
+        // karne wala text akshar-akshar jaisa suna waisa
+        // hi (PasteSendIntent dekho).
+        val pasteTask = PasteSendIntent.extractPasteSendTask(commandText)
+        if (pasteTask != null) {
+            runDirectPasteSendTask(commandText, pasteTask, vocativeLang)
+            return
+        }
         // v25: online brain uplabdh ho (mode Offline na ho,
         // key set ho, net chalu ho) to pehle AGENT — app ke
         // andar EK hi mastishk (user ka pakka design):
@@ -2248,6 +2266,58 @@ class MainActivity : Activity() {
             val line = UrlIntent.spokenSummary(
                 result, vocativeLang ?: PlayIntent.requestLanguage(text)
             )
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $line"
+                speaker.speak(line)
+            }
+        }
+    }
+
+    /**
+     * v67: bina mastishk ke seedha screen_task — PASTE /
+     * SEND-TEXT wala kaam ([PasteSendIntent]) pakke taur
+     * par yahin aata hai: kaam user ke apne shabdon me,
+     * paste karne wala text akshar-akshar jaisa suna
+     * waisa hi, screen_task auzaar ko, apne background
+     * thread par (kadmon ke bandhe intezaar UI ko nahi
+     * rokte). Bola jaane wala saar
+     * [PasteSendIntent.spokenSummary] se — screen agent
+     * ke apne shabd milein to wohi, warna natije ki
+     * imaandaar bandhi line; poora varnan "Screen chaal"
+     * report me bandhta hai.
+     */
+    private fun runDirectPasteSendTask(
+        text: String,
+        task: String,
+        vocativeLang: PlayIntent.SpokenLang?
+    ) {
+        val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
+        responseText.text = when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "Maya: লেখাটা পেস্ট করে পাঠাচ্ছি..."
+            PlayIntent.SpokenLang.HINDI ->
+                "Maya: लिखा हुआ पेस्ट करके भेज रही हूँ..."
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Maya: Pasting the text and sending it..."
+        }
+        background.execute {
+            val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+            // v66: askAgentBrain wala hi niyam — hukm me saaf
+            // bhejne ka aadesh ho ("পাঠিয়ে দাও" / "সেন্ড করে
+            // দাও" / "কোনো পারমিশন লাগবে না, একা একাই কর")
+            // to Send pehle-se-pusht; sirf "পেস্ট করো" ho to
+            // jhanda nahi lagta — paste hoga, bhejna tabhi
+            // jab screen agent ko saaf aadesh mile।
+            tools.userDirectedSend = SessionCommands.isSendInstruction(text)
+            val result = try {
+                tools.execute("screen_task", JSONObject().put("task", task))
+            } catch (t: Throwable) {
+                AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
+            }
+            PasteSendIntent.saveRouteDiag(this, result.ok)
+            val line = PasteSendIntent.spokenSummary(result, lang)
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
