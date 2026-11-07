@@ -75,8 +75,8 @@ android {
         applicationId 'com.aship.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 71
-        versionName '1.70'
+        versionCode 72
+        versionName '1.71'
 
         ndk {
             // v41: sherpa-onnx AAR chaaron ABI ke .so rakhta
@@ -85,7 +85,18 @@ android {
             // hisse APK se bahar rakho, warna APK bekaar me
             // phool jayega. Vosk ke bhi sirf ARM hisse
             // rahenge; un phones par koi badlav nahi.
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            // v72: sirf arm64-v8a — armeabi-v7a (32-bit) bhi
+            // hata diya. v71 APK 76.7 MB tha, usme v7a wale
+            // .so (Stored, bina dabaye) 31.4 MB the; arm64
+            // wala APK ~45.3 MB hoga — ~41% chhota download.
+            // User ka phone vivo T4x 5G (arm64) hai — us par
+            // v7a wale .so kabhi chalte hi nahi the, isliye
+            // app par koi asar nahi. 32-bit ARM phone par ye
+            // APK ab nahi chalega (UpdateChecker ek hi asset
+            // uthata hai — aship-jarvis-vNN.apk — isliye
+            // split APK ka rasta nahi liya: workflow badle
+            // bina ek hi asset, wahi naam, wahi link).
+            abiFilters 'arm64-v8a'
         }
     }
 
