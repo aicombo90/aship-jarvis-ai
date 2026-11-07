@@ -19,6 +19,14 @@
          jati hai; mana karne par purana raasta (dialer
          khula, number bhara) hi chalta hai. -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- v63: mobile-data ki ASLI haalat (TelephonyManager.
+         isDataEnabled) padhne ke liye — bina iske v62 wali
+         jaanch SecurityException khakar null lautati thi,
+         isliye "অন কর দিয়া" jhootha bola gaya tha (15:21)।
+         Runtime par MainActivity se ek baar maangi jati hai;
+         mana karne par jaanch vision/isChecked se, ya
+         imaandaar "pata nahi" — jhootha SUCCESS kabhi nahi। -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <!-- Downloading the offline Vosk model; later also online AI -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v21 Phase 3: Gemini ko bulane se pehle net chalu hai ya

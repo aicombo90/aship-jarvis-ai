@@ -1850,28 +1850,59 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         val clickTarget = search.clickTarget ?: foundTile
-        // Haal padh sakte hain aur pehle se waisi hi hai to
-        // dabane ki zaroorat hi nahi — ulta ho jayega.
-        val currentState = readTileState(clickTarget) ?: readTileState(foundTile)
-        if (currentState == null || currentState != turnOn) {
-            val clicked = try {
-                clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            } catch (t: Throwable) {
-                false
-            }
-            if (!clicked) {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                return DataResult.TILE_NOT_FOUND
-            }
-            SystemClock.sleep(CLICK_SETTLE_MS)
+        // v63: pehle ASLI haalat — Telephony, phir tile ka
+        // isChecked. Naam ke shabd ("Disable"/"Enable") haalat
+        // NAHI hote (tile ka ACTION hai); 15:21 wali galti
+        // yahin se hui thi: dabaye bina "state=on" likh diya
+        // gaya tha jabki data asal me OFF tha।
+        val currentState = readCurrentDataState()
+        if (currentState != null && currentState == turnOn) {
+            // Pehle se chahi hui haalat me — dabana hi nahi.
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return DataResult.SUCCESS
         }
-        // v23: safal koshish ki report scan wali ki jagah legi —
-        // kaun sa tile daba aur kaun si haalat chahiye thi.
-        pendingScanReport =
-            "OK tile=" + (scanTileLabel ?: "?") +
-                " state=" + (if (turnOn) "on" else "off")
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        return DataResult.SUCCESS
+        // Dabao — ACTION_CLICK; na chale to tile ke beech me
+        // ungli wala tap (vivo tile aksar gesture se hi dabta hai)।
+        var tapped = try {
+            clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (t: Throwable) {
+            false
+        }
+        if (!tapped) {
+            tapped = tapTileCenter(clickTarget)
+        }
+        if (!tapped) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return DataResult.TILE_NOT_FOUND
+        }
+        SystemClock.sleep(CLICK_SETTLE_MS)
+        // v63: dabane ke BAAD asli haalat ki jaanch — bina
+        // jaanche SUCCESS kabhi nahi (15:21 ka jhooth dobara nahi)।
+        // Radio ko waqt lagta hai, isliye 350ms ke baad bhi
+        // kuch second tak padhte raho।
+        if (waitForDataState(turnOn, VERIFY_TIMEOUT_MS)) {
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return DataResult.SUCCESS
+        }
+        // Ek baar phir — tile ke beech me gesture tap, phir jaanch।
+        if (tapTileCenter(clickTarget) &&
+            waitForDataState(turnOn, VERIFY_TIMEOUT_MS)
+        ) {
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return DataResult.SUCCESS
+        }
+        // Aakhiri raasta — vision se taaza dhoondho: pehle
+        // tasveer se haalat dekho, zaroorat ho to hi dabao।
+        return visionVerifyAndFix(turnOn)
     }
 
     /** v18: asal ulta-karne wala kaam — sirf worker thread se bulana. */
@@ -1886,38 +1917,42 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         val clickTarget = search.clickTarget ?: foundTile
-        val beforeState = readTileState(clickTarget) ?: readTileState(foundTile)
         // Toggle me dabana hamesha hai — haalat jo bhi ho, ek
-        // dabav use ulta hi karega.
-        val clicked = try {
+        // dabav use ulta hi karega. ACTION_CLICK na chale to
+        // tile ke beech me gesture tap।
+        var tapped = try {
             clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } catch (t: Throwable) {
             false
         }
-        if (!clicked) {
+        if (!tapped) {
+            tapped = tapTileCenter(clickTarget)
+        }
+        if (!tapped) {
             performGlobalAction(GLOBAL_ACTION_BACK)
             return DataOutcome.TILE_NOT_FOUND
         }
         SystemClock.sleep(CLICK_SETTLE_MS)
-        val afterState = rereadTileState(foundTile, clickTarget)
+        // v63: dabane ke BAAD ki ASLI haalat — Telephony,
+        // isChecked, phir vision (tasveer)। Pehle wali haalat
+        // se andaza lagana BAND: dabna chhoota ho to "ulta
+        // hua hoga" jhooth hota hai (15:21 ka sabak)।
+        val afterState = waitForAnyDataState(VERIFY_TIMEOUT_MS)
+            ?: visionReadDataState()
         performGlobalAction(GLOBAL_ACTION_BACK)
-        val outcome = when {
-            // Dabane ke baad ki haalat padh paye — wahi sach hai.
-            afterState != null ->
-                if (afterState) DataOutcome.TURNED_ON else DataOutcome.TURNED_OFF
-            // Baad ki na mili, pehle ki mili thi — ulta hua hoga.
-            beforeState != null ->
-                if (beforeState) DataOutcome.TURNED_OFF else DataOutcome.TURNED_ON
-            else -> DataOutcome.TOGGLED_UNKNOWN
+        val outcome = when (afterState) {
+            true -> DataOutcome.TURNED_ON
+            false -> DataOutcome.TURNED_OFF
+            null -> DataOutcome.TOGGLED_UNKNOWN
         }
         // v23: safal koshish ki report scan wali ki jagah legi —
         // kaun sa tile daba aur dabane ke baad data kis haalat
-        // me hai (pakka padh paye to wahi, warna unknown).
+        // me hai (pakka padh paye to wahi, warna unknown)।
         pendingScanReport =
             "OK tile=" + (scanTileLabel ?: "?") +
                 " state=" + when (outcome) {
-                    DataOutcome.TURNED_ON -> "on"
-                    DataOutcome.TURNED_OFF -> "off"
+                    DataOutcome.TURNED_ON -> "on (verified)"
+                    DataOutcome.TURNED_OFF -> "off (verified)"
                     else -> "unknown"
                 }
         return outcome
@@ -2003,6 +2038,16 @@ class JarvisAccessibilityService : AccessibilityService() {
      */
     private fun visionTapForData(desired: Boolean?): VisionTapResult {
         val beforeSystem = readSystemDataState()
+        // v63: dabane se PEHLE asli haalat — pehle se chahi hui
+        // ho to dabana hi nahi (dabane se ulta ho jayega)।
+        // Telephony ya tile ke isChecked se — naam ke shabd
+        // yahan bhi haalat nahi।
+        if (desired != null) {
+            val current = readCurrentDataState()
+            if (current != null && current == desired) {
+                return VisionTapResult.Success(current)
+            }
+        }
         // (a) Seekhi hui jagah — bina net। Seekhi jagah status-bar
         // ki patti me ho (seekhte waqt Gemini ne status-bar ka
         // nishan pakad liya ho) to use dabana hi nahi — seedha
@@ -2127,6 +2172,126 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // v63: ASLI haalat ki jaanch — 15:21 ka jhooth dobara nahi
+    // ------------------------------------------------------------------
+
+    /**
+     * v63: dabane ke baad asli haalat ka intezaar — radio ko
+     * waqt lagta hai, 350ms kaafi nahi। Har ~400ms padho;
+     * chahi hui haalat mile to true, seema beet jaye to false।
+     * Jaach [readCurrentDataState] se — Telephony, phir tile
+     * ka isChecked; naam ke shabd kabhi nahi।
+     */
+    private fun waitForDataState(desired: Boolean, timeoutMs: Long): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (true) {
+            if (readCurrentDataState() == desired) return true
+            if (SystemClock.uptimeMillis() >= deadline) return false
+            SystemClock.sleep(VERIFY_POLL_MS)
+        }
+    }
+
+    /** v63: dabane ke baad KOI bhi padhi hui haalat — flip ke liye। */
+    private fun waitForAnyDataState(timeoutMs: Long): Boolean? {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (true) {
+            readCurrentDataState()?.let { return it }
+            if (SystemClock.uptimeMillis() >= deadline) return null
+            SystemClock.sleep(VERIFY_POLL_MS)
+        }
+    }
+
+    /**
+     * v63: node ke beech me ungli wala tap — ACTION_CLICK na
+     * chale to dusra raasta (vivo tile aksar gesture se hi
+     * dabta hai)। Bounds na mile to false।
+     */
+    private fun tapTileCenter(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) return false
+            tapAtPoint(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * v63: taazi tasveer se data wala chihn dhoondho — jagah +
+     * haalat (hara = on, grey = off) ke saath। Key na ho,
+     * tasveer na mile ya chihn na dikhe to null। Panel khula
+     * hua hona chahiye।
+     */
+    private fun captureDataIcon(): DataButtonVision.VisionHit? {
+        if (!GeminiBrain.isConfigured(this)) return null
+        val shot = captureScreenshotSync() ?: return null
+        val hit = try {
+            DataButtonVision.findDataIcon(this, shot)
+        } catch (t: Throwable) {
+            null
+        } ?: return null
+        if (!DataButtonVision.isPlausibleTilePosition(hit.x, hit.y)) return null
+        return hit
+    }
+
+    /** v63: taazi tasveer se data ki haalat — Gemini chihn dekhkar batata hai। */
+    private fun visionReadDataState(): Boolean? {
+        return try {
+            captureDataIcon()?.on
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * v63: text wale dabane ke baad aakhiri jaanch — taazi
+     * tasveer se haalat dekho, zaroorat ho to HI dabao।
+     * Panel khula hua hai; band yahin karta hai। Haalat
+     * pakki na ho to imaandaar TAPPED_UNKNOWN — jhootha
+     * SUCCESS kabhi nahi।
+     */
+    private fun visionVerifyAndFix(desired: Boolean): DataResult {
+        val result: DataResult
+        val report: String
+        if (!GeminiBrain.isConfigured(this)) {
+            result = DataResult.TAPPED_UNKNOWN
+            report = "tap done, state unknown (no Gemini key)"
+        } else {
+            val hit = captureDataIcon()
+            if (hit == null) {
+                result = DataResult.TAPPED_UNKNOWN
+                report = "tap done, state unknown (vision no tile)"
+            } else if (hit.on != null && hit.on == desired) {
+                // Tasveer me pehle se chahi hui haalat — pehle
+                // wala dabna kaam kar gaya tha, dobara mat dabao।
+                saveLearnedDataButton(hit)
+                result = DataResult.SUCCESS
+                report = "OK vision state=" + (if (desired) "on" else "off") + " (verified)"
+            } else if (hit.on == null) {
+                result = DataResult.TAPPED_UNKNOWN
+                report = "tap done, state unknown (vision unsure)"
+            } else if (!tapVisionPoint(hit.x, hit.y)) {
+                result = DataResult.TAPPED_UNKNOWN
+                report = "tap done, state unknown (vision tap failed)"
+            } else {
+                SystemClock.sleep(CLICK_SETTLE_MS)
+                if (waitForDataState(desired, VERIFY_TIMEOUT_MS)) {
+                    saveLearnedDataButton(hit)
+                    result = DataResult.SUCCESS
+                    report = "OK vision state=" + (if (desired) "on" else "off") + " (verified)"
+                } else {
+                    result = DataResult.TAPPED_UNKNOWN
+                    report = "tap done, state unknown (vision tap did not change state)"
+                }
+            }
+        }
+        pendingScanReport = report
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return result
+    }
+
     /** v57: panel ke taaza ped se tile ki haalat — ek baar, bina intezaar। */
     private fun findDataTileStateNow(): Boolean? {
         val roots = collectRoots()
@@ -2152,10 +2317,15 @@ class JarvisAccessibilityService : AccessibilityService() {
         return state
     }
 
-    /** v57: data ki haalat — pehle tile se, na mile to system setting se। */
+    /**
+     * v57: data ki haalat — v63 se kram badla: pehle system
+     * setting (Telephony, phir Settings.Global), na mile to
+     * tile ka isChecked। Tile ke naam ke shabd yahan kabhi
+     * nahi aate ([readTileState] ab sirf isChecked padhta hai)।
+     */
     private fun readCurrentDataState(): Boolean? {
         return try {
-            findDataTileStateNow() ?: readSystemDataState()
+            readSystemDataState() ?: findDataTileStateNow()
         } catch (t: Throwable) {
             null
         }
@@ -2286,45 +2456,6 @@ class JarvisAccessibilityService : AccessibilityService() {
             current = bestChild
         }
         return current
-    }
-
-    /**
-     * v18: tile dabane ke baad ki haalat dobara padhne ki
-     * koshish. Purana node taaza (refresh) karke dekho; woh na
-     * bane to panel ke taaza ped se tile phir dhoondhkar padho.
-     * Kuch koshishon me na mile to null.
-     */
-    private fun rereadTileState(
-        tile: AccessibilityNodeInfo,
-        clickTarget: AccessibilityNodeInfo
-    ): Boolean? {
-        var attempts = 0
-        while (attempts < REREAD_ATTEMPTS) {
-            try {
-                tile.refresh()
-            } catch (t: Throwable) {
-                // Ped badal gaya hoga: neeche taaza khoj hai.
-            }
-            try {
-                clickTarget.refresh()
-            } catch (t: Throwable) {
-                // Ped badal gaya hoga: neeche taaza khoj hai.
-            }
-            readTileState(clickTarget)?.let { return it }
-            readTileState(tile)?.let { return it }
-            val roots = collectRoots()
-            for (root in roots) {
-                val fresh = findDataTile(root) ?: continue
-                val freshTarget = findClickableAncestor(fresh) ?: fresh
-                readTileState(freshTarget)?.let { return it }
-                readTileState(fresh)?.let { return it }
-            }
-            attempts++
-            if (attempts < REREAD_ATTEMPTS) {
-                SystemClock.sleep(REREAD_INTERVAL_MS)
-            }
-        }
-        return null
     }
 
     /** v26: YouTube khoj ka ek ummeedwaar — dabane wala node aur uska naam. */
@@ -2753,35 +2884,19 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Tile ki vartamaan haalat (true = on, false = off), jahan
-     * se padh sakte hain: checkable node ka checked, state
-     * description (Android 11+), ya naam/description me likha
-     * on/off. Kuch na mile to null — bulane wala ek baar dabakar
-     * koshish karega.
+     * v63: tile ki haalat — SIRF checkable node ka checked।
+     * Naam/description/state ke shabd ("Disable"/"Enable",
+     * "on"/"off", "चालू"/"বন্ধ") yahan se HATA diye gaye:
+     * woh tile ka ACTION/likha hua naam hai, haalat nahi —
+     * 15:21 wali galti ("Disable Data network" padhkar
+     * "state=on") wahi se hui thi। Checkable na ho to null —
+     * bulane wala Telephony/vision se jaanch karega।
      */
     private fun readTileState(node: AccessibilityNodeInfo): Boolean? {
-        try {
-            if (node.isCheckable) {
-                return node.isChecked
-            }
+        return try {
+            if (node.isCheckable) node.isChecked else null
         } catch (t: Throwable) {
-            // Aage ke raaste aazmao.
-        }
-        val hay = (
-            (node.text?.toString() ?: "") + " " +
-                (node.contentDescription?.toString() ?: "") + " " +
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    node.stateDescription?.toString() ?: ""
-                } else {
-                    ""
-                }
-            ).lowercase(Locale.ROOT)
-        return when {
-            hay.contains("चालू") || hay.contains("চালু") ||
-                ON_WORD.containsMatchIn(hay) -> true
-            hay.contains("बंद") || hay.contains("বন্ধ") ||
-                OFF_WORD.containsMatchIn(hay) -> false
-            else -> null
+            null
         }
     }
 
@@ -3299,13 +3414,18 @@ class JarvisAccessibilityService : AccessibilityService() {
         private val SUBMIT_LATIN_PATTERN =
             Regex("""(^|[^a-z])(search|go|done)([^a-z]|$)""")
         private val WHITESPACE_RUN = Regex("""\s+""")
-        private const val REREAD_ATTEMPTS = 3
-        private const val REREAD_INTERVAL_MS = 200L
         private const val MAX_NODES = 800
         private const val MAX_CLICK_ANCESTORS = 6
 
-        private val ON_WORD = Regex("""(^|[\s,:])on([\s,:.]|$)""")
-        private val OFF_WORD = Regex("""(^|[\s,:])off([\s,:.]|$)""")
+        /**
+         * v63: dabane ke baad asli haalat ki jaanch ki seema —
+         * radio ko waqt lagta hai, isliye 350ms ke baad bhi
+         * 4 second tak padhte raho; har 400ms ek baar।
+         * (ON_WORD/OFF_WORD hata diye gaye — naam ke shabd
+         * haalat nahi hote, 15:21 ka sabak।)
+         */
+        private const val VERIFY_TIMEOUT_MS = 4_000L
+        private const val VERIFY_POLL_MS = 400L
         // v62: "/s" ke baad wali gati ("1.80KB/s" — status bar ka
         // speed nishan) kabhi tile nahi: ikai ke peeche "/" ya
         // akshar ho to milaan nahi (tile par "94.75 GB" — ikai

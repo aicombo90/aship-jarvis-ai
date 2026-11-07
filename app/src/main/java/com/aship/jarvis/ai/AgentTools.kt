@@ -1053,8 +1053,10 @@ class AgentTools(
             )
         }
         return when (outcome) {
-            // SUCCESS ka matlab: tile dab gaya YA pehle se
-            // waisi hi haalat thi — dono me "ab waisi hai" sach.
+            // v63: SUCCESS ka matlab — dabane ke BAAD asli
+            // haalat (Telephony/isChecked/vision) se jaanch
+            // karke pakka hua ki data ab waisi hi hai। Bina
+            // jaanche SUCCESS kabhi nahi aata (15:21 ka jhooth)।
             JarvisAccessibilityService.DataResult.SUCCESS -> ToolResult(
                 true,
                 if (turnOn) "Mobile data is ON now." else "Mobile data is OFF now."

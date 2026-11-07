@@ -133,6 +133,17 @@ class AppPrefs(context: Context) {
             prefs.edit().putBoolean(KEY_OFFLINE_PACK_HINT_DISMISSED, value).apply()
         }
 
+    /**
+     * v63: READ_PHONE_STATE ek baar maanga gaya ya nahi —
+     * ek baar mana karne par baar-baar dialog dikhakar
+     * tang nahi karna; jaanch tab vision/isChecked se।
+     */
+    var phonePermissionAsked: Boolean
+        get() = prefs.getBoolean(KEY_PHONE_PERMISSION_ASKED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_PHONE_PERMISSION_ASKED, value).apply()
+        }
+
     companion object {
         private const val PREFS_NAME = "jarvis_prefs"
         private const val KEY_MODE = "mode"
@@ -146,5 +157,6 @@ class AppPrefs(context: Context) {
         private const val KEY_LAST_FG_PERSONA = "last_fg_persona"
         private const val KEY_OFFLINE_EARS_FIRST = "offline_ears_first"
         private const val KEY_OFFLINE_PACK_HINT_DISMISSED = "offline_pack_hint_dismissed"
+        private const val KEY_PHONE_PERMISSION_ASKED = "phone_permission_asked"
     }
 }

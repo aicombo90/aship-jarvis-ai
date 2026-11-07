@@ -363,6 +363,28 @@ class MainActivity : Activity() {
         createEngine()
         updateStatus()
 
+        // v63: mobile-data ki ASLI haalat (Telephony) padhne
+        // ke liye phone anumati — ek baar maango; mana kare
+        // to dobara tang nahi karna, jaanch tab vision /
+        // isChecked se hogi। Anumati mile to "ডাটা অন করো"
+        // ke baad pakka bataya ja sakega ki data asal me
+        // chalu hua (15:21 ka jhootha "অন কর দিয়া" nahi)।
+        if (!prefs.phonePermissionAsked &&
+            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            prefs.phonePermissionAsked = true
+            Toast.makeText(
+                this,
+                "ডেটা অন/বন্ধ হয়েছে কি না পাক্কা করে বলার জন্য ফোনের অনুমতি চাইছি।",
+                Toast.LENGTH_LONG
+            ).show()
+            requestPermissions(
+                arrayOf(Manifest.permission.READ_PHONE_STATE),
+                REQUEST_READ_PHONE_STATE
+            )
+        }
+
         micButton.setOnClickListener { toggleListening() }
 
         findViewById<Button>(R.id.sendButton).setOnClickListener {
@@ -1041,6 +1063,21 @@ class MainActivity : Activity() {
         // imaandaar line)। Bandha hukm na ho to kuch nahi।
         if (requestCode == ContactCallCommands.REQUEST_CALL_PHONE) {
             ContactCallCommands.takePendingDirectCall()?.let { processCommand(it) }
+        }
+        // v63: data jaanch wali phone anumati ka jawab —
+        // mile to jaanch pakki, na mile to Toast (baaki
+        // sab chalega, jaanch vision/isChecked se hogi)।
+        if (requestCode == REQUEST_READ_PHONE_STATE) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                Toast.makeText(
+                    this,
+                    "Phone permission nahi mila — data on/off ki " +
+                        "pakki jaanch nahi hogi; baaki sab chalega.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -2847,6 +2884,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_RECORD_AUDIO = 1001
         private const val REQUEST_READ_CONTACTS = 1004
+        private const val REQUEST_READ_PHONE_STATE = 1006
         private const val WAKE_REFRESH_MS = 2_000L
 
         /** v51 (item 2): saamne wala gate ruke to bina bole zyada se zyada itni baar phir sunna. */
