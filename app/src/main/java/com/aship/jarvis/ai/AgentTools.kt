@@ -1816,8 +1816,10 @@ class AgentTools(
 
     /**
      * v29: [name] ko contacts me dhundho aur mile to
-     * uske number ke saath dialer kholo (ACTION_DIAL
-     * — call KHUD nahi lagta, button user dabata hai).
+     * uske number par call karo — v60 se CALL_PHONE
+     * mile to ACTION_CALL (call turant lag jata hai),
+     * na mile to purana ACTION_DIAL (dialer khula,
+     * number bhara; button user dabata hai)।
      *
      * Milan teen seedhiyon par: poora naam ekdum waisa
      * (exact), phir naam se shuru hone wala, phir naam
@@ -1848,7 +1850,14 @@ class AgentTools(
             is ContactLookup.One -> {
                 val person = lookup.person
                 val displayNumber = person.preferredNumber()
-                val intent = Intent(Intent.ACTION_DIAL).apply {
+                // v60: CALL_PHONE mile to seedha call
+                // (ACTION_CALL), na mile to dialer (ACTION_DIAL)।
+                val direct =
+                    context.checkSelfPermission(Manifest.permission.CALL_PHONE) ==
+                        PackageManager.PERMISSION_GRANTED
+                val intent = Intent(
+                    if (direct) Intent.ACTION_CALL else Intent.ACTION_DIAL
+                ).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     data = Uri.parse(
                         "tel:" + cleanDialNumber(displayNumber)
@@ -1863,10 +1872,15 @@ class AgentTools(
                 }
                 ToolResult(
                     true,
-                    "Dialer khol diya — ${person.displayName} " +
-                        "($displayNumber) par call karne ke liye " +
-                        "taiyaar hai; call wala button dabana " +
-                        "hai." + extraNote
+                    if (direct) {
+                        "Call laga diya — ${person.displayName} " +
+                            "($displayNumber) ko." + extraNote
+                    } else {
+                        "Dialer khol diya — ${person.displayName} " +
+                            "($displayNumber) par call karne ke liye " +
+                            "taiyaar hai; call wala button dabana " +
+                            "hai." + extraNote
+                    }
                 )
             }
             is ContactLookup.Many -> ToolResult(

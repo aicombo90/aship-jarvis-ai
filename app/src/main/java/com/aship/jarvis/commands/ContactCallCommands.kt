@@ -1,5 +1,6 @@
 package com.aship.jarvis.commands
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,13 +19,47 @@ import java.net.URLEncoder
  * [PhoneLearner.scanContacts])। Milan v29 wali teen seedhi
  * + kareeb-shabd (fuzzy) wali chaauthi seedhi।
  *
- * v29 ka pakka faisla yahin bhi hai: call KHUD nahi lagta
+ * v29 ka pakka faisla v60 tak yahin tha: call KHUD nahi lagta
  * (CALL_PHONE permission jaan-boojh kar NAHI li gayi) —
  * dialer number bhar kar khulta hai, call wala button user
- * dabata hai। Message bhi SMS/WhatsApp composer khulta hai,
+ * dabata hai। v60 (user ne khud manga, 2026-11-07): ek-taap
+ * seedha call — CALL_PHONE mile to ACTION_CALL se call
+ * turant lag jata hai; na mile to purana dialer wala raasta
+ * (aur saamne wali screen se permission ek baar maangi
+ * jati hai)। Message bhi SMS/WhatsApp composer khulta hai,
  * bhejta user khud hai।
  */
 object ContactCallCommands {
+
+    // ------------------------------------------------------------------
+    // v60: ek-taap seedha call (CALL_PHONE)
+    // ------------------------------------------------------------------
+    // CALL_PHONE mile to ACTION_CALL (call turant lag jata hai);
+    // na mile to ACTION_DIAL (dialer khula, number bhara)।
+    // Permission pehli baar call wale hukm par saamne wali
+    // screen (Activity) se maangi jati hai — hukm tab
+    // [pendingDirectCall] me bandh kar rakha jata hai aur
+    // jawab aate hi MainActivity use [takePendingDirectCall]
+    // se lekar dobara chalati hai (mile to seedha call, na
+    // mile to dialer)। Background service se Activity nahi
+    // hoti, isliye wahan kabhi dialog nahi aata — sirf
+    // dialer wala raasta + imaandaar line।
+    // Ek app-chalu me permission ek hi baar maangi jati hai
+    // ([callPermissionAsked]) — mana ho jaye to dobara tang
+    // nahi karte, dialer hi chalta hai।
+    private var callPermissionAsked = false
+    private var pendingDirectCall: String? = null
+
+    fun hasCallPermission(context: Context): Boolean =
+        context.checkSelfPermission(Manifest.permission.CALL_PHONE) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** MainActivity ke onRequestPermissionsResult se: bandha hukm lo (ek hi baar)। */
+    fun takePendingDirectCall(): String? {
+        val pending = pendingDirectCall
+        pendingDirectCall = null
+        return pending
+    }
 
     /**
      * Call / message wala hukm ho to chalao, warna null —
@@ -130,8 +165,8 @@ object ContactCallCommands {
                         context, text, person, fromBackgroundService, lang
                     )
                 } else {
-                    openDialer(
-                        context, person, fromBackgroundService, lang
+                    placeCall(
+                        context, text, person, fromBackgroundService, lang
                     )
                 }
             }
@@ -315,11 +350,98 @@ object ContactCallCommands {
     private fun cleanDialNumber(number: String): String =
         number.filter { it == '+' || it.isDigit() }
 
-    private fun openDialer(
+    /**
+     * v60: ek-taap seedha call — CALL_PHONE mile to ACTION_CALL
+     * (call turant lag jata hai, user ko kuch dabana nahi
+     * padta); na mile to:
+     * - saamne wali screen ho aur is app-chalu me abhi tak na
+     *   maanga ho to permission maango aur hukm bandh rakho
+     *   ([pendingDirectCall]) — jawab aate hi MainActivity
+     *   hukm dobara chalati hai (mile to seedha call, na mile
+     *   to dialer);
+     * - warna purana dialer wala raasta (number bhara khulta
+     *   hai) + imaandaar line — background se dialog nahi
+     *   aata, isliye wahan sirf yahi raasta।
+     * Seedha call lage to jawab me saaf bol do ("কল করছি")।
+     */
+    private fun placeCall(
         context: Context,
+        text: String,
         person: PhoneLearner.LearnedContact,
         fromBackgroundService: Boolean,
         lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        if (hasCallPermission(context)) {
+            val intent = Intent(Intent.ACTION_CALL).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                data = Uri.parse("tel:" + cleanDialNumber(person.number))
+            }
+            val dispatchError =
+                dispatchIntent(context, intent, fromBackgroundService, lang)
+            if (dispatchError != null) return dispatchError
+            return CommandResult(
+                when (lang) {
+                    PlayIntent.SpokenLang.BENGALI ->
+                        "${person.name}-কে কল করছি।"
+                    PlayIntent.SpokenLang.HINDI ->
+                        "${person.name} को कॉल कर रही हूँ।"
+                    PlayIntent.SpokenLang.ENGLISH ->
+                        "Calling ${person.name}."
+                },
+                true
+            )
+        }
+        // Permission nahi hai — saamne wali screen se ek baar maango।
+        val activity = context as? Activity
+        if (activity != null && !callPermissionAsked) {
+            callPermissionAsked = true
+            pendingDirectCall = text
+            try {
+                activity.requestPermissions(
+                    arrayOf(Manifest.permission.CALL_PHONE),
+                    REQUEST_CALL_PHONE
+                )
+            } catch (e: Exception) {
+                // Dialog na khula to bandha hukm bekaar — saaf
+                // karo aur dialer wale raaste par giro।
+                pendingDirectCall = null
+                return openDialerFallback(context, person, fromBackgroundService, lang, false)
+            }
+            return CommandResult(
+                when (lang) {
+                    PlayIntent.SpokenLang.BENGALI ->
+                        "কল করার অনুমতি চাইছি — অনুমতি দিলে এক ট্যাপেই " +
+                            "কল লেগে যাবে।"
+                    PlayIntent.SpokenLang.HINDI ->
+                        "कॉल करने की अनुमति माँग रही हूँ — अनुमति " +
+                            "मिलते ही एक टैप में कॉल लग जाएगा।"
+                    PlayIntent.SpokenLang.ENGLISH ->
+                        "Asking for the call permission — once allowed, " +
+                            "calls will go through in one tap."
+                },
+                true
+            )
+        }
+        // Mana ho chuka ya background — dialer wala purana raasta।
+        return openDialerFallback(
+            context, person, fromBackgroundService, lang,
+            deniedBefore = callPermissionAsked
+        )
+    }
+
+    /**
+     * Dialer kholo, number bhara — v59 wala raasta। [deniedBefore]
+     * sach ho to user pehle hi mana kar chuka hai, isliye
+     * line me wahi imaandaari se bata do; background se ho
+     * to ek baar bata do ke app se anumati milne par ek-taap
+     * call chalega।
+     */
+    private fun openDialerFallback(
+        context: Context,
+        person: PhoneLearner.LearnedContact,
+        fromBackgroundService: Boolean,
+        lang: PlayIntent.SpokenLang,
+        deniedBefore: Boolean
     ): CommandResult {
         val intent = Intent(Intent.ACTION_DIAL).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -331,16 +453,57 @@ object ContactCallCommands {
             when (lang) {
                 PlayIntent.SpokenLang.BENGALI ->
                     "ডায়ালার খুলে দিয়েছি — ${person.name} (${person.number})। " +
-                        "কল বোতাম চাপলেই লাগবে।"
+                        "কল বোতাম চাপলেই লাগবে।" +
+                        if (deniedBefore) {
+                            " কলের অনুমতি দিলে না, তাই এক ট্যাপে কল " +
+                                "লাগলো না — অ্যাপের সেটিংস থেকে ফোনের " +
+                                "অনুমতি দিলে এক ট্যাপেই লাগবে।"
+                        } else if (fromBackgroundService) {
+                            " অ্যাপ খুলে একবার কলের অনুমতি দিলে এক " +
+                                "ট্যাপেই কল লেগে যাবে।"
+                        } else {
+                            ""
+                        }
                 PlayIntent.SpokenLang.HINDI ->
                     "डायलर खोल दिया है — ${person.name} (${person.number})। " +
-                        "कॉल वाला बटन दबाते ही लग जाएगा।"
+                        "कॉल वाला बटन दबाते ही लग जाएगा।" +
+                        if (deniedBefore) {
+                            " कॉल की अनुमति नहीं दी, इसलिए एक टैप में " +
+                                "कॉल नहीं लगा — ऐप की सेटिंग से फ़ोन की " +
+                                "अनुमति देने पर एक टैप में लगेगा।"
+                        } else if (fromBackgroundService) {
+                            " ऐप खोलकर एक बार कॉल की अनुमति दे दो, " +
+                                "फिर एक टैप में कॉल लगेगा।"
+                        } else {
+                            ""
+                        }
                 PlayIntent.SpokenLang.ENGLISH ->
                     "Dialer opened — ${person.name} (${person.number}). " +
-                        "Just tap the call button."
+                        "Just tap the call button." +
+                        if (deniedBefore) {
+                            " The call permission was denied, so it " +
+                                "didn't dial in one tap — allow the phone " +
+                                "permission in the app settings and it will."
+                        } else if (fromBackgroundService) {
+                            " Allow the call permission once from the app " +
+                                "and calls will go through in one tap."
+                        } else {
+                            ""
+                        }
             },
             true
         )
+    }
+
+    companion object {
+        /**
+         * v60: CALL_PHONE wale runtime dialog ka jawab —
+         * MainActivity ke onRequestPermissionsResult me
+         * isi code se pehchana jata hai (wahan bandha
+         * hukm [takePendingDirectCall] se lekar dobara
+         * chalaya jata hai)।
+         */
+        const val REQUEST_CALL_PHONE = 1005
     }
 
     private fun openMessageComposer(

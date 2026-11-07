@@ -47,6 +47,7 @@ import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandHistory
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.ContactCallCommands
 import com.aship.jarvis.commands.DataButtonLearner
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
@@ -1041,6 +1042,13 @@ class MainActivity : Activity() {
                 learnContactsGranted = granted
                 learnContactsLatch?.countDown()
             }
+        }
+        // v60: ek-taap call wali permission ka jawab —
+        // bandha hukm ho to dobara chalao (mile to seedha
+        // call lag jayega, na mile to dialer khulega +
+        // imaandaar line)। Bandha hukm na ho to kuch nahi।
+        if (requestCode == ContactCallCommands.REQUEST_CALL_PHONE) {
+            ContactCallCommands.takePendingDirectCall()?.let { processCommand(it) }
         }
     }
 
@@ -2728,14 +2736,21 @@ class MainActivity : Activity() {
      * scroll hone wale sanvaad me dikhao. Varnan
      * khaali ho ya fetch me na aaya ho to imaandaar
      * Bangla line: বিবরণ পাওয়া যায়নি।
+     *
+     * v60: "null" kabhi na dikhe — release bina body
+     * ke bane to GitHub API body null deta hai aur
+     * JSONObject ka optString use akshar-shah "null"
+     * bana deta hai; khaali ki tarah "null" likha ho
+     * to bhi wahi fallback dikhao (sanskar number
+     * ke saath)।
      */
     private fun showReleaseNotes(info: UpdateChecker.UpdateInfo) {
         if (isFinishing || isDestroyed) return
         val notes = info.notes.trim()
         val padding = (24 * resources.displayMetrics.density).toInt()
         val notesView = TextView(this).apply {
-            text = if (notes.isEmpty()) {
-                "এই আপডেটের বিবরণ পাওয়া যায়নি।"
+            text = if (notes.isEmpty() || notes.equals("null", ignoreCase = true)) {
+                "${info.tagName} — নতুন ফিচার আর ঠিকঠাক করা হয়েছে।"
             } else {
                 notes
             }

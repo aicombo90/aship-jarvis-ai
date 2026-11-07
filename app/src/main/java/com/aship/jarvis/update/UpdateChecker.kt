@@ -100,7 +100,18 @@ object UpdateChecker {
         }
         // v48: release ka varnan bhi saath bandho —
         // "এই আপডেটে কী আছে" wala batan yahi dikhayega.
-        val notes = json.optString("body", "")
+        // v60: body JSON null ho (bina body wali release —
+        // workflow ab tak body deta hi nahi tha) to
+        // optString use akshar-shah "null" bana deta hai
+        // aur sanvaad me "null" dikhta hai। Isliye pehle
+        // isNull jaancho aur "null" likha aaye to bhi
+        // khaali maano — "null" kabhi screen tak nahi
+        // pahunchega; UI khaali par fallback line dikhati
+        // hai।
+        val rawNotes = if (json.isNull("body")) "" else json.optString("body", "")
+        val notes = rawNotes.takeUnless {
+            it.trim().equals("null", ignoreCase = true)
+        } ?: ""
         val assets = json.optJSONArray("assets") ?: return Result.Failed
         // v17: asset ka naam versioned hai — pehle usi tag wale
         // naam ko pasand karo; na mile to koi bhi ".apk" asset
