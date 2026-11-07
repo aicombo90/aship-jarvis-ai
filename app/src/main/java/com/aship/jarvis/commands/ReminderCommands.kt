@@ -21,10 +21,12 @@ import java.util.Calendar
  * inexact (Android 12+ par SCHEDULE_EXACT_ALARM na ho
  * to wahi raasta)।
  *
- * Ek seema: phone reboot ho to alarm mit jata hai (boot
- * par dobara lagana v59 me nahi hai) — isliye list me
- * rehne ke bawjood reboot ke baad bajega nahi; user ko
- * dobara set karna hoga। Ye imaandaari se yahin likha hai।
+ * Reboot: phone reboot ho to AlarmManager ke alarm mit
+ * jate hain — v68 se [BootReceiver] boot hote hi bachi
+ * hui (bhavishya wali) yaadein isi godam se padhkar
+ * dobara laga deta hai; jinka samay phone band rehte
+ * beet gaya, woh hata di jati hain (missed bolkar nahi
+ * bajayi jati — boot ke pal me sahi nahi)।
  */
 object ReminderCommands {
 

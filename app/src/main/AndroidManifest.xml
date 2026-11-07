@@ -38,6 +38,10 @@
     <!-- v59: voice reminders — exact alarm mile to exact, warna
          inexact (canScheduleExactAlarms ki jaanch code me hai). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- v68: reboot ke baad reminder dobara lagana — boot ka
+         broadcast sunne ke liye ye aam (normal) permission
+         chahiye; koi runtime dialog nahi aata. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Phase 2: background wake-word listening runs as a foreground
          service with microphone type. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -174,6 +178,22 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.aship.jarvis.REMINDER_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- v68: reboot ke baad reminder dobara lagana —
+             AlarmManager ke alarm reboot par mit jate hain,
+             isliye boot hote hi BootReceiver bachi hui
+             (bhavishya wali) yaadein phir se laga deta hai;
+             beet chuki yaadein hata di jati hain. exported=true
+             isliye: BOOT_COMPLETED system bhejta hai (app ke
+             bahar se); receiver ka kaam idempotent hai — apni
+             hi list padhkar apne hi alarm dobara lagana. -->
+        <receiver
+            android:name=".commands.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 
