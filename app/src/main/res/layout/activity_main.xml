@@ -105,6 +105,49 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
+        <!-- 3b. Phone seekhna (v56 START button) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🚀 ফোন চিনে নিন"
+                android:textColor="#1E40AF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="START চাপলেই জার্ভিস আপনার ফোনটাকে চিনে নেবে — কোন অ্যাপ আছে, সেটিংসে কোন বাটন কোথায়, আর কন্টাক্ট। সবকিছু ফোনের ভেতরেই মনে রাখবে, কোথাও পাঠাবে না।"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/startLearnButton"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#1E40AF"
+                android:text="▶️ START — ফোন চিনে নাও"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp" />
+
+            <TextView
+                android:id="@+id/phoneLearnStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="এখনো ফোন চেনা হয়নি — START চাপুন।"
+                android:textSize="14sp" />
+        </LinearLayout>
+
         <!-- 4. Bolkar command -->
         <LinearLayout
             android:layout_width="match_parent"

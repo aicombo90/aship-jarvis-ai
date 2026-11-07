@@ -27,6 +27,7 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.ai.AgentBrain
 import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.BrainRules
@@ -47,6 +48,7 @@ import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
+import com.aship.jarvis.commands.PhoneLearner
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
 import com.aship.jarvis.commands.SendButtonCommands
@@ -71,7 +73,9 @@ import com.aship.jarvis.voice.SpeechEngineListener
 import com.aship.jarvis.voice.SystemSpeechEngine
 import com.aship.jarvis.voice.VoskSpeechEngine
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 /**
@@ -184,6 +188,15 @@ class MainActivity : Activity() {
     // করো" hi, sirf button wala roop)।
     private lateinit var summaryText: TextView
     private lateinit var repeatLastButton: Button
+
+    // v56: START button — ফোন চিনে নেওয়া (অ্যাপ, টাইল,
+    // কন্টাক্ট) + শেখার দৌড়ের হাল।
+    private lateinit var startLearnButton: Button
+    private lateinit var phoneLearnStatusText: TextView
+    private var phoneLearning = false
+    private var learnWaitingForContacts = false
+    private var learnContactsGranted = false
+    private var learnContactsLatch: CountDownLatch? = null
 
     // v51 (item 1): sunne ki report wali teen nayi
     // linein — background ne aakhiri kya suna
@@ -472,6 +485,11 @@ class MainActivity : Activity() {
             }
         }
         refreshHistoryUi()
+        // v56: START button — ফোন চিনে নেওয়া।
+        startLearnButton = findViewById(R.id.startLearnButton)
+        phoneLearnStatusText = findViewById(R.id.phoneLearnStatusText)
+        startLearnButton.setOnClickListener { startPhoneLearning() }
+        refreshPhoneLearnStatus()
         // v37: screen-agent ke sawalon ki mezbaani is
         // screen ke naam bandho (onDestroy me hat ti hai).
         ScreenConfirm.registerActivityHost(screenConfirmHost)
@@ -1002,6 +1020,14 @@ class MainActivity : Activity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+            // v56: seekhne wali daud contacts ka intezaar
+            // kar rahi ho to use jaga do — mile ya na mile,
+            // daud aage badhegi।
+            if (learnWaitingForContacts) {
+                learnWaitingForContacts = false
+                learnContactsGranted = granted
+                learnContactsLatch?.countDown()
+            }
         }
     }
 
@@ -1100,10 +1126,237 @@ class MainActivity : Activity() {
                     "  •  🧠 নিয়ম: ${BrainRules.count(this)}" +
                     "  •  শেখা কাজ: ${LearnedRoutines.count(this)}" +
                     "  •  শেখানো কমান্ড: ${TaughtCommands.count(this)}" +
-                    "\n📜 ইতিহাস: ${CommandHistory.list(this).size}টি কমান্ড"
+                    "\n📜 ইতিহাস: ${CommandHistory.list(this).size}টি কমান্ড" +
+                    if (PhoneLearner.isLearned(this)) {
+                        "\n📱 ফোন চেনা হয়েছে ✓ (${PhoneLearner.summaryLine(this)})"
+                    } else {
+                        ""
+                    }
         } catch (t: Throwable) {
             // Summary bonus hai — asal kaam kabhi na ruke.
         }
+    }
+
+    // ------------------------------------------------------------------
+    // v56: START button — ফোন চিনে নেওয়া
+    // ------------------------------------------------------------------
+
+    /** v56: START card ki haalat line — chena hua ya abhi nahi। */
+    private fun refreshPhoneLearnStatus() {
+        try {
+            if (!::phoneLearnStatusText.isInitialized) return
+            if (phoneLearning) return
+            if (PhoneLearner.isLearned(this)) {
+                phoneLearnStatusText.text =
+                    "✅ ফোন চেনা হয়েছে — ${PhoneLearner.summaryLine(this)}"
+            } else {
+                phoneLearnStatusText.text =
+                    "এখনো ফোন চেনা হয়নি — START চাপুন।"
+            }
+        } catch (t: Throwable) {
+            // Status bonus hai — asal kaam kabhi na ruke.
+        }
+    }
+
+    /** v56: seekhne wali daud ki ek line — screen par + bolkar। */
+    private fun learnSay(line: String) {
+        mainHandler.post {
+            try {
+                if (::phoneLearnStatusText.isInitialized) {
+                    phoneLearnStatusText.text = line
+                }
+            } catch (t: Throwable) {
+                // Screen na dikhe to boli hi kaafi hai.
+            }
+            try {
+                speaker.speak(line)
+            } catch (t: Throwable) {
+                // Boli na baje to screen wali line kaafi hai.
+            }
+        }
+    }
+
+    /** v56: START dabao (ya bolkar "ফোন চিনে নাও") — daud chalao। */
+    private fun startPhoneLearning() {
+        if (phoneLearning) {
+            speaker.speak("ফোন চেনা এখনো চলছে, একটু অপেক্ষা করো।")
+            return
+        }
+        phoneLearning = true
+        mainHandler.post {
+            try {
+                startLearnButton.text = "শেখা চলছে…"
+                startLearnButton.isEnabled = false
+            } catch (t: Throwable) {
+                // Button na mile to daud phir bhi chalegi.
+            }
+        }
+        background.execute {
+            try {
+                runPhoneLearning()
+            } catch (t: Throwable) {
+                learnSay("শেখা থেমে গেল, আবার START চাপো।")
+            } finally {
+                phoneLearning = false
+                mainHandler.post {
+                    try {
+                        startLearnButton.text = "▶️ START — ফোন চিনে নাও"
+                        startLearnButton.isEnabled = true
+                    } catch (t: Throwable) {
+                        // Button na mile to koi baat nahi.
+                    }
+                    refreshPhoneLearnStatus()
+                    refreshSummaryCard()
+                }
+            }
+        }
+    }
+
+    /**
+     * v56: seekhne wali daud — chaar kadam, har kadam
+     * bolkar: 1) অ্যাপ 2) সেটিংসের বাটন (Accessibility
+     * se panel kholkar) 3) কন্টাক্ট (অনুমতি মিললে)
+     * 4) সারাংশ। Koi kadam fail ho to imaandaar line
+     * bolkar aage badho — daud kabhi nahi rukti।
+     * (TTS QUEUE_FLUSH hai, isliye har boli line ke
+     * baad thoda rukna — warna agli line pehle wali
+     * ko kaat degi.)
+     */
+    private fun runPhoneLearning() {
+        var appCount = 0
+        var tileCount = 0
+        var contactCount = 0
+
+        learnSay("শুরু করছি, তোমার ফোনটাকে চিনে নিচ্ছি। একটু সময় লাগবে।")
+        Thread.sleep(1600)
+
+        // 1. Apps.
+        learnSay("অ্যাপগুলো দেখছি।")
+        Thread.sleep(1300)
+        try {
+            val apps = PhoneLearner.scanApps(this)
+            PhoneLearner.saveApps(this, apps)
+            appCount = apps.size
+            learnSay("$appCount টা অ্যাপ পেলাম।")
+        } catch (t: Throwable) {
+            learnSay("অ্যাপগুলো দেখতে পেলাম না, এগিয়ে যাচ্ছি।")
+        }
+        Thread.sleep(1300)
+
+        // 2. Quick-settings tiles (Accessibility).
+        learnSay("সেটিংসের বাটনগুলো দেখছি।")
+        Thread.sleep(1300)
+        try {
+            val tiles = scanTilesBlocking()
+            if (tiles == null) {
+                learnSay("Accessibility চালু নেই, তাই বাটনগুলো দেখতে পেলাম না।")
+            } else {
+                PhoneLearner.saveTiles(this, tiles)
+                tileCount = tiles.size
+                if (tileCount == 0) {
+                    learnSay("প্যানেল খুলল, কিন্তু কোনো বাটন পড়তে পারলাম না।")
+                } else {
+                    learnSay("$tileCount টা বাটন পেলাম।")
+                }
+            }
+        } catch (t: Throwable) {
+            learnSay("বাটনগুলো দেখতে পেলাম না, এগিয়ে যাচ্ছি।")
+        }
+        Thread.sleep(1300)
+
+        // 3. Contacts (permission chahiye).
+        learnSay("কন্টাক্ট দেখছি।")
+        Thread.sleep(1300)
+        try {
+            if (checkSelfPermission(Manifest.permission.READ_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                val contacts = PhoneLearner.scanContacts(this)
+                PhoneLearner.saveContacts(this, contacts)
+                contactCount = contacts.size
+                learnSay("$contactCount টা কন্টাক্ট পেলাম।")
+            } else {
+                // Permission maango; jawab aane tak ruko (60s tak)।
+                // Jawab onRequestPermissionsResult me daud jagayega।
+                learnWaitingForContacts = true
+                learnContactsGranted = false
+                val latch = CountDownLatch(1)
+                learnContactsLatch = latch
+                mainHandler.post {
+                    try {
+                        requestPermissions(
+                            arrayOf(Manifest.permission.READ_CONTACTS),
+                            REQUEST_READ_CONTACTS
+                        )
+                    } catch (t: Throwable) {
+                        learnWaitingForContacts = false
+                        latch.countDown()
+                    }
+                }
+                latch.await(60, TimeUnit.SECONDS)
+                learnWaitingForContacts = false
+                learnContactsLatch = null
+                if (learnContactsGranted) {
+                    val contacts = PhoneLearner.scanContacts(this)
+                    PhoneLearner.saveContacts(this, contacts)
+                    contactCount = contacts.size
+                    learnSay("$contactCount টা কন্টাক্ট পেলাম।")
+                } else {
+                    learnSay("কন্টাক্টের অনুমতি দিলে না, তাই কন্টাক্ট বাদ দিলাম।")
+                }
+            }
+        } catch (t: Throwable) {
+            learnSay("কন্টাক্ট দেখতে পেলাম না, এগিয়ে যাচ্ছি।")
+        }
+        Thread.sleep(1300)
+
+        // 4. Summary — bolkar + screen par।
+        PhoneLearner.saveLearnedAt(this, System.currentTimeMillis())
+        val summary = "শেখা শেষ — $appCount টা অ্যাপ, $tileCount টা বাটন, " +
+            "$contactCount টা কন্টাক্ট মনে রাখলাম।"
+        mainHandler.post {
+            try {
+                phoneLearnStatusText.text = "✅ $summary"
+            } catch (t: Throwable) {
+                // Screen na dikhe to boli hi kaafi hai.
+            }
+        }
+        learnSay(summary)
+    }
+
+    /** v56: tile scan ka intezaar karo (20s tak) — null = service band। */
+    private fun scanTilesBlocking(): List<PhoneLearner.LearnedTile>? {
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.TileScanOutcome? = null
+        var found: List<JarvisAccessibilityService.QuickTile> = emptyList()
+        try {
+            JarvisAccessibilityService.scanQuickSettingsTiles(this) { o, tiles ->
+                outcome = o
+                found = tiles
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        latch.await(20, TimeUnit.SECONDS)
+        if (outcome == JarvisAccessibilityService.TileScanOutcome.SERVICE_OFF) {
+            return null
+        }
+        return found.map {
+            PhoneLearner.LearnedTile(it.label, it.left, it.top, it.right, it.bottom)
+        }
+    }
+
+    /** v56: "ফোন চিনে নাও" jaisi baat pehchano (bolkar START)। */
+    private fun isStartLearningCommand(text: String): Boolean {
+        val t = text.trim().lowercase(Locale.ROOT)
+        if (t.isEmpty()) return false
+        return t.contains("ফোন চিনে নাও") ||
+            t.contains("ফোনটা চিনে নাও") ||
+            t.contains("ফোন শিখে নাও") ||
+            t.contains("শেখা শুরু করো") ||
+            t.contains("learn my phone") ||
+            t.contains("start learning")
     }
 
     private fun processCommand(text: String) {
@@ -1275,6 +1528,16 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             responseText.text = "Maya: $learnLine"
             speaker.speak(learnLine)
+            return
+        }
+        // v56: START button wala hi kaam, bolkar — "ফোন
+        // চিনে নাও" / "শেখা শুরু করো" bolte hi seekhne
+        // wali daud chalegi (button jaisi hi)। Sirf saamne
+        // wali screen par (permission + panel yahin hai)।
+        if (isStartLearningCommand(commandText)) {
+            politeFailureSpokenThisTurn = false
+            responseText.text = "Jarvis: শেখা শুরু করছি — ফোনটাকে চিনে নিচ্ছি।"
+            startPhoneLearning()
             return
         }
         // v50: SIKHAYA HUA SHABD-KAAM — baat bandhe

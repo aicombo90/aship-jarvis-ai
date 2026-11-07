@@ -156,6 +156,35 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * v56: START button — quick-settings panel ka ek tile:
+     * naam + screen par jagah (0..1000, chaudaai/lambai
+     * ke hisse me). Jagah isliye bandhi jati hai taaki
+     * tile kahin bhi sarke, dobara dhoondha ja sake.
+     */
+    data class QuickTile(
+        val label: String,
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    )
+
+    /** v56: panel-tile scan koshish ka sachha natija. */
+    enum class TileScanOutcome {
+        /** Panel khula aur tile mile. */
+        FOUND,
+
+        /** Panel khula, par koi tile padha nahi ja saka. */
+        NO_TILES,
+
+        /** Quick-settings panel khula hi nahi. */
+        PANEL_NOT_OPENED,
+
+        /** Service band hai (ya beech me band ho gayi). */
+        SERVICE_OFF
+    }
+
+    /**
      * v26: YouTube search results me pehle video par tap
      * ki koshish ka sachha natija (agent ke youtube_play
      * auzaar ke liye).
@@ -345,6 +374,147 @@ class JarvisAccessibilityService : AccessibilityService() {
                 callback(DataOutcome.SERVICE_OFF)
             } catch (t2: Throwable) {
                 // Bulane wala ja chuka hai: natija chhod do.
+            }
+        }
+    }
+
+    /**
+     * v56: START button — quick-settings panel kholkar
+     * saare tile padho (naam + jagah) aur [callback] se
+     * lautao. Turant laut aata hai; asal kaam worker
+     * thread par hota hai. Panel kholne ke baad use BACK
+     * se band bhi kar deta hai, taaki user apni screen
+     * par wapas aaye.
+     */
+    fun scanQuickSettingsTiles(callback: (TileScanOutcome, List<QuickTile>) -> Unit) {
+        try {
+            worker.execute {
+                var outcome: TileScanOutcome
+                var tiles: List<QuickTile> = emptyList()
+                try {
+                    if (!performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)) {
+                        outcome = TileScanOutcome.PANEL_NOT_OPENED
+                    } else {
+                        tiles = collectPanelTiles()
+                        outcome = if (tiles.isEmpty()) {
+                            TileScanOutcome.NO_TILES
+                        } else {
+                            TileScanOutcome.FOUND
+                        }
+                    }
+                } catch (t: Throwable) {
+                    outcome = TileScanOutcome.NO_TILES
+                    tiles = emptyList()
+                }
+                try {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                } catch (t: Throwable) {
+                    // Panel band na ho to bhi natija de do.
+                }
+                try {
+                    callback(outcome, tiles)
+                } catch (t: Throwable) {
+                    // Bulane wala ja chuka hai: natija chhod do.
+                }
+            }
+        } catch (t: Throwable) {
+            try {
+                callback(TileScanOutcome.SERVICE_OFF, emptyList())
+            } catch (t2: Throwable) {
+                // Bulane wala ja chuka hai.
+            }
+        }
+    }
+
+    /**
+     * v56: panel khulne ke baad SystemUI ke ped se saare
+     * tile padho — har node ka naam (text + description)
+     * aur screen par jagah (0..1000). Naam se ek hi baar
+     * (pehla wala), zyada se zyada [MAX_PANEL_TILES].
+     * Panel der se khule to [TOTAL_BUDGET_MS] tak intezaar.
+     */
+    private fun collectPanelTiles(): List<QuickTile> {
+        val found = LinkedHashMap<String, QuickTile>()
+        val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
+        val metrics = try {
+            resources.displayMetrics
+        } catch (t: Throwable) {
+            null
+        }
+        val width = metrics?.widthPixels ?: 0
+        val height = metrics?.heightPixels ?: 0
+        while (SystemClock.uptimeMillis() < deadline &&
+            found.size < MAX_PANEL_TILES
+        ) {
+            val roots = collectRoots()
+            var sysuiSeen = false
+            for (root in roots) {
+                if (root.packageName?.toString() != SYSTEMUI_PACKAGE) continue
+                sysuiSeen = true
+                collectTileNodes(root, found, width, height)
+            }
+            if (sysuiSeen && found.isNotEmpty()) break
+            roots.forEach { root ->
+                try {
+                    root.recycle()
+                } catch (t: Throwable) {
+                    // Pehle se saaf: kuch nahi karna.
+                }
+            }
+            SystemClock.sleep(POLL_INTERVAL_MS)
+        }
+        return found.values.toList()
+    }
+
+    /**
+     * v56: ek ped ke har node se tile padho — naam khaali
+     * ho ya jagah na ho to chhodo; naam se ek hi baar.
+     */
+    private fun collectTileNodes(
+        root: AccessibilityNodeInfo,
+        out: LinkedHashMap<String, QuickTile>,
+        width: Int,
+        height: Int
+    ) {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        val bounds = Rect()
+        while (!stack.isEmpty() && visited < MAX_NODES &&
+            out.size < MAX_PANEL_TILES
+        ) {
+            val node = stack.removeLast()
+            visited++
+            try {
+                val label = nodeLabel(node).take(40).trim()
+                if (label.isNotEmpty()) {
+                    val key = label.lowercase(Locale.ROOT)
+                    if (!out.containsKey(key)) {
+                        try {
+                            node.getBoundsInScreen(bounds)
+                        } catch (t: Throwable) {
+                            bounds.setEmpty()
+                        }
+                        if (!bounds.isEmpty && width > 0 && height > 0) {
+                            out[key] = QuickTile(
+                                label,
+                                (bounds.left * 1000 / width).coerceIn(0, 1000),
+                                (bounds.top * 1000 / height).coerceIn(0, 1000),
+                                (bounds.right * 1000 / width).coerceIn(0, 1000),
+                                (bounds.bottom * 1000 / height).coerceIn(0, 1000)
+                            )
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                // Ek node bigda to baaki phir bhi padho.
+            }
+            for (i in 0 until node.childCount) {
+                try {
+                    node.getChild(i)?.let { child -> stack.addLast(child) }
+                } catch (t: Throwable) {
+                    // Ped beech me badal gaya: jo mila wahi kaafi.
+                }
             }
         }
     }
@@ -2328,6 +2498,24 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         /**
+         * v56: kahin se bhi panel-tile scan ki koshish:
+         * service band ho to turant [TileScanOutcome.SERVICE_OFF],
+         * warna chalti hui service ko kaam saunp do (natija
+         * callback se, worker thread par).
+         */
+        fun scanQuickSettingsTiles(
+            context: Context,
+            callback: (TileScanOutcome, List<QuickTile>) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(TileScanOutcome.SERVICE_OFF, emptyList())
+                return
+            }
+            service.scanQuickSettingsTiles(callback)
+        }
+
+        /**
          * v26: kahin se bhi YouTube ke pehle-result par tap
          * ki koshish: service band ho to turant
          * [TapOutcome.SERVICE_OFF] (report bhi band karke),
@@ -2595,6 +2783,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         private const val POLL_INTERVAL_MS = 150L
         private const val MAX_SCAN_LABELS = 18
         private const val MAX_SCAN_LABEL_CHARS = 40
+        // v56: START button — panel se zyada se zyada kitne tile yaad rakhein.
+        private const val MAX_PANEL_TILES = 80
         private const val DIAG_PREFS_NAME = "jarvis_diag"
         private const val DIAG_KEY_LAST_PANEL_SCAN = "last_panel_scan"
         // v26: YouTube tap ke bandobosto.
