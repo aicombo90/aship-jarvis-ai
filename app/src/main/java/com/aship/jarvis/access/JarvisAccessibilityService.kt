@@ -14,12 +14,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.telephony.TelephonyManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import com.aship.jarvis.ai.DataButtonVision
+import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.commands.DataButtonLearner
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -136,6 +138,14 @@ class JarvisAccessibilityService : AccessibilityService() {
          */
         TAPPED_UNKNOWN,
 
+        /**
+         * v62: vision chahiye tha par Gemini key set hi nahi
+         * — tasveer dekh hi nahi paye। "nahi mila" nahi, key
+         * ki kami hai (seekhi jagah wala offline raasta pehle
+         * hi aazmaya ja chuka hai)।
+         */
+        NO_GEMINI_KEY,
+
         /** Service band hai (ya beech me band ho gayi). */
         SERVICE_OFF
     }
@@ -160,6 +170,9 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         /** Quick-settings panel khula hi nahi. */
         PANEL_NOT_OPENED,
+
+        /** v62: vision chahiye tha par Gemini key set hi nahi (DataResult wala hi matlab)। */
+        NO_GEMINI_KEY,
 
         /** Service band hai (ya beech me band ho gayi). */
         SERVICE_OFF
@@ -453,6 +466,12 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
         val width = metrics?.widthPixels ?: 0
         val height = metrics?.heightPixels ?: 0
+        // v62: pehle poll par hi rukna band — panel der se khule to
+        // tile baad me aate hain। Jab do poll tak koi naya tile na
+        // aaye (ped sthir) tabhi ruko। User ke vivo par pehle poll
+        // me sirf status-bar ke 8 naam milte the, isiliye "8 button"।
+        var lastSize = -1
+        var stablePolls = 0
         while (SystemClock.uptimeMillis() < deadline &&
             found.size < MAX_PANEL_TILES
         ) {
@@ -463,7 +482,15 @@ class JarvisAccessibilityService : AccessibilityService() {
                 sysuiSeen = true
                 collectTileNodes(root, found, width, height)
             }
-            if (sysuiSeen && found.isNotEmpty()) break
+            if (sysuiSeen && found.isNotEmpty()) {
+                if (found.size == lastSize) {
+                    stablePolls++
+                    if (stablePolls >= 2) break
+                } else {
+                    lastSize = found.size
+                    stablePolls = 0
+                }
+            }
             roots.forEach { root ->
                 try {
                     root.recycle()
@@ -1709,6 +1736,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
         var panelSeen = false
         var tile: AccessibilityNodeInfo? = null
+        // v62: ped ki sthirta — naye naam aana band ho to aur
+        // intezaar bekaar (tile ped me hai hi nahi, jaise vivo
+        // par tile grid ped me aata hi nahi)। Pura 8 s jalana band।
+        var lastLabelCount = -1
+        var lastLabelChangeMs = SystemClock.uptimeMillis()
         while (tile == null && SystemClock.uptimeMillis() < deadline) {
             val roots = collectRoots()
             scanRootsScanned += roots.size
@@ -1732,6 +1764,20 @@ class JarvisAccessibilityService : AccessibilityService() {
                         root.recycle()
                     } catch (t: Throwable) {
                         // Pehle se saaf: kuch nahi karna.
+                    }
+                }
+                // v62: SystemUI dikh raha hai aur 1.5 s se ped me
+                // koi naya naam nahi aaya — ped sthir hai, tile
+                // aayega nahi। Yahi ruko aur vision wale raaste
+                // par jao; 8 s tak ghumna band।
+                if (panelSeen) {
+                    if (scanLabels.size != lastLabelCount) {
+                        lastLabelCount = scanLabels.size
+                        lastLabelChangeMs = SystemClock.uptimeMillis()
+                    } else if (
+                        SystemClock.uptimeMillis() - lastLabelChangeMs > 1500L
+                    ) {
+                        break
                     }
                 }
                 SystemClock.sleep(POLL_INTERVAL_MS)
@@ -1886,6 +1932,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         class Success(val afterState: Boolean) : VisionTapResult()
         object TappedUnknown : VisionTapResult()
         object NotFound : VisionTapResult()
+        /** v62: vision chahiye tha par Gemini key set hi nahi। */
+        object NoKey : VisionTapResult()
     }
 
     /** v57: disha wala toggle — text fail ho to vision se; panel yehi band karta hai। */
@@ -1905,6 +1953,10 @@ class JarvisAccessibilityService : AccessibilityService() {
             VisionTapResult.TappedUnknown -> {
                 pendingScanReport = "vision tapped, state unknown"
                 DataResult.TAPPED_UNKNOWN
+            }
+            VisionTapResult.NoKey -> {
+                pendingScanReport = "vision needs Gemini key (not set)"
+                DataResult.NO_GEMINI_KEY
             }
             VisionTapResult.NotFound -> DataResult.TILE_NOT_FOUND
         }
@@ -1927,6 +1979,10 @@ class JarvisAccessibilityService : AccessibilityService() {
                 pendingScanReport = "vision tapped, state unknown"
                 DataOutcome.TOGGLED_UNKNOWN
             }
+            VisionTapResult.NoKey -> {
+                pendingScanReport = "vision needs Gemini key (not set)"
+                DataOutcome.NO_GEMINI_KEY
+            }
             VisionTapResult.NotFound -> DataOutcome.TILE_NOT_FOUND
         }
     }
@@ -1946,14 +2002,20 @@ class JarvisAccessibilityService : AccessibilityService() {
      * kabhi nahi dabta।
      */
     private fun visionTapForData(desired: Boolean?): VisionTapResult {
-        val beforeGlobal = readGlobalDataState()
-        // (a) Seekhi hui jagah — bina net।
+        val beforeSystem = readSystemDataState()
+        // (a) Seekhi hui jagah — bina net। Seekhi jagah status-bar
+        // ki patti me ho (seekhte waqt Gemini ne status-bar ka
+        // nishan pakad liya ho) to use dabana hi nahi — seedha
+        // taazi tasveer wala raasta।
         val learned = try {
             DataButtonLearner.read(this)
         } catch (t: Throwable) {
             null
         }
-        if (learned != null && !pointLooksLikeOtherTile(learned.x, learned.y)) {
+        if (learned != null &&
+            DataButtonVision.isPlausibleTilePosition(learned.x, learned.y) &&
+            !pointLooksLikeOtherTile(learned.x, learned.y)
+        ) {
             if (tapVisionPoint(learned.x, learned.y)) {
                 SystemClock.sleep(CLICK_SETTLE_MS)
                 val after = readCurrentDataState()
@@ -1964,10 +2026,10 @@ class JarvisAccessibilityService : AccessibilityService() {
                     // Haalat padh paye aur wahi purani hai —
                     // seekhi jagah purani ho gayi; taazi
                     // tasveer se dhoondho (neeche)।
-                } else if (beforeGlobal != null) {
-                    val afterGlobal = readGlobalDataState()
-                    if (afterGlobal != null && afterGlobal != beforeGlobal) {
-                        return VisionTapResult.Success(afterGlobal)
+                } else if (beforeSystem != null) {
+                    val afterSystem = readSystemDataState()
+                    if (afterSystem != null && afterSystem != beforeSystem) {
+                        return VisionTapResult.Success(afterSystem)
                     }
                 }
                 // Haalat padh hi nahi paye — taazi tasveer
@@ -1975,13 +2037,23 @@ class JarvisAccessibilityService : AccessibilityService() {
                 // dekhkar dobara dabane se bacha jayega।
             }
         }
-        // (b) Taazi tasveer + Gemini vision।
+        // (b) Taazi tasveer + Gemini vision। Key set hi nahi ho to
+        // tasveer lena bekaar — seedha sach batao (seekhi jagah
+        // wala offline raasta upar aazmaya ja chuka hai)।
+        if (!GeminiBrain.isConfigured(this)) {
+            return VisionTapResult.NoKey
+        }
         val shot = captureScreenshotSync() ?: return VisionTapResult.NotFound
         val hit = try {
             DataButtonVision.findDataIcon(this, shot)
         } catch (t: Throwable) {
             null
         } ?: return VisionTapResult.NotFound
+        // v62: Gemini ne status-bar ki patti (y < 80) dikhayi to
+        // woh tile nahi — wahan kabhi mat dabao।
+        if (!DataButtonVision.isPlausibleTilePosition(hit.x, hit.y)) {
+            return VisionTapResult.NotFound
+        }
         // Tasveer me tile pehle se chahi hui haalat me hai
         // to dobara mat dabao — warna (a) wala kaam ulta
         // ho jayega (on tha to off)।
@@ -2003,12 +2075,12 @@ class JarvisAccessibilityService : AccessibilityService() {
             // galat jagah yaad mat karo।
             return VisionTapResult.NotFound
         }
-        val afterGlobal = readGlobalDataState()
-        if (afterGlobal != null && beforeGlobal != null &&
-            afterGlobal != beforeGlobal
+        val afterSystem = readSystemDataState()
+        if (afterSystem != null && beforeSystem != null &&
+            afterSystem != beforeSystem
         ) {
             saveLearnedDataButton(hit)
-            return VisionTapResult.Success(afterGlobal)
+            return VisionTapResult.Success(afterSystem)
         }
         // Dab to gaya, haalat padh nahi paye — chihn
         // Gemini ne dekha tha, isliye jagah yaad rakho।
@@ -2024,6 +2096,32 @@ class JarvisAccessibilityService : AccessibilityService() {
                 0 -> false
                 else -> null
             }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * v62: Telephony se data ki haalat — vivo jaisi skin par
+     * Settings.Global aksar -1 deta hai (padha hi nahi jata),
+     * isliye vision ke baad ki jaanch yahin atak jati thi।
+     * isDataEnabled API 26+ (minSdk 26) — anumati na mile to
+     * SecurityException pakadkar null, kabhi crash nahi।
+     */
+    private fun readTelephonyDataState(): Boolean? {
+        return try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                ?: return null
+            tm.isDataEnabled
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** v62: system se data ki haalat — Telephony pehle, phir Settings.Global। */
+    private fun readSystemDataState(): Boolean? {
+        return try {
+            readTelephonyDataState() ?: readGlobalDataState()
         } catch (t: Throwable) {
             null
         }
@@ -2057,7 +2155,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     /** v57: data ki haalat — pehle tile se, na mile to system setting se। */
     private fun readCurrentDataState(): Boolean? {
         return try {
-            findDataTileStateNow() ?: readGlobalDataState()
+            findDataTileStateNow() ?: readSystemDataState()
         } catch (t: Throwable) {
             null
         }
@@ -2580,7 +2678,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         while (!stack.isEmpty() && visited < MAX_NODES) {
             val node = stack.removeLast()
             visited++
-            val score = dataLabelScore(node)
+            var score = dataLabelScore(node)
+            // v62: status-bar ki patti (battery, gati "1.80KB/s")
+            // kabhi tile nahi — wahan ka number hamesha 0, warna
+            // galat node tile ban jata hai aur vision kabhi nahi chalta।
+            if (score > 0 && isInStatusBarStrip(node)) score = 0
             if (score > bestScore) {
                 bestScore = score
                 best = node
@@ -2598,6 +2700,25 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
         return best
+    }
+
+    /**
+     * v62: node status-bar ki patti me hai ya nahi — screen ki
+     * upar wali ~4% unchai। QS tile kabhi itne upar nahi hota;
+     * status-bar ke nishan (battery, "1.80KB/s" gati) yahin hote
+     * hain, isliye unhe tile manna hi galat hai। Bounds na mile
+     * to patti nahi mana — jaanch baad me haalat se hogi।
+     */
+    private fun isInStatusBarStrip(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) return false
+            val height = resources.displayMetrics.heightPixels
+            height > 0 && bounds.top < height * 0.04f
+        } catch (t: Throwable) {
+            false
+        }
     }
 
     /** Node ka dikhai dene wala naam (text + varnan), saaf kata hua roop. */
@@ -3185,7 +3306,13 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         private val ON_WORD = Regex("""(^|[\s,:])on([\s,:.]|$)""")
         private val OFF_WORD = Regex("""(^|[\s,:])off([\s,:.]|$)""")
-        private val DATA_USAGE_PATTERN = Regex("""\d+(\.\d+)?\s*(gb|mb|kb)\b""")
+        // v62: "/s" ke baad wali gati ("1.80KB/s" — status bar ka
+        // speed nishan) kabhi tile nahi: ikai ke peeche "/" ya
+        // akshar ho to milaan nahi (tile par "94.75 GB" — ikai
+        // ke peeche khaali jagah, ">" ya khatm hota hai)। Pehle
+        // yahi galat milaan tile bana deta tha, click fail hota
+        // tha aur vision wala raasta kabhi chalta hi nahi tha।
+        private val DATA_USAGE_PATTERN = Regex("""\d+(\.\d+)?\s*(gb|mb|kb)(?![a-z/])""")
         // v26: video ki avadhi jaisa pattern — "12:34", "1:02:03".
         private val DURATION_PATTERN = Regex("""\d{1,2}:\d{2}""")
     }

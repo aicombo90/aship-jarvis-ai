@@ -43,6 +43,15 @@ object DataButtonVision {
     )
 
     /**
+     * v62: jagah tile jaisi hai ya status-bar ki patti —
+     * QS tile kabhi screen ki upar wali ~8% patti me nahi
+     * hota; wahan sirf status-bar ke nishan (4G, gati ka
+     * teer) hote hain। Gemini kabhi status-bar ka nishan
+     * pakad le to y < 80 hoga — woh tile nahi, dabana mana।
+     */
+    fun isPlausibleTilePosition(x: Int, y: Int): Boolean = y >= MIN_TILE_Y_1000
+
+    /**
      * Panel ki tasveer me mobile-data wala chihn
      * dhoondho। Mila to jagah + chihn ka varnan,
      * na mila / key na ho / net fail ho to null।
@@ -163,6 +172,9 @@ object DataButtonVision {
     private val ICON_REGEX = Regex(""""icon"\s*:\s*"([^"]*)"""")
     private val ON_REGEX = Regex(""""on"\s*:\s*(true|false|null)""")
     private val FOUND_FALSE_REGEX = Regex(""""found"\s*:\s*false""")
+
+    /** v62: tile ki sabse upar wali mumkin jagah (0..1000) — isse upar status bar hai। */
+    private const val MIN_TILE_Y_1000 = 80
 
     /** Tasveer ki chaudaai (px) — Gemini ke liye kaafi, kota ke liye halki। */
     private const val TARGET_WIDTH_PX = 640

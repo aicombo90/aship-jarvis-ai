@@ -1080,6 +1080,14 @@ class AgentTools(
                 "The mobile-data tile was tapped from a screenshot, " +
                     "but the new state could not be read."
             )
+            // v62: key ki kami hai, tile ki nahi — Gemini ko
+            // aazmaya hi nahi ja paya।
+            JarvisAccessibilityService.DataResult.NO_GEMINI_KEY -> ToolResult(
+                false,
+                "No Gemini key is set — the screenshot-vision fallback " +
+                    "needs a Gemini key in API Keys; the text search " +
+                    "could not find the tile."
+            )
             null -> ToolResult(
                 false,
                 "No answer from the accessibility service in time."
@@ -1119,6 +1127,13 @@ class AgentTools(
                 true,
                 "The data tile was pressed (toggled), but the new " +
                     "state could not be read back."
+            )
+            // v62: key ki kami hai, tile ki nahi।
+            JarvisAccessibilityService.DataOutcome.NO_GEMINI_KEY -> ToolResult(
+                false,
+                "No Gemini key is set — the screenshot-vision fallback " +
+                    "needs a Gemini key in API Keys; the text search " +
+                    "could not find the tile."
             )
             JarvisAccessibilityService.DataOutcome.SERVICE_OFF -> ToolResult(
                 false,
@@ -2213,8 +2228,12 @@ class AgentTools(
          * hai aur der ka jawab jhooth se behtar hai).
          * v57: 12s se 25s — vision fallback ko samay
          * chahiye (text khoj + Gemini round trip + jaanch)।
+         * v62: 25s se 45s — vivo par text khoj kaam hi nahi
+         * karti (tile ped me nahi), isliye har baar pura
+         * vision raasta chalta hai: seekhi jagah + taazi
+         * tasveer + Gemini + jaanch — 25s me kat jata tha।
          */
-        const val DATA_WAIT_MS = 25_000L
+        const val DATA_WAIT_MS = 45_000L
 
         /** v26: YouTube app ka package naam. */
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"

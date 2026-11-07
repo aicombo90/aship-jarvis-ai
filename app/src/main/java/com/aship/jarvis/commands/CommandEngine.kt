@@ -889,6 +889,8 @@ class CommandEngine(
                 CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
             JarvisAccessibilityService.DataResult.TAPPED_UNKNOWN ->
                 CommandResult(DATA_VISION_UNKNOWN_REPLY, true)
+            JarvisAccessibilityService.DataResult.NO_GEMINI_KEY ->
+                CommandResult(DATA_NO_KEY_REPLY, true)
             JarvisAccessibilityService.DataResult.TILE_NOT_FOUND,
             JarvisAccessibilityService.DataResult.PANEL_NOT_OPENED,
             null -> CommandResult(DATA_NOT_FOUND_REPLY, true)
@@ -937,6 +939,8 @@ class CommandEngine(
             )
             JarvisAccessibilityService.DataOutcome.TOGGLED_UNKNOWN ->
                 CommandResult(DATA_TOGGLED_REPLY, true)
+            JarvisAccessibilityService.DataOutcome.NO_GEMINI_KEY ->
+                CommandResult(DATA_NO_KEY_REPLY, true)
             JarvisAccessibilityService.DataOutcome.SERVICE_OFF ->
                 CommandResult(DATA_NEEDS_ACCESSIBILITY_REPLY, true)
             JarvisAccessibilityService.DataOutcome.TILE_NOT_FOUND,
@@ -2046,14 +2050,24 @@ class CommandEngine(
             "डेटा वाला बटन छवि देखकर दबा दिया, पर ऑन हुआ या नहीं, यह पढ़ नहीं पाई।"
 
         /**
+         * v62: vision chahiye tha par Gemini key set hi nahi —
+         * "nahi mila" nahi, key ki kami hai (Devanagari shaili)।
+         */
+        const val DATA_NO_KEY_REPLY =
+            "तस्वीर देखकर बटन खोजने के लिए Gemini key चाहिए — " +
+                "API Keys से key डालो, फिर मैं डेटा ऑन कर पाऊँगा।"
+
+        /**
          * v17: Accessibility toggle ke natije ka adhiktam
          * intezaar. v57: 4s se 25s — vision fallback ko
          * samay chahiye (text khoj 8s tak + Gemini round
          * trip + jaanch); aam raasta ab bhi 1-3s me hi
          * laut aata hai, lambi seema sirf fallback par
-         * lagti hai.
+         * lagti hai. v62: 25s se 45s — vivo par har baar
+         * pura vision raasta chalta hai (AgentTools wali
+         * seema ke barabar)।
          */
-        const val DATA_COMMAND_WAIT_MS = 25_000L
+        const val DATA_COMMAND_WAIT_MS = 45_000L
 
         /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
         const val SCROLL_COMMAND_WAIT_MS = 5_000L

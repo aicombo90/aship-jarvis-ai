@@ -303,8 +303,6 @@ class MainActivity : Activity() {
     // "jarvis_diag" me report chhodta hai; yahan sirf use
     // dikhaya jata hai (panelScanText ki tarah hi).
     private lateinit var geminiDiagText: TextView
-    private lateinit var geminiKeyInput: EditText
-    private lateinit var geminiKeySaveButton: Button
 
     // v21: is screen ki Gemini baatchit ki yaad — aakhiri 10
     // user/model turn. Activity zinda hai tab tak rehti hai.
@@ -447,21 +445,12 @@ class MainActivity : Activity() {
         }
         geminiKeyStatusText = findViewById(R.id.geminiKeyStatusText)
         geminiDiagText = findViewById(R.id.geminiDiagText)
-        geminiKeyInput = findViewById(R.id.geminiKeyInput)
-        geminiKeySaveButton = findViewById(R.id.geminiKeySaveButton)
-        geminiKeySaveButton.setOnClickListener {
-            onGeminiKeySaveClicked()
-        }
-        findViewById<Button>(R.id.geminiKeyClearButton).setOnClickListener {
-            GeminiBrain.clearKey(this)
-            geminiKeyInput.text.clear()
-            refreshGeminiKeyUi()
-            updateStatus()
-            Toast.makeText(this, "Gemini key hata di gayi.", Toast.LENGTH_SHORT).show()
-        }
+        // v62: Gemini key ab sirf API Keys screen me (ek hi jagah) —
+        // yahan sirf status dikhta hai, khana/button nahi। Key
+        // badalni/hatani ho to neeche wala "🔑 API Keys" button kholo।
         // v53: API Keys — saare free provideron ki key ek
-        // alag screen par; Gemini wala hissa upar waisa hi
-        // rehta hai aur waisa hi kaam karega।
+        // alag screen par। v62: Gemini key bhi ab SIRF yahin
+        // (ek hi jagah); upar wali Maya jagah me sirf status।
         apiKeysButton = findViewById(R.id.apiKeysButton)
         apiKeysButton.setOnClickListener {
             startActivity(Intent(this, ApiKeysActivity::class.java))
@@ -528,6 +517,9 @@ class MainActivity : Activity() {
         activityInForeground = true
         refreshDiagLines()
         refreshApiKeysButton()
+        // v62: API Keys screen se lautkar Gemini key badli ho to
+        // Maya wali status line bhi turant taza ho।
+        refreshGeminiKeyUi()
         refreshHistoryUi()
         // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
@@ -1488,6 +1480,13 @@ class MainActivity : Activity() {
             learnSay("ছবিতে ডেটা বাটনটা খুঁজে পেলাম না — প্যানেলটা পুরো খুলে আবার চেষ্টা করো।")
             return
         }
+        // v62: Gemini ne status-bar ki patti (y < 80) dikhayi to
+        // woh tile nahi — galat jagah yaad karke har toggle
+        // kharab karne se behtar, imaandaari se seekhna ruko।
+        if (!DataButtonVision.isPlausibleTilePosition(hit.x, hit.y)) {
+            learnSay("ছবিতে ডেটা বাটনটা ঠিকঠাক চিনতে পারলাম না — প্যানেলটা পুরো খুলে আবার চেষ্টা করো।")
+            return
+        }
         try {
             DataButtonLearner.save(this, hit.x, hit.y, hit.icon)
         } catch (t: Throwable) {
@@ -1969,60 +1968,16 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     /**
-     * v22: Key save dabane par pehle JAANCH hoti hai — Gemini
-     * se halki si puchh karke dekha jata hai ki likhi hui key
-     * sach me chalti hai ya nahi. Jaanch pass ho tabhi key
-     * band hoti hai, aur Maya bolkar + status me dikhakar
-     * batati hai ki online buddhi taiyaar hai. Fail ho to
-     * kuch save NAHI hota, likha hua khane me hi rehta hai
-     * aur wajah (galat key / net band) status line par aur
-     * awaaz se — dono se — saaf milti hai.
-     */
-    private fun onGeminiKeySaveClicked() {
-        val typed = geminiKeyInput.text.toString().trim()
-        if (typed.isEmpty()) {
-            Toast.makeText(this, "Pehle khane me key likho.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        geminiKeySaveButton.isEnabled = false
-        geminiKeyStatusText.text = "Key जांच हो रही है..."
-        GeminiBrain.validateKey(typed) { ok, code ->
-            mainHandler.post {
-                if (isFinishing || isDestroyed) return@post
-                geminiKeySaveButton.isEnabled = true
-                if (ok) {
-                    GeminiBrain.setKey(this, typed)
-                    geminiKeyInput.text.clear()
-                    refreshGeminiKeyUi()
-                    updateStatus()
-                    speaker.speak(
-                        "API key मिल गया है। अब मैं online सवालों के जवाब भी दे सकती हूँ।"
-                    )
-                } else {
-                    geminiKeyStatusText.text = if (code == -1) {
-                        "Key: जांच नहीं हो पाई — net check karo ✗"
-                    } else {
-                        "Key: galat hai ✗ (error $code)"
-                    }
-                    speaker.speak("यह key काम नहीं कर रही, एक बार फिर देखकर डालो।")
-                }
-            }
-        }
-    }
-
-    /**
-     * Key ki haalat sirf haan/na me dikhao — key ka text screen
-     * par kabhi wapas nahi aata. Key set ho to khana khaali
-     * rahega; badalna ho to naya key likhkar save karna hoga.
+     * v62: Key ki haalat sirf haan/na me dikhao — key ka text screen
+     * par kabhi wapas nahi aata। Key ab sirf API Keys screen se
+     * badalti/hat ti hai (ek hi jagah); yahan sirf status hai।
      */
     private fun refreshGeminiKeyUi() {
         if (!::geminiKeyStatusText.isInitialized) return
         if (GeminiBrain.isConfigured(this)) {
             geminiKeyStatusText.text = "Key: set hai ✓ — online buddhi taiyaar"
-            geminiKeyInput.hint = "Key set hai — badalna hai to naya key likho"
         } else {
-            geminiKeyStatusText.text = "Key: nahi hai"
-            geminiKeyInput.hint = "Yahan apna Gemini API key likho"
+            geminiKeyStatusText.text = "Key: nahi hai — API Keys se Gemini key daalo"
         }
         refreshGeminiDiag()
     }

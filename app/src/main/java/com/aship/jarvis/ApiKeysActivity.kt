@@ -12,6 +12,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.ProviderKeys
 
 /**
@@ -172,17 +173,44 @@ class ApiKeysActivity : Activity() {
                 Toast.makeText(this, "Key খালি — আগে key লিখো।", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            ProviderKeys.setKey(this, provider, typed)
-            keyInput.text.clear()
-            if (provider.needsAccountId) {
-                val account = accountInput?.text.toString().trim()
-                if (account.isNotEmpty()) ProviderKeys.setAccountId(this, account)
-                accountInput?.text?.clear()
+            val doSave = {
+                ProviderKeys.setKey(this, provider, typed)
+                keyInput.text.clear()
+                if (provider.needsAccountId) {
+                    val account = accountInput?.text.toString().trim()
+                    if (account.isNotEmpty()) ProviderKeys.setAccountId(this, account)
+                    accountInput?.text?.clear()
+                }
+                refreshStatus(provider)
+                Toast.makeText(
+                    this, "${provider.displayName} key সেভ হয়ে গেছে।", Toast.LENGTH_SHORT
+                ).show()
             }
-            refreshStatus(provider)
-            Toast.makeText(
-                this, "${provider.displayName} key সেভ হয়ে গেছে।", Toast.LENGTH_SHORT
-            ).show()
+            // v62: Gemini key ab sirf yahin save hoti hai (main
+            // screen wala save hata) — isliye v22 wali jaanch bhi
+            // yahin: galat key kabhi save nahi hogi। Baaki
+            // provideron ki jaanch nahi hoti (unke paas list
+            // wali halki jaanch nahi hai), woh seedha save।
+            if (provider == ProviderKeys.Provider.GEMINI) {
+                saveButton.isEnabled = false
+                GeminiBrain.validateKey(typed) { ok, code ->
+                    runOnUiThread {
+                        saveButton.isEnabled = true
+                        if (ok) {
+                            doSave()
+                        } else {
+                            Toast.makeText(
+                                this,
+                                if (code == -1) "Key যাচাই হলো না — নেট দেখো, সেভ হয়নি"
+                                else "Key ভুল (error $code) — সেভ হয়নি",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            } else {
+                doSave()
+            }
         }
         row.addView(saveButton)
 

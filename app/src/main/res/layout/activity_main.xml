@@ -368,35 +368,13 @@
                 android:text="Online koshish (aakhiri): abhi tak koi koshish nahi"
                 android:textSize="12sp" />
 
-            <EditText
-                android:id="@+id/geminiKeyInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/input_box_light_bg"
-                android:hint="Yahan apna Gemini API key likho"
-                android:importantForAutofill="no"
-                android:inputType="textPassword"
-                android:maxLines="1"
-                android:minHeight="52dp"
-                android:padding="12dp" />
-
-            <Button
-                android:id="@+id/geminiKeySaveButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="KEY SAVE KARO" />
-
-            <Button
-                android:id="@+id/geminiKeyClearButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="KEY HATAO" />
+            <!-- v62: Gemini key ab sirf API Keys screen me (ek hi
+                 jagah) — yahan sirf upar wali status line hai।
+                 Key badalni/hatani ho to neeche wala button kholo। -->
 
             <!-- v53: API Keys — saare free provideron ki key
-                 ek alag screen par (Gemini wala hissa upar
-                 waisa hi rehta hai)। Button par kitni key
-                 set hain, wohi dikhta hai। -->
+                 ek alag screen par (Gemini bhi sirf yahin)।
+                 Button par kitni key set hain, wohi dikhta hai। -->
             <Button
                 android:id="@+id/apiKeysButton"
                 android:layout_width="match_parent"
