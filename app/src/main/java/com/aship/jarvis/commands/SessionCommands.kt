@@ -19,13 +19,15 @@ import java.util.Locale
  *     bolna session nahi band karta।
  *  3. [isSendInstruction] — user ka APNA hukm hi
  *     bhejne ko kehta ho ("পাঠিয়ে দাও", "भेज दो",
- *     "send it"): usi hukm se chale screen-kaam
- *     me Send wala tap usi ke diye hue hukm se
- *     pehle-se-pusht (pre-confirmed) mana jata
- *     hai (asal dwaar [com.aship.jarvis.ai.ScreenAgent]
- *     me hai; ye sirf pehchan hai)। Bina is
- *     pehchan ke bhejna hamesha pushti maangta
- *     hai — bilkul pehle jaisa।
+ *     "send it") ya saaf "koi permission nahi
+ *     chahiye, akele hi kar" kehta ho (v66):
+ *     usi hukm se chale screen-kaam me Send wala
+ *     tap usi ke diye hue hukm se pehle-se-pusht
+ *     (pre-confirmed) mana jata hai (asal dwaar
+ *     [com.aship.jarvis.ai.ScreenAgent] me hai; ye
+ *     sirf pehchan hai)। Bina is pehchan ke
+ *     bhejna hamesha pushti maangta hai — bilkul
+ *     pehle jaisa।
  *  4. [refersToEarlierScreenshot] — baat session
  *     me pehle li gayi tasveer ki taraf ishara
  *     karti ho ("ওই স্ক্রিনশটটা", "আগের ছবিটা"):
@@ -123,15 +125,24 @@ object SessionCommands {
     /**
      * User ka apna hukm SAAF taur par bhejne ko
      * kehta hai kya — teeno bhashaon ke bhejne
-     * wale aadesh-roop। Sirf session ke andar ke
-     * hukm par bulane wala ise lagata hai; session
-     * ke bahar is pehchan ka koi asar nahi (pushti
-     * dwaar wahan bilkul pehle jaisa hai)।
+     * wale aadesh-roop, ya saaf "koi permission
+     * nahi chahiye, akele hi kar" wala aadesh
+     * (v66: user ne khud kaha ho "আমার কোনো
+     * পারমিশন নেওয়ার প্রয়োজন নেই, কাজটা একা
+     * একাই কর" to woh bhi bhejne ka aadesh hi
+     * hai — pushti dobara maangna usi hukm ko
+     * todna hai)। Bulane wala (wake service ka
+     * session ya MainActivity ka saamne wala
+     * hukm) ise lagata hai; jhanda sirf usi daud
+     * ke SEND tap par asar karta hai — PAY /
+     * DELETE / CONFIRM aur banking-rok pehle
+     * jaise hi rehte hain।
      */
     fun isSendInstruction(rawText: String): Boolean {
         val lower = rawText.lowercase(Locale.ROOT)
         if (lower.isBlank()) return false
         if (SEND_MARKERS.any { lower.contains(it) }) return true
+        if (NO_PERMISSION_MARKERS.any { lower.contains(it) }) return true
         // Latin "send" shabd-seema ke saath ("send it",
         // "send করে দাও", "send karo") — "send" kisi
         // bade shabd ka tukda ho to nahi।
@@ -152,6 +163,30 @@ object SessionCommands {
     )
 
     private val SEND_WORD_REGEX = Regex("\\bsend\\b")
+
+    /**
+     * v66: "koi permission nahi chahiye, akele hi
+     * kar" wale aadesh — user ne bhejne se PEHLE hi
+     * pushti ki zaroorat ko saaf mana kar diya ho।
+     * Ye chinh akele bhi [isSendInstruction] ko
+     * sach banate hain: jhanda sirf usi daud ke
+     * SEND tap ko pehle-se-pusht karta hai, kisi
+     * aur kadam ko nahi, isliye aam baat me ye
+     * shabd aane se koi khatra nahi।
+     */
+    private val NO_PERMISSION_MARKERS = listOf(
+        // Bangla (script)
+        "পারমিশন নেওয়ার প্রয়োজন নেই", "পারমিশন লাগবে না",
+        "কোনো পারমিশন নেই", "পারমিশন দরকার নেই",
+        "একা একাই কর", "একা একাই", "নিজে নিজেই কর",
+        // Bangla (roman roop)
+        "eka ekai",
+        // Hindi
+        "परमिशन की जरूरत नहीं", "अकेले ही कर",
+        // English
+        "no permission needed", "permission not needed",
+        "do it alone", "do it by yourself"
+    )
 
     // ---------------------------------------------------------------
     // 4. Pehle wali screenshot ki taraf ishara

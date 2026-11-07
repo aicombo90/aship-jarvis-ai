@@ -156,7 +156,21 @@ import java.util.concurrent.TimeUnit
  * suna jaye, jawab hi na mile, ya sunna uplabdh na ho
  * — kaam wahin ruk jata hai; jo nahi bhejna tha woh
  * kabhi apne-aap nahi jata. Ek hi nishane ki pushti
- * ek kaam me ek hi baar maangi jati hai.
+ * ek kaam me ek hi baar maangi jati hai. CHHOOT (v49
+ * + v66): user ne APNE hukm me saaf bhejne ko kaha
+ * ho ("পাঠিয়ে দাও" / "সেন্ড করে দাও" / "কোনো
+ * পারমিশন লাগবে না, একা একাই কর") to SEND tap usi
+ * hukm se pehle-se-pusht hai — dobara nahi poochha
+ * jata ([userDirectedSend] dekho)। PAY / DELETE /
+ * CONFIRM par chhoot kabhi nahi lagti।
+ *
+ * v66: BHEJNE WALA BATAN AANKH SE — chat app ka send
+ * batan aksar bina naam ke teer-aikon hota hai (ped
+ * andha hai: naam se pehchana nahi jata)। Isliye
+ * likhne ke baad agla kadam tasveer ke saath jata hai
+ * ([forceVisionNextRound]) aur mastishk teer ko DEKH
+ * kar dabata hai (tap_mark / tap_point); chat me
+ * submit (Enter) bhejna nahi, nayi line hai।
  *
  * Imaandari: "ho gaya" sirf tab, jab mastishk ne
  * screen dekhkar khud "done" kaha ho. Raste me ruke
@@ -208,19 +222,20 @@ class ScreenAgent(
      */
     private val fromBackgroundService: Boolean = false,
     /**
-     * v49: user ke APNE session-hukm ne bhejne ka
-     * saaf aadesh diya tha kya ("পাঠিয়ে দাও" —
-     * taana session ke andar wala hukm, pehchan
-     * wake service/[SessionCommands] ki hai)।
-     * Sirf tabhi is daud ka SEND tap usi hukm se
-     * pehle-se-pusht mana jata hai
-     * ([checkConfirmation] dekho)। PAY / DELETE /
-     * CONFIRM par iska koi asar NAHI hai, aur
-     * banking/payment wali rok (denylist) isse
+     * v49 + v66: user ke APNE hukm ne bhejne ka
+     * saaf aadesh diya tha kya ("পাঠিয়ে দাও" /
+     * "সেন্ড করে দাও" / "কোনো পারমিশন লাগবে না,
+     * একা একাই কর" — pehchan [SessionCommands] ki
+     * hai)। Bulane wala ye jhanda deta hai: wake
+     * service ka session-hukm ho ya MainActivity
+     * ka saamne wala hukm (TAP TO SPEAK / likha) —
+     * hukm aur daud ek hi baari ke hon to session
+     * wala bandhan nahi lagta। Sirf tabhi is daud
+     * ka SEND tap usi hukm se pehle-se-pusht mana
+     * jata hai ([checkConfirmation] dekho)। PAY /
+     * DELETE / CONFIRM par iska koi asar NAHI hai,
+     * aur banking/payment wali rok (denylist) isse
      * upar hi rehti hai — woh kabhi nahi hat-ti।
-     * Aam (bina session wale) kaam me ye hamesha
-     * false hai aur pushti dwaar bilkul pehle
-     * jaisa hai।
      */
     private val userDirectedSend: Boolean = false
 ) {
@@ -254,6 +269,17 @@ class ScreenAgent(
      */
     private var playbookText: String? = null
     private var deletePreConfirmed = false
+
+    /**
+     * v66: agle chakkar me tasveer jabardasti — likhne
+     * (type/type_into) ke baad bhejne wala batan hi agla
+     * kadam hota hai, aur woh batan aksar bina naam ke
+     * teer-aikon hota hai (ped se pehchana nahi jata) —
+     * isliye likhne ke baad agla kadam tasveer ke saath
+     * jayega taaki mastishk use DEKH kar dabaye। Daud
+     * shuru me saaf hota hai ([runTaskLoop] dekho)।
+     */
+    private var forceVisionNextRound = false
 
     /**
      * v49: taana (continuous) session ke andar
@@ -374,6 +400,8 @@ class ScreenAgent(
         // v40: playbook + uski delete-pushti bhi is daud ke liye saaf.
         playbookText = playbook?.trim()?.takeIf { it.isNotEmpty() }
         deletePreConfirmed = false
+        // v66: jabardasti-tasveer wala jhanda bhi saaf.
+        forceVisionNextRound = false
         // v47: pack wala playbook (WhatsApp/Chrome/
         // Gallery — [Playbooks]) laga ho to kataar ki
         // sabse pehli line me uska naam band karo,
@@ -385,6 +413,24 @@ class ScreenAgent(
         // pehle jaisi hi rehti hai।
         if (playbookName != null) {
             history.add("playbook: $playbookName")
+        }
+        // v66: user ke apne hukm wala bhejna — is daud ka
+        // SEND tap pehle-se-pusht hai (bulane wale ne hukm
+        // me saaf aadesh pehchana: "পাঠিয়ে দাও" / "সেন্ড
+        // করে দাও" / "কোনো পারমিশন লাগবে না, একা একাই
+        // কর")। Mastishk ko pehle hi kadam se pata rahe
+        // taaki woh bhejne wale kadam par dobara poochne
+        // ki koshish na kare — ye note audit me bhi jayega।
+        if (userDirectedSend) {
+            history.add(
+                "System note: user-directed send — the user's " +
+                    "own instruction for this task explicitly " +
+                    "ordered the send and said no permission is " +
+                    "needed, so the send tap is pre-confirmed. " +
+                    "Tap the send button directly when the " +
+                    "message is typed and ready; do NOT ask the " +
+                    "user again."
+            )
         }
         // v44: jaanch ki ginati bhi har daud ke liye saaf.
         verifyNoChange = 0
@@ -632,7 +678,13 @@ class ScreenAgent(
             var stepMarked: List<JarvisAccessibilityService.ScreenElement> =
                 emptyList()
             var stepImage: String? = null
-            val visionWanted = wantsVision(snapshot)
+            // v66: likhne ke turant baad wala kadam tasveer
+            // ke saath — bhejne wala teer-aikon ped se
+            // pehchana nahi jata, use DEKHNA padta hai।
+            // Jhanda is chakkar me kharch ho jata hai,
+            // kota khatm ho tab bhi (dobara nahi jalega)।
+            val visionWanted = wantsVision(snapshot) || forceVisionNextRound
+            forceVisionNextRound = false
             if (visionWanted && visionUsed < MAX_VISION_CALLS) {
                 val shot = screenshotSync()
                 if (shot != null) {
@@ -965,6 +1017,10 @@ class ScreenAgent(
                     // Likhna apne-aap me bhejna nahi hai — pushti
                     // sirf bhejne/dabane wale kadam par lagti hai.
                     val ok = typeSync(action.value)
+                    // v66: likh diya — agla kadam aam taur par
+                    // bhejne wala batan hi hai; use tasveer ke
+                    // saath DEKHA jayega (teer-aikon bina naam ke)।
+                    if (ok) forceVisionNextRound = true
                     stepsDone++
                     history.add(
                         "$stepsDone. type (the text you specified) -> " +
@@ -989,6 +1045,7 @@ class ScreenAgent(
                         "$stepsDone. tap_text \"" + action.value + "\" -> " +
                             if (ok) "OK" else "FAILED (not found / not tappable)"
                     )
+                    noteSendTapMade(kind, ok, history)
                     pendingVerify = PendingVerify(
                         "tapping \"" + action.value + "\"",
                         "t:" + labelKey(action.value),
@@ -1013,6 +1070,7 @@ class ScreenAgent(
                         "$stepsDone. tap_at (" + action.x + ", " + action.y +
                             ") -> " + if (ok) "OK" else "FAILED"
                     )
+                    noteSendTapMade(kind, ok, history)
                     pendingVerify = PendingVerify(
                         if (label != null) {
                             "tapping \"" + label + "\""
@@ -1057,6 +1115,7 @@ class ScreenAgent(
                                 " (\"" + element.text + "\") -> " +
                                 if (ok) "OK" else "FAILED"
                         )
+                        noteSendTapMade(kind, ok, history)
                         pendingVerify = PendingVerify(
                             "tapping \"" + element.text +
                                 "\" (mark " + action.mark + ")",
@@ -1099,6 +1158,7 @@ class ScreenAgent(
                             action.y + ") -> " +
                             if (ok) "OK" else "FAILED"
                     )
+                    noteSendTapMade(kind, ok, history)
                     pendingVerify = PendingVerify(
                         if (label != null) {
                             "tapping \"" + label + "\""
@@ -1316,6 +1376,9 @@ class ScreenAgent(
                     // lagti; bhejne wala kadam (submit/tap)
                     // apni jaanch khud rakhta hai.
                     val ok = typeIntoSync(action.label, action.text)
+                    // v66: type wala hi niyam — agla kadam
+                    // tasveer ke saath, bhejne wala batan DEKHNE ke liye।
+                    if (ok) forceVisionNextRound = true
                     stepsDone++
                     history.add(
                         "$stepsDone. type_into \"" + action.label +
@@ -1674,6 +1737,31 @@ class ScreenAgent(
                 " tap — you may proceed with it."
         )
         return null
+    }
+
+    /**
+     * v66: SEND tap padne ke baad jaanch-note — tap
+     * padna hi bhejna nahi hai: agle snapshot me
+     * mastishk ko dekhna hoga ki likhai khane se
+     * gayi aur sandesh chat me dikha ya nahi। Ye
+     * note usi ki yaad dilata hai (aur audit me
+     * bhi rehta hai)। Sirf safal SEND tap par।
+     */
+    private fun noteSendTapMade(
+        kind: SensitiveKind?,
+        ok: Boolean,
+        history: MutableList<String>
+    ) {
+        if (kind != SensitiveKind.SEND || !ok) return
+        history.add(
+            "System note: the send tap was made — on the " +
+                "next screen, verify the message left the " +
+                "input box and appears in the chat before " +
+                "saying done. If the text is still sitting " +
+                "in the input box, the send did NOT go " +
+                "through — tap the send button again once, " +
+                "then check again."
+        )
     }
 
     /** Hassas matlab wale naam ki shreni, ya null (aam tap). */
@@ -2056,6 +2144,18 @@ class ScreenAgent(
         snapshot: JarvisAccessibilityService.ScreenSnapshot
     ): Boolean {
         if (snapshot.packageName in VISION_FIRST_PACKAGES) return true
+        // v66: user ke hukm wala bhejna aur likhne wala
+        // khana bhara hua (bhejne ke liye taiyar) — ped
+        // se batan ki pehchan nahi hoti (teer-aikon ka
+        // koi naam nahi hota), tasveer se hogi; is
+        // kadam par mastishk ko batan DEKHNE do। Khana
+        // khaali hote hi ye sanket apne-aap band ho
+        // jata hai (bhej diya gaya), isliye kota sirf
+        // bhejne se pehle wale kadmon par kharch hota hai।
+        if (userDirectedSend && snapshot.elements.any {
+                it.editable && it.text.isNotBlank()
+            }
+        ) return true
         val actionable = snapshot.elements.count {
             it.clickable || it.editable
         }
@@ -2113,6 +2213,23 @@ class ScreenAgent(
                     .append(element.centerY).append(")\n")
             }
         }
+        // v66: bina naam ke nishan — ped andha hai, tasveer
+        // nahi: "(no label)" wale nishan ko tasveer me
+        // DEKH kar pehchano (aakaar, aikon, jagah), naam se
+        // nahi। Chat app ka send batan aksar aisa hi hota
+        // hai — likhne wale khane ke dayein chhor par
+        // teer wala gol aikon।
+        out.append(
+            "\nSome marks may say \"(no label)\" — they have " +
+                "no readable name. Identify them by what they " +
+                "LOOK like in the attached image (shape, icon, " +
+                "position), not by their label. In a chat app " +
+                "the send button is the round arrow icon at " +
+                "the right end of the message input box, and " +
+                "it often has no label at all — tap its mark " +
+                "number, or tap_point on its position in the " +
+                "image.\n"
+        )
         out.append(
             "\nReply with ONLY one JSON action object for the NEXT step."
         )
@@ -2742,6 +2859,32 @@ class ScreenAgent(
                 "is not focused or the screen has several fields. " +
                 "After typing into a search or form field, use " +
                 "submit to run the search / submit the form.\n" +
+                "- To SEND a typed message in a chat app (ChatGPT, " +
+                "WhatsApp, Telegram, Gemini): the send button is " +
+                "usually a round ARROW icon at the right end of the " +
+                "message input box — it often has NO text label at " +
+                "all (\"Send\" / \"Send message\" when labelled). " +
+                "On image steps, LOOK at the picture to find it " +
+                "and use tap_mark on its number; if it has no mark, " +
+                "use tap_point on its position in the image. " +
+                "Without an image, use tap_at with the listed " +
+                "center of the (possibly unlabelled) button at the " +
+                "right end of the input box. Do NOT use \"submit\" " +
+                "for chat apps — pressing Enter usually inserts a " +
+                "new line instead of sending.\n" +
+                "- After tapping send, check the next screen before " +
+                "saying done: the input box should be empty and " +
+                "the message should appear in the chat. If the " +
+                "text is still sitting in the input box, the send " +
+                "did NOT go through — tap the send button again " +
+                "(once), then check again; if it still will not " +
+                "send, say \"fail\" honestly and say the message " +
+                "was not sent.\n" +
+                "- If the task asks you to save a picture the other " +
+                "app made: long-press the picture and tap its Save " +
+                "/ Download option if one appears. If no save " +
+                "option appears, say so honestly instead of " +
+                "claiming it was saved.\n" +
                 "- This phone's connection is SLOW. After opening " +
                 "an app or tapping something that loads a page, " +
                 "prefer wait_for with the text you expect to see " +
@@ -2753,11 +2896,17 @@ class ScreenAgent(
                 "wallets) are OFF-LIMITS: never try to open or " +
                 "operate them. The system will stop the task if " +
                 "one comes to the foreground.\n" +
-                "- Taps and long-presses on Send / Pay / Confirm / " +
-                "Delete are NOT executed immediately: the app first " +
-                "asks the user for confirmation, and the task stops " +
-                "if the user does not clearly say yes. Choose such " +
-                "an action only when the task is truly ready for it.\n" +
+                "- Taps on Pay / Confirm / Delete are NOT executed " +
+                "immediately: the app first asks the user for " +
+                "confirmation, and the task stops if the user does " +
+                "not clearly say yes. The same applies to Send — " +
+                "UNLESS the history says this run is a user-directed " +
+                "send (pre-confirmed: the user's own instruction " +
+                "ordered the send and said no permission is needed). " +
+                "In a pre-confirmed run, tap the send button " +
+                "directly when the message is typed and ready; do " +
+                "NOT ask the user again. Choose such an action only " +
+                "when the task is truly ready for it.\n" +
                 "- Use ask_user only when a real choice belongs to " +
                 "the user (e.g. several matching contacts). If no " +
                 "answer comes back, do not guess — fail honestly.\n" +

@@ -2113,6 +2113,15 @@ class MainActivity : Activity() {
         onAgentUnavailable: (() -> Unit)? = null
     ) {
         val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+        // v66: user ke apne hukm me saaf bhejne ka aadesh ho
+        // ("পাঠিয়ে দাও" / "সেন্ড করে দাও" / "কোনো পারমিশন
+        // লাগবে না, একা একাই কর") to woh aadesh screen-kaam
+        // tak jayega (Send pehle-se-pusht) — v49 wala niyam
+        // ab saamne wali screen (TAP TO SPEAK / likha hukm)
+        // par bhi lagta hai, sirf background session par nahi।
+        // Hukm aur daud ek hi baari ke hain, isliye yahan
+        // session wala bandhan nahi lagta।
+        tools.userDirectedSend = SessionCommands.isSendInstruction(text)
         AgentBrain.run(
             this, geminiHistory.toList(), text, tools::execute, replyLanguage
         ) { reply ->
@@ -2227,6 +2236,9 @@ class MainActivity : Activity() {
         responseText.text = "Maya: link wala kaam screen par kar rahi hoon..."
         background.execute {
             val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
+            // v66: askAgentBrain wala hi niyam — hukm me saaf
+            // bhejne ka aadesh ho to Send pehle-se-pusht।
+            tools.userDirectedSend = SessionCommands.isSendInstruction(text)
             val result = try {
                 tools.execute("screen_task", JSONObject().put("task", task))
             } catch (t: Throwable) {
