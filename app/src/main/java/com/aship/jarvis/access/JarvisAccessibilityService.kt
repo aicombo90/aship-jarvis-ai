@@ -2188,7 +2188,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         while (true) {
             if (readCurrentDataState() == desired) return true
             if (SystemClock.uptimeMillis() >= deadline) return false
-            SystemClock.sleep(VERIFY_POLL_MS)
+            SystemClock.sleep(DATA_VERIFY_POLL_MS)
         }
     }
 
@@ -2198,7 +2198,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         while (true) {
             readCurrentDataState()?.let { return it }
             if (SystemClock.uptimeMillis() >= deadline) return null
-            SystemClock.sleep(VERIFY_POLL_MS)
+            SystemClock.sleep(DATA_VERIFY_POLL_MS)
         }
     }
 
@@ -2630,7 +2630,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 }
             }
             if (watchSign) return true
-            SystemClock.sleep(VERIFY_POLL_MS)
+            SystemClock.sleep(DATA_VERIFY_POLL_MS)
         }
         return false
     }
@@ -3425,7 +3425,7 @@ class JarvisAccessibilityService : AccessibilityService() {
          * haalat nahi hote, 15:21 ka sabak।)
          */
         private const val VERIFY_TIMEOUT_MS = 4_000L
-        private const val VERIFY_POLL_MS = 400L
+        private const val DATA_VERIFY_POLL_MS = 400L
         // v62: "/s" ke baad wali gati ("1.80KB/s" — status bar ka
         // speed nishan) kabhi tile nahi: ikai ke peeche "/" ya
         // akshar ho to milaan nahi (tile par "94.75 GB" — ikai
