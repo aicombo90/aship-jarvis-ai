@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.util.concurrent.Executors
 
 /**
  * v58: ONLINE FALLBACK CHAIN — ek provider fail ho to
@@ -158,6 +159,108 @@ object ProviderChain {
                 .apply()
         } catch (e: Exception) {
             // Report bonus hai; asal jawab wala raasta isse alag hai.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v71: key ki JAANCH (validate) — save karne se pehle
+    // ------------------------------------------------------------------
+
+    /**
+     * Jaanch ka nateeja: VALID = key chalti hai (200);
+     * INVALID = key pakka galat (401/403) — save mat karo;
+     * INCONCLUSIVE = jaanch adhoori rahi (net band, timeout,
+     * 429, 5xx, 404) — key galat hai ye nahi kaha ja sakta,
+     * isliye save karke imaandaar line bolo.
+     */
+    enum class ValidationResult { VALID, INVALID, INCONCLUSIVE }
+
+    /** Jaanch wala executor — GeminiBrain wale pattern jaisa. */
+    private val validateExecutor = Executors.newSingleThreadExecutor()
+
+    /**
+     * v71: ummeedwaar key ki JAANCH — ApiKeysActivity se,
+     * save karne se pehle. Har provider ki sabse halki list
+     * wali GET call (koi token kharch nahi, chat nahi):
+     * Groq/SambaNova/Cohere = OpenAI wali /models list;
+     * OpenRouter = /auth/key (uski /models sabko 200 deti
+     * hai — fake key par bhi — isliye woh jaanch nahi);
+     * Cloudflare = Workers AI wali models/search list
+     * (key + Account ID + Workers AI Read permission —
+     * teeno ki jaanch ek saath, koi Neuron kharch nahi).
+     * Callback isi executor thread par aata hai:
+     * ([ValidationResult], HTTP code; -1 = net/timeout).
+     * Gemini yahan nahi — uski jaanch [GeminiBrain
+     * .validateKey] ke paas hai. Key kabhi log nahi hoti
+     * — seedha Authorization header me jaati hai.
+     */
+    fun validateKey(
+        provider: ProviderKeys.Provider,
+        key: String,
+        accountId: String?,
+        callback: (ValidationResult, Int) -> Unit
+    ) {
+        if (provider == ProviderKeys.Provider.GEMINI) {
+            callback(ValidationResult.INCONCLUSIVE, -1)
+            return
+        }
+        validateExecutor.execute {
+            val code = try {
+                validateGet(provider, key.trim(), accountId?.trim())
+            } catch (e: Exception) {
+                -1
+            }
+            val result = when (code) {
+                HttpURLConnection.HTTP_OK -> ValidationResult.VALID
+                HttpURLConnection.HTTP_UNAUTHORIZED,
+                HttpURLConnection.HTTP_FORBIDDEN -> ValidationResult.INVALID
+                else -> ValidationResult.INCONCLUSIVE
+            }
+            try {
+                callback(result, code)
+            } catch (t: Throwable) {
+                // Callback ki gadbad jaanch ko na bigaade.
+            }
+        }
+    }
+
+    /**
+     * v71: ek halki GET — sirf response code chahiye,
+     * body padhne ki zaroorat nahi. Cloudflare ko
+     * Account ID chahiye; na ho to -1 (jaanch adhoori).
+     */
+    private fun validateGet(
+        provider: ProviderKeys.Provider,
+        key: String,
+        accountId: String?
+    ): Int {
+        val url = when (provider) {
+            ProviderKeys.Provider.GEMINI -> return -1
+            ProviderKeys.Provider.GROQ -> VALIDATE_URL_GROQ
+            ProviderKeys.Provider.OPENROUTER -> VALIDATE_URL_OPENROUTER
+            ProviderKeys.Provider.SAMBANOVA -> VALIDATE_URL_SAMBANOVA
+            ProviderKeys.Provider.COHERE -> VALIDATE_URL_COHERE
+            ProviderKeys.Provider.CLOUDFLARE -> {
+                val account = accountId?.takeIf { it.isNotEmpty() } ?: return -1
+                CLOUDFLARE_BASE_URL + account + CLOUDFLARE_MODELS_SEARCH_PATH
+            }
+        }
+        var connection: HttpURLConnection? = null
+        return try {
+            connection =
+                (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = VALIDATE_CONNECT_TIMEOUT_MS
+                    readTimeout = VALIDATE_READ_TIMEOUT_MS
+                    setRequestProperty("Authorization", "Bearer $key")
+                }
+            connection.responseCode
+        } catch (e: SocketTimeoutException) {
+            -1
+        } catch (e: Exception) {
+            -1
+        } finally {
+            connection?.disconnect()
         }
     }
 
@@ -405,6 +508,25 @@ object ProviderChain {
     // provider jawab ko minute bhar latka nahi sakta.
     private const val CONNECT_TIMEOUT_MS = 10_000
     private const val READ_TIMEOUT_MS = 25_000
+
+    // v71: key jaanch (validate) ki seema + halki list
+    // wali GET callon ke pate — sirf response code
+    // chahiye, body nahi padhte, koi token kharch nahi।
+    // OpenRouter ki /models sabko 200 deti hai (fake key
+    // par bhi) — isliye /auth/key; Cloudflare ki
+    // models/search list key + Account ID + Workers AI
+    // Read — teeno ki jaanch ek saath, koi Neuron nahi।
+    private const val VALIDATE_CONNECT_TIMEOUT_MS = 10_000
+    private const val VALIDATE_READ_TIMEOUT_MS = 10_000
+    private const val VALIDATE_URL_GROQ =
+        "https://api.groq.com/openai/v1/models"
+    private const val VALIDATE_URL_OPENROUTER =
+        "https://openrouter.ai/api/v1/auth/key"
+    private const val VALIDATE_URL_SAMBANOVA =
+        "https://api.sambanova.ai/v1/models"
+    private const val VALIDATE_URL_COHERE =
+        "https://api.cohere.com/v1/models"
+    private const val CLOUDFLARE_MODELS_SEARCH_PATH = "/ai/models/search"
 
     // Jawab ki lambai/andaaz Gemini wale jaisa hi —
     // chhota, bola-jaane-layak.

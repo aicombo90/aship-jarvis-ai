@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.ProviderKeys
 
 /**
@@ -30,9 +31,13 @@ import com.aship.jarvis.ai.ProviderKeys
  * rakhi jati hai। Gemini wali key yahin se bhi badli
  * ja sakti hai — wohi [GeminiBrain] wali key hai,
  * isliye main screen wali jagah se kabhi alag nahi
- * padegi। Key ki JAANCH (validate) yahan nahi hoti —
- * sirf save/clear/status; Gemini ki jaanch main screen
- * wali jagah par pehle jaisi hi hai।
+ * padegi। Key ki JAANCH (validate) yahin hoti hai —
+ * save karne se pehle: Gemini (v62) aur baaki paanch
+ * provider (v71, [ProviderChain.validateKey] se halki
+ * list wali call)। Galat key (401/403) kabhi save nahi
+ * hoti; net/server ki gadbad par key save karke
+ * imaandaar line boli jati hai — purani key tab bhi
+ * salamat rehti hai।
  */
 class ApiKeysActivity : Activity() {
 
@@ -173,7 +178,11 @@ class ApiKeysActivity : Activity() {
                 Toast.makeText(this, "Key খালি — আগে key লিখো।", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val doSave = {
+            // Save karna: key (+ Cloudflare ka Account ID,
+            // agar likha ho) band karo, khane khaali karo,
+            // status taza karo. [note] ho to wahi line bolo
+            // (lambi wali), warna aam "সেভ হয়ে গেছে" line।
+            val doSave = { note: String?, longToast: Boolean ->
                 ProviderKeys.setKey(this, provider, typed)
                 keyInput.text.clear()
                 if (provider.needsAccountId) {
@@ -183,21 +192,27 @@ class ApiKeysActivity : Activity() {
                 }
                 refreshStatus(provider)
                 Toast.makeText(
-                    this, "${provider.displayName} key সেভ হয়ে গেছে।", Toast.LENGTH_SHORT
+                    this,
+                    note ?: "${provider.displayName} key সেভ হয়ে গেছে।",
+                    if (longToast) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
                 ).show()
             }
             // v62: Gemini key ab sirf yahin save hoti hai (main
             // screen wala save hata) — isliye v22 wali jaanch bhi
-            // yahin: galat key kabhi save nahi hogi। Baaki
-            // provideron ki jaanch nahi hoti (unke paas list
-            // wali halki jaanch nahi hai), woh seedha save।
+            // yahin: galat key kabhi save nahi hogi। v71: baaki
+            // paanch provideron ki jaanch bhi yahin — halki list
+            // wali call ([ProviderChain.validateKey]): sirf
+            // 401/403 = galat key (save mat karo, purani key
+            // salamat); 200 = sahi (save); baaki sab (net band,
+            // timeout, 429/5xx) = jaanch adhoori — key save
+            // karke imaandaar line bolo, kabhi rokna nahi।
             if (provider == ProviderKeys.Provider.GEMINI) {
                 saveButton.isEnabled = false
                 GeminiBrain.validateKey(typed) { ok, code ->
                     runOnUiThread {
                         saveButton.isEnabled = true
                         if (ok) {
-                            doSave()
+                            doSave(null, false)
                         } else {
                             Toast.makeText(
                                 this,
@@ -208,8 +223,26 @@ class ApiKeysActivity : Activity() {
                         }
                     }
                 }
+            } else if (provider.needsAccountId) {
+                // Cloudflare: key + Account ID ek saath jaanche
+                // jate hain. Account ID likha ho to wahi, warna
+                // pehle se band wala; ek bhi na ho to jaanch ho
+                // hi nahi sakti — key save karke wahi bolo।
+                val typedAccount = accountInput?.text.toString().trim()
+                val effectiveAccount = typedAccount.takeIf { it.isNotEmpty() }
+                    ?: ProviderKeys.getAccountId(this)
+                if (effectiveAccount == null) {
+                    doSave(
+                        "Account ID ছাড়া যাচাই করা যায়নি — Account ID দিলে key যাচাই হবে।",
+                        true
+                    )
+                } else {
+                    validateAndSave(
+                        provider, typed, effectiveAccount, saveButton, doSave
+                    )
+                }
             } else {
-                doSave()
+                validateAndSave(provider, typed, null, saveButton, doSave)
             }
         }
         row.addView(saveButton)
@@ -234,6 +267,50 @@ class ApiKeysActivity : Activity() {
 
         section.addView(row)
         return section
+    }
+
+    /**
+     * v71: Gemini ke alawa kisi provider ki key save karne
+     * se pehle halki jaanch ([ProviderChain.validateKey])।
+     * Button jaanch bhar band + "যাচাই হচ্ছে…" dikhta hai।
+     * VALID (200) = save; INVALID (401/403) = save MAT
+     * karo — purani key salamat, saaf line bolo; baaki sab
+     * = jaanch adhoori — key save karke imaandaar line
+     * bolo. Callback jaanch wale thread par aata hai,
+     * isliye UI kaam [runOnUiThread] me।
+     */
+    private fun validateAndSave(
+        provider: ProviderKeys.Provider,
+        typed: String,
+        accountId: String?,
+        saveButton: Button,
+        doSave: (String?, Boolean) -> Unit
+    ) {
+        saveButton.isEnabled = false
+        saveButton.text = "যাচাই হচ্ছে…"
+        ProviderChain.validateKey(provider, typed, accountId) { result, _ ->
+            runOnUiThread {
+                saveButton.isEnabled = true
+                saveButton.text = "SAVE"
+                when (result) {
+                    ProviderChain.ValidationResult.VALID -> doSave(null, false)
+                    ProviderChain.ValidationResult.INVALID -> {
+                        val msg = if (provider.needsAccountId) {
+                            "key বা Account ID ভুল মনে হচ্ছে, আবার দেখে নাও — সেভ হয়নি"
+                        } else {
+                            "এই key টা ভুল মনে হচ্ছে, আবার দেখে নাও — সেভ হয়নি"
+                        }
+                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    }
+                    ProviderChain.ValidationResult.INCONCLUSIVE -> {
+                        doSave(
+                            "ইন্টারনেট/সার্ভারের জন্য যাচাই করা যায়নি, key টা সেভ করে রাখলাম — ভুল হলে পরে জানাবে",
+                            true
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private fun dp(value: Int): Int =
