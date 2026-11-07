@@ -125,8 +125,6 @@ object ProviderKeys {
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    companion object {
-        private const val PREFS_NAME = "jarvis_ai"
-        private const val KEY_CLOUDFLARE_ACCOUNT = "key_cloudflare_account"
-    }
+    private const val PREFS_NAME = "jarvis_ai"
+    private const val KEY_CLOUDFLARE_ACCOUNT = "key_cloudflare_account"
 }

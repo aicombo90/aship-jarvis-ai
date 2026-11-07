@@ -67,8 +67,6 @@ object CommandHistory {
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    companion object {
-        private const val PREFS_NAME = "jarvis_history"
-        private const val KEY_HISTORY = "history_json"
-    }
+    private const val PREFS_NAME = "jarvis_history"
+    private const val KEY_HISTORY = "history_json"
 }
