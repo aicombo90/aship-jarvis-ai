@@ -75,8 +75,8 @@ android {
         applicationId 'com.aship.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 74
-        versionName '1.73'
+        versionCode 75
+        versionName '1.74'
 
         ndk {
             // v41: sherpa-onnx AAR chaaron ABI ke .so rakhta

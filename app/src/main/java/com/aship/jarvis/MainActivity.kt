@@ -18,6 +18,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.View
@@ -338,6 +340,36 @@ class MainActivity : Activity() {
     // (ya screen band hone par) isi jhande ko dekh kar ek hi baar
     // resume bhejte hain — resume idempotent aur bina-nuksan hai.
     private var wakePauseSent = false
+
+    // v75: FULL SHUTDOWN — saamne wali screen se
+    // "শাটডাউন / ফুল শাটডাউন" sunte hi "কমপ্লিট"
+    // bolkar poora app band। [fullShutdownKilling]
+    // maar ek hi baar chale iska jaal hai (boli-khatm
+    // wala callback aur safety timer dono use bula
+    // sakte hain); [fullShutdownStartedMs] safety
+    // timer ki kul intezaar-seema ke liye।
+    private var fullShutdownKilling = false
+    private var fullShutdownStartedMs = 0L
+
+    /**
+     * v75: safety timer — "কমপ্লিট" ki boli khatm
+     * hone ka callback na aaye to khud maar do। Boli
+     * abhi chal rahi ho aur kul intezaar 15 s se kam
+     * ho to 3 s aage badho, warna maar do। Main
+     * thread par chalta hai।
+     */
+    private val fullShutdownKillRunnable = Runnable {
+        if (fullShutdownKilling) return@Runnable
+        val elapsed = SystemClock.uptimeMillis() - fullShutdownStartedMs
+        if (speaker.isSpeakingNow && elapsed < FULL_SHUTDOWN_MAX_WAIT_MS) {
+            mainHandler.postDelayed(
+                fullShutdownKillRunnable,
+                FULL_SHUTDOWN_KILL_REARM_MS
+            )
+            return@Runnable
+        }
+        fullShutdownNow()
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val background = Executors.newSingleThreadExecutor()
@@ -1616,7 +1648,93 @@ class MainActivity : Activity() {
             t.contains("start learning")
     }
 
+    /**
+     * v75: FULL SHUTDOWN — "কমপ্লিট" bolo, boli khatm
+     * hote hi [fullShutdownNow] chalao (ek-baar wala
+     * callback — screen-confirm wale host jaisa hi
+     * purana pattern: purana callback wapas laga do)।
+     * Callback kho jaye to safety timer
+     * ([fullShutdownKillRunnable]) khud maar dega —
+     * shutdown kabhi atakta nahi। Main thread par
+     * bulao (processCommand wala raasta)।
+     */
+    private fun startFullShutdown() {
+        fullShutdownStartedMs = SystemClock.uptimeMillis()
+        speaker.speak(FULL_SHUTDOWN_SPEAK_TEXT)
+        val previous = speaker.onUtteranceFinished
+        speaker.onUtteranceFinished = {
+            speaker.onUtteranceFinished = previous
+            mainHandler.post { fullShutdownNow() }
+        }
+        mainHandler.removeCallbacks(fullShutdownKillRunnable)
+        mainHandler.postDelayed(
+            fullShutdownKillRunnable,
+            FULL_SHUTDOWN_KILL_TIMEOUT_MS
+        )
+    }
+
+    /**
+     * v75: ASAL MAAR (saamne wali screen) — ek hi baar
+     * chalega ([fullShutdownKilling] wala jaal)। Kram:
+     * timer roko, wake service ko roko (chal rahi ho
+     * to), prefs me turant (sync) likho ki wake service
+     * band hai, report me wajah bandho, screen band
+     * karo, aur aakhir me khud ka process maar do —
+     * taaki koi bhi executor/timer/service peeche
+     * zinda na bache। Accessibility wala setting
+     * chhoota NAHI hai: wohi process me chalne wali
+     * service process marte hi band ho jati hai, aur
+     * setting ON rehti hai — dobara app kholte hi
+     * system use phir bandh deta hai, kuch dobara
+     * chalu karna nahi padta।
+     */
+    private fun fullShutdownNow() {
+        if (fullShutdownKilling) return
+        fullShutdownKilling = true
+        mainHandler.removeCallbacks(fullShutdownKillRunnable)
+        try {
+            if (JarvisWakeService.isRunning) {
+                startService(JarvisWakeService.stopIntent(this))
+            }
+        } catch (t: Throwable) {
+            // Service rokna bonus hai — marna asal hai.
+        }
+        try {
+            prefs.markWakeServiceStoppedSync()
+        } catch (t: Throwable) {
+            // Flag bonus hai — marna asal hai.
+        }
+        try {
+            getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_session_end", "full-shutdown")
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — marna asal hai.
+        }
+        try {
+            finish()
+        } catch (t: Throwable) {
+            // Screen band karna bonus hai — marna asal hai.
+        }
+        Process.killProcess(Process.myPid())
+    }
+
     private fun processCommand(text: String) {
+        // v75: FULL SHUTDOWN yahan bhi sabse pehle —
+        // "শাটডাউন / ফুল শাটডাউন" bolte/likhte hi pehle
+        // "কমপ্লিট" bolkar poora app band (neeche wala
+        // startFullShutdown)। "সিস্টেম শাটডাউন" isme
+        // nahi aata, woh neeche wala chup band hi rehta hai।
+        if (SessionCommands.isFullShutdownCommand(text)) {
+            if (ScreenConfirm.hasPending()) {
+                ScreenConfirm.deliverAnswer("না")
+            }
+            recognizedText.text = "Aapne kaha: $text"
+            responseText.text = "Jarvis: কমপ্লিট — পুরো বন্ধ হচ্ছে..."
+            startFullShutdown()
+            return
+        }
         // v50: SHUTDOWN yahan bhi sabse pehle — background
         // wala hi niyam: "শাটডাউন" bolte/likhte hi baat
         // band, aur KUCH BOLA NAHI jayega (screen par
@@ -3044,5 +3162,19 @@ class MainActivity : Activity() {
 
         /** v21: Gemini yaad ki gehrai — 10 turn, ek turn = user+model jodi. */
         private const val MAX_GEMINI_HISTORY_ENTRIES = 20
+
+        /** v75: FULL SHUTDOWN — band hone se pehle bola jaane wala ek shabd। */
+        private const val FULL_SHUTDOWN_SPEAK_TEXT = "কমপ্লিট"
+
+        /**
+         * v75: "কমপ্লিট" ki boli khatm hone ka intezaar
+         * — itni der me callback na aaye to safety timer
+         * khud maar dega (boli atakne par bhi shutdown
+         * rukega nahi)। Boli abhi chal rahi ho to timer
+         * 3 s aage badhta hai, kul 15 s tak।
+         */
+        private const val FULL_SHUTDOWN_KILL_TIMEOUT_MS = 6_000L
+        private const val FULL_SHUTDOWN_KILL_REARM_MS = 3_000L
+        private const val FULL_SHUTDOWN_MAX_WAIT_MS = 15_000L
     }
 }

@@ -60,6 +60,16 @@ class AppPrefs(context: Context) {
             prefs.edit().putBoolean(KEY_WAKE_SERVICE_RUNNING, value).apply()
         }
 
+    /**
+     * v75: full shutdown ke liye turant (sync) likhai —
+     * apply() wala aam setter killProcess se pehle disk
+     * tak nahi pahunchta, isliye yahan commit() hi sahi
+     * hai (chhoti likhai, ek baar wali baat)।
+     */
+    fun markWakeServiceStoppedSync() {
+        prefs.edit().putBoolean(KEY_WAKE_SERVICE_RUNNING, false).commit()
+    }
+
     /** v1.7 diagnostics: latest non-blank final text heard by the wake recognizer. */
     var lastHeardText: String
         get() = prefs.getString(KEY_LAST_HEARD_TEXT, "") ?: ""

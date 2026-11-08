@@ -69,6 +69,44 @@ object SessionCommands {
     )
 
     // ---------------------------------------------------------------
+    // 1b. FULL SHUTDOWN (v75)
+    // ---------------------------------------------------------------
+
+    /**
+     * v75: PURA band — "শাটডাউন / ফুল শাটডাউন" sunte
+     * hi Maya pehle "কমপ্লিট" bolkar background
+     * sunna (wake service) + khud ka process poori
+     * tarah band kar degi। "সিস্টেম শাটডাউন" isme
+     * NAHI aata — woh upar wali [isShutdownCommand]
+     * wali chup session-ant hi rehta hai (gola
+     * gayab, wake sunna chaloo), taaki taana session
+     * ka purana bandobast na toote। "বন্ধ" jaisa
+     * aam shabd isme bilkul nahi hai — sirf ye
+     * pakke shutdown wale shabd hi chalenge।
+     */
+    fun isFullShutdownCommand(rawText: String): Boolean {
+        val lower = rawText.lowercase(Locale.ROOT)
+        if (lower.isBlank()) return false
+        // "সিস্টেম শাটডাউন" — chup session-ant, pura band nahi।
+        if (lower.contains("সিস্টেম") ||
+            lower.contains("system") ||
+            lower.contains("सिस्टम")
+        ) return false
+        return FULL_SHUTDOWN_MARKERS.any { lower.contains(it) }
+    }
+
+    private val FULL_SHUTDOWN_MARKERS = listOf(
+        // Bangla (script)
+        "ফুল শাটডাউন", "ফুল শাট ডাউন",
+        "শাটডাউন", "শাট ডাউন",
+        // English
+        "full shutdown", "shutdown",
+        // Hindi
+        "फुल शटडाउन", "फुल शट डाउन",
+        "शटडाउन", "शट डाउन"
+    )
+
+    // ---------------------------------------------------------------
     // 2. "আর কিছু?" ka saaf NA
     // ---------------------------------------------------------------
 

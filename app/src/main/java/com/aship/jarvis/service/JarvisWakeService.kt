@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
 import android.speech.SpeechRecognizer
@@ -305,6 +306,23 @@ class JarvisWakeService : Service() {
 
     @Volatile
     private var destroyed = false
+
+    // v75: FULL SHUTDOWN — "শাটডাউন / ফুল শাটডাউন"
+    // sunte hi "কমপ্লিট" bolkar poori service +
+    // process band। [fullShutdownPending] "কমপ্লিট"
+    // bolne ke dauraan sach hai; [fullShutdownKilling]
+    // marne wala kadam ek hi baar chale iska jaal hai
+    // (boli-khatm wala callback aur safety timer dono
+    // use bula sakte hain); [fullShutdownStartedMs]
+    // safety timer ki kul intezaar-seema ke liye।
+    @Volatile
+    private var fullShutdownPending = false
+
+    @Volatile
+    private var fullShutdownKilling = false
+
+    @Volatile
+    private var fullShutdownStartedMs = 0L
 
     private var wakeErrorCount = 0
 
@@ -1367,6 +1385,112 @@ class JarvisWakeService : Service() {
     }
 
     /**
+     * v75: FULL SHUTDOWN — "কমপ্লিট" bolkar poori
+     * service + process band। Kram: pehle saare
+     * fallback/timer roko (koi cheez beech me wake
+     * sunna phir chalu na kare), report me wajah
+     * bandho, "কমপ্লিট" bolo, aur boli khatm hote
+     * hi [fullShutdownKill] chalao ([onTtsFinished]
+     * wala bandobast)। Callback kho jaye to safety
+     * timer ([fullShutdownKillRunnable]) khud maar
+     * dega — shutdown kabhi atakta nahi। Sirf
+     * executor thread se bulao (onCommandHeard wala
+     * raasta — state wahan REPLY ho chuka hota hai
+     * aur command session band)।
+     */
+    private fun startFullShutdown() {
+        disarmSessionIdle()
+        disarmAckFallback()
+        disarmReplyFallback()
+        disarmAutoResume()
+        fullShutdownPending = true
+        fullShutdownStartedMs = SystemClock.uptimeMillis()
+        // Report: ant ki wajah pehle bandho — boli ya
+        // timer, jo bhi maare, wajah yahi rahegi।
+        endSession(SESSION_END_FULL_SHUTDOWN)
+        pendingEndReason = SESSION_END_COMPLETED
+        closingReason = SESSION_END_NOT_UNDERSTOOD
+        ackEndsConversation = false
+        setStatus("কমপ্লিট — পুরো বন্ধ হচ্ছে...")
+        updateNotification("কমপ্লিট — পুরো বন্ধ হচ্ছে...")
+        orbOverlay.setReply(FULL_SHUTDOWN_SPEAK_TEXT)
+        speaker.speak(FULL_SHUTDOWN_SPEAK_TEXT)
+        mainHandler.removeCallbacks(fullShutdownKillRunnable)
+        mainHandler.postDelayed(
+            fullShutdownKillRunnable,
+            FULL_SHUTDOWN_KILL_TIMEOUT_MS
+        )
+    }
+
+    /**
+     * v75: safety timer — "কমপ্লিট" ki boli khatm
+     * hone ka callback na aaye to khud maar do। Boli
+     * abhi chal rahi ho aur kul intezaar 15 s se kam
+     * ho to 3 s aage badho, warna maar do। Main
+     * thread par chalta hai; [fullShutdownKill] kisi
+     * bhi thread se surakshit hai।
+     */
+    private val fullShutdownKillRunnable = Runnable {
+        if (fullShutdownKilling || !fullShutdownPending) return@Runnable
+        val elapsed = SystemClock.uptimeMillis() - fullShutdownStartedMs
+        if (speaker.isSpeakingNow && elapsed < FULL_SHUTDOWN_MAX_WAIT_MS) {
+            mainHandler.postDelayed(
+                fullShutdownKillRunnable,
+                FULL_SHUTDOWN_KILL_REARM_MS
+            )
+            return@Runnable
+        }
+        fullShutdownKill()
+    }
+
+    /**
+     * v75: ASAL MAAR — ek hi baar chalega
+     * ([fullShutdownKilling] wala jaal)। Kram:
+     * timer roko, gola turant hatao, prefs me
+     * turant (sync) likho ki wake service band
+     * hai, [teardown] se sab kuch saaf karo
+     * (wake/command/Zipformer session, engine,
+     * wake lock, TTS, foreground notice), service
+     * roko, aur aakhir me khud ka process maar
+     * do — taaki koi bhi executor/timer/activity
+     * peeche zinda na bache। Accessibility wala
+     * setting chhoota NAHI hai: wohi process me
+     * chalne wali service process marte hi band
+     * ho jati hai, aur setting ON rehti hai —
+     * dobara app kholte hi system use phir bandh
+     * deta hai, kuch dobara chalu karna nahi
+     * padta। Reminder wale alarm bhi nahi chhede
+     * gaye — woh ek-shot system alarm hain, koi
+     * chalti hui sunna nahi, battery nahi khate।
+     */
+    private fun fullShutdownKill() {
+        if (fullShutdownKilling) return
+        fullShutdownKilling = true
+        fullShutdownPending = false
+        mainHandler.removeCallbacks(fullShutdownKillRunnable)
+        try {
+            orbOverlay.removeImmediately()
+        } catch (t: Throwable) {
+            // Gola hatana bonus hai — marna asal hai.
+        }
+        // Prefs turant (sync) likho — apply() wala
+        // aam setter killProcess se pehle disk tak
+        // nahi pahunchta।
+        try {
+            prefs.markWakeServiceStoppedSync()
+        } catch (t: Throwable) {
+            // Flag bonus hai — marna asal hai.
+        }
+        teardown()
+        try {
+            stopSelf()
+        } catch (t: Throwable) {
+            // Service rokna bonus hai — marna asal hai.
+        }
+        Process.killProcess(Process.myPid())
+    }
+
+    /**
      * Vida-line bolkar session band karo — ACK
      * wale band raaste se: boli khatm hote hi
      * onAckSpeechDone ant ki wajah ([reason])
@@ -1633,6 +1757,16 @@ class JarvisWakeService : Service() {
 
     private fun onTtsFinished() {
         executor.execute {
+            // v75: FULL SHUTDOWN ki "কমপ্লিট" wali boli
+            // khatm — ab wake sunna phir chalu NAHI hoga,
+            // seedha maar (fullShutdownKill)। Boli khatm
+            // hone se pehle wala destroyed-check iske
+            // baad aata hai taaki shutdown ka raasta
+            // kabhi na chhoote।
+            if (fullShutdownPending) {
+                fullShutdownKill()
+                return@execute
+            }
             if (destroyed) return@execute
             // v36: boli asal me yahan khatm hui — goonj wali
             // khidki (self-hearing guard) yahin se gini jayegi.
@@ -2750,6 +2884,19 @@ class JarvisWakeService : Service() {
         // layegi।
         val wasAwaitingMore = sessionActive && sessionAwaitingMore
         sessionAwaitingMore = false
+        // v75: FULL SHUTDOWN — "শাটডাউন / ফুল শাটডাউন"
+        // sunte hi pehle "কমপ্লিট" bolkar poori service
+        // + process band (neeche wala startFullShutdown)।
+        // Ye jaanch chup wale shutdown se PEHLE lagti hai:
+        // "সিস্টেম শাটডাউন" isme nahi aata, woh purana
+        // chup session-ant hi rehta hai।
+        if (SessionCommands.isFullShutdownCommand(text)) {
+            if (ScreenConfirm.hasPending()) {
+                ScreenConfirm.deliverAnswer(SESSION_DENY_ANSWER)
+            }
+            startFullShutdown()
+            return
+        }
         // v50: SHUTDOWN HAR HAAL ME SABSE PEHLE —
         // session ho ya na ho, adda ho ya aam
         // hukm, "শাটডাউন / shutdown" sunte hi
@@ -4388,6 +4535,27 @@ class JarvisWakeService : Service() {
          * isse badal gayi।
          */
         private const val SESSION_END_SHUTDOWN_SILENT = "shutdown-silent"
+
+        /**
+         * v75: FULL SHUTDOWN wala ant — "কমপ্লিট" bolkar
+         * background sunna + poora process band। Report
+         * me yahi wajah bandhti hai।
+         */
+        private const val SESSION_END_FULL_SHUTDOWN = "full-shutdown"
+
+        /** v75: band hone se pehle bola jaane wala ek shabd। */
+        private const val FULL_SHUTDOWN_SPEAK_TEXT = "কমপ্লিট"
+
+        /**
+         * v75: "কমপ্লিট" ki boli khatm hone ka intezaar
+         * — itni der me callback na aaye to safety timer
+         * khud maar dega (boli atakne par bhi shutdown
+         * rukega nahi)। Boli abhi chal rahi ho to timer
+         * 3 s aage badhta hai, kul 15 s tak।
+         */
+        private const val FULL_SHUTDOWN_KILL_TIMEOUT_MS = 6_000L
+        private const val FULL_SHUTDOWN_KILL_REARM_MS = 3_000L
+        private const val FULL_SHUTDOWN_MAX_WAIT_MS = 15_000L
 
         /**
          * v49: shutdown ke pal latke pushti-sawal ko
