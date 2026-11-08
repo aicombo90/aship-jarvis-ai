@@ -358,7 +358,7 @@ class MainActivity : Activity() {
      * ho to 3 s aage badho, warna maar do। Main
      * thread par chalta hai।
      */
-    private val fullShutdownKillRunnable = Runnable {
+    private val fullShutdownKillRunnable: Runnable = Runnable {
         if (fullShutdownKilling) return@Runnable
         val elapsed = SystemClock.uptimeMillis() - fullShutdownStartedMs
         if (speaker.isSpeakingNow && elapsed < FULL_SHUTDOWN_MAX_WAIT_MS) {

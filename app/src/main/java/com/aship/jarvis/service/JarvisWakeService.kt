@@ -1430,7 +1430,7 @@ class JarvisWakeService : Service() {
      * thread par chalta hai; [fullShutdownKill] kisi
      * bhi thread se surakshit hai।
      */
-    private val fullShutdownKillRunnable = Runnable {
+    private val fullShutdownKillRunnable: Runnable = Runnable {
         if (fullShutdownKilling || !fullShutdownPending) return@Runnable
         val elapsed = SystemClock.uptimeMillis() - fullShutdownStartedMs
         if (speaker.isSpeakingNow && elapsed < FULL_SHUTDOWN_MAX_WAIT_MS) {
