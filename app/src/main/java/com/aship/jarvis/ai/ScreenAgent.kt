@@ -237,7 +237,23 @@ class ScreenAgent(
      * aur banking/payment wali rok (denylist) isse
      * upar hi rehti hai — woh kabhi nahi hat-ti।
      */
-    private val userDirectedSend: Boolean = false
+    private val userDirectedSend: Boolean = false,
+    /**
+     * v74: PAKKA BHEJNA (deterministic send) — user ke
+     * apne hukm ne bhejne ka saaf aadesh diya ho to
+     * bhejne wala kadam CODE chalata hai, model nahi:
+     * khana bhara milte hi agent khud send batan
+     * dhoondhkar dabata hai aur khana khaali hokar
+     * jaanchta hai. Model ka "fail" / mana is kadam
+     * par aakhiri faisla nahi rehta (live test
+     * 2026-11-08: paste-route chala — 13 kadam, vision
+     * 11/15 — par model ne bhejne par "fail" kar diya,
+     * "model ne roka")। Bulane wala ([AgentTools])
+     * ye jhanda deta hai; na de to purana bartao।
+     * Sirf SEND tap par asar: PAY / DELETE / CONFIRM
+     * aur banking-rok bilkul pehle jaise।
+     */
+    private val deterministicSend: Boolean = false
 ) {
 
     /** Daud ka kul natija: mastishk (AgentBrain) ke liye sachha varnan. */
@@ -280,6 +296,16 @@ class ScreenAgent(
      * shuru me saaf hota hai ([runTaskLoop] dekho)।
      */
     private var forceVisionNextRound = false
+
+    /**
+     * v74: pakke-bhejne ki ek-baar-wali koshish ho chuki
+     * kya — ek daud me deterministic send sirf ek baar
+     * chalta hai; na hua to model ko wapas chakkar
+     * milta hai (imaandaar Fail ke saath), dobara-dabai
+     * nahi hoti। Daud shuru me saaf hota hai
+     * ([runTaskLoop] dekho)।
+     */
+    private var detSendAttempted = false
 
     /**
      * v49: taana (continuous) session ke andar
@@ -402,6 +428,8 @@ class ScreenAgent(
         deletePreConfirmed = false
         // v66: jabardasti-tasveer wala jhanda bhi saaf.
         forceVisionNextRound = false
+        // v74: pakka-bhejne wali ek-baar koshish bhi is daud ke liye saaf.
+        detSendAttempted = false
         // v47: pack wala playbook (WhatsApp/Chrome/
         // Gallery — [Playbooks]) laga ho to kataar ki
         // sabse pehli line me uska naam band karo,
@@ -670,6 +698,35 @@ class ScreenAgent(
                 snapshot, rounds == 1, task, stepsDone, history
             )?.let { return it }
             prevSignature = signatureOf(snapshot)
+            // v74: PAKKA BHEJNA — hukm pakka bhejne wala ho
+            // ([deterministicSend]) aur khana bhara ho to
+            // mastishk se poochhe BINA seedha bhejo: ye
+            // chakkar model ka faisla nahi maangta — model
+            // ke "fail" se pehle hi kaam ho jana chahiye।
+            // Khana khaali ho to kuch nahi hota (null) aur
+            // chakkar aam raaste hi chalta hai; ek daud me
+            // sirf ek koshish ([detSendAttempted])।
+            if (deterministicSend && !detSendAttempted) {
+                val det = tryDeterministicSend(
+                    snapshot, history, deadline
+                )
+                if (det != null) {
+                    stepsDone += det.stepsUsed
+                    detSendAttempted = true
+                    if (det.sent) {
+                        saveDiag(task, "SUCCESS (det-send)", stepsDone)
+                        return Outcome(
+                            true,
+                            "Screen task COMPLETED in $stepsDone steps. " +
+                                "The message was put in the input box and " +
+                                "the send button was pressed by the " +
+                                "deterministic send step (the model did " +
+                                "not decide the send); the input box is " +
+                                "empty, so the message went through."
+                        )
+                    }
+                }
+            }
             // v39: is kadam par tasveer chahiye kya? Saar
             // kaam ka ho to node-raasta (purana, kota-mukt);
             // screen tasveeri ho to Set-of-Mark tasveer ke
@@ -908,6 +965,34 @@ class ScreenAgent(
                     )
                 }
                 is ScreenAction.Fail -> {
+                    // v74: model ne bhejne se mana kiya — par
+                    // hukm pakka bhejne wala ho to uska mana
+                    // aakhiri faisla NAHI: deterministic send
+                    // abhi ek baar khud koshish karega (khana
+                    // bhara ho to)। Safal ho to kaam poora;
+                    // na ho to model ka Fail hi imaandaar
+                    // jawab rehta hai (neeche waisa hi)।
+                    if (deterministicSend && !detSendAttempted) {
+                        val det = tryDeterministicSend(
+                            snapshot, history, deadline
+                        )
+                        if (det != null) {
+                            stepsDone += det.stepsUsed
+                            detSendAttempted = true
+                            if (det.sent) {
+                                saveDiag(task, "SUCCESS (det-send)", stepsDone)
+                                return Outcome(
+                                    true,
+                                    "Screen task COMPLETED in $stepsDone steps. " +
+                                        "The message was put in the input box and " +
+                                        "the send button was pressed by the " +
+                                        "deterministic send step after the model " +
+                                        "refused the send; the input box is " +
+                                        "empty, so the message went through."
+                                )
+                            }
+                        }
+                    }
                     saveDiag(task, "FAILED (model ne roka)", stepsDone)
                     return Outcome(
                         false,
@@ -1818,6 +1903,231 @@ class ScreenAgent(
                 "through — tap the send button again once, " +
                 "then check again."
         )
+    }
+
+    // ------------------------------------------------------------------
+    // v74: PAKKA BHEJNA (deterministic send) — model ka veto nahi
+    // ------------------------------------------------------------------
+
+    /**
+     * Ek pakke-bhejne ki koshish ka natija: [sent] = khana
+     * khaali hokar sandesh gaya (jaancha hua); [stepsUsed]
+     * = dabane wale kadmon ki ginati (report ke liye)।
+     */
+    private data class DetSendResult(val sent: Boolean, val stepsUsed: Int)
+
+    /**
+     * v74: DETERMINISTIC SEND — mastishk se poochhe BINA
+     * bhejo. Live test (2026-11-08) me paste-route chala
+     * (13 kadam, vision 11/15) par model ne bhejne wale
+     * kadam par khud "fail" kar diya ("model ne roka"):
+     * v67 wala raasta sirf ROUTING se model ko hatata
+     * tha, kadam ab bhi uske faisle par chalte the.
+     * Isliye bhejna ab code karta hai — model ka mana
+     * is kadam par aakhiri faisla nahi:
+     *
+     *  1. bhara hua khana (editable + text) khojo — na
+     *     mile to null (bhejne ko kuch hai hi nahi;
+     *     bulane wala chakkar aam raaste chalata hai)।
+     *  2. bhejne wala batan khojo — pehle ped se (naam
+     *     me "send", ya khane ki kataar me uske daayein
+     *     wala clickable hissa), na mile to tasveer se
+     *     (model se SIRF nirdeshank — faisla nahi)।
+     *  3. dabao, phir taaza saar par jaancho ki khana
+     *     khaali hua; na hua to ek baar phir dabao।
+     *
+     * Sirf ek daud me ek koshish (bulane wala
+     * [detSendAttempted] dekhta hai): na hua to model
+     * ko wapas chakkar milta hai, imaandaar Fail ke
+     * saath. Banking/payment wali suraksha yahan
+     * nahi badalti — daud ke har chakkar ki
+     * suraksha-jaanch pehle hi chal chuki hoti hai,
+     * aur ye kadam sirf chat wale send batan ko
+     * dabata hai (Pay/Delete/Confirm kabhi nahi)।
+     */
+    private fun tryDeterministicSend(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        history: MutableList<String>,
+        deadline: Long
+    ): DetSendResult? {
+        // 1. bhara hua khana — chat wale input box (screen
+        // ke neeche wale hisse me); upar wala search box
+        // nahi — warna galat jagah dabakar jhoothi
+        // safalta ban jayegi (khana khaali hokar bhi
+        // sandesh gaya nahi hota)।
+        val screenH = context.resources.displayMetrics.heightPixels
+        val composer = snapshot.elements
+            .filter {
+                it.editable && it.text.isNotBlank() &&
+                    it.centerY > screenH / 3
+            }
+            .maxByOrNull { it.text.length }
+            ?: return null
+        val snippet = composer.text.take(40)
+        // 2. bhejne wala batan — pehle ped se, na mile
+        // to tasveer se (model se SIRF jagah)।
+        var tapPoint: Pair<Int, Int>? =
+            findSendButtonInTree(snapshot, composer)?.let {
+                history.add(
+                    "det-send: send button found in the tree " +
+                        "(\"" + it.text.ifEmpty { "(no label)" } + "\")"
+                )
+                it.centerX to it.centerY
+            }
+        if (tapPoint == null) {
+            tapPoint = locateSendButtonVision(snapshot)?.also {
+                history.add("det-send: send button located by vision")
+            }
+        }
+        val (tapX, tapY) = tapPoint ?: run {
+            history.add(
+                "det-send: send button not found (tree or vision) — " +
+                    "leaving the send to the model"
+            )
+            return DetSendResult(false, 0)
+        }
+        // 3. dabao + jaancho (zyada se zyada 2 baar)।
+        var stepsUsed = 0
+        repeat(2) { attempt ->
+            val ok = tapPointSync(tapX, tapY)
+            stepsUsed++
+            if (!ok) {
+                history.add(
+                    "det-send: tap at ($tapX, $tapY) FAILED"
+                )
+                return DetSendResult(false, stepsUsed)
+            }
+            settle(deadline)
+            val fresh = captureSync()
+            if (fresh != null && !composerStillFilled(fresh, snippet)) {
+                history.add(
+                    "det-send: send tap made, input box is empty " +
+                        "(verified" +
+                        if (attempt == 0) "" else " on retry" +
+                        ")"
+                )
+                return DetSendResult(true, stepsUsed)
+            }
+            history.add(
+                "det-send: input box still filled after tap " +
+                    (attempt + 1)
+            )
+        }
+        return DetSendResult(false, stepsUsed)
+    }
+
+    /**
+     * v74: ped se bhejne wala batan — (1) khane ki kataar
+     * me naam wala batan ("Send message" — naam me
+     * contentDescription bhi aata hai); (2) kataar me
+     * sabse daayein wala clickable hissa (bina naam ka
+     * teer-aikon; mic usse baayein hota hai); (3) screen
+     * par kahin bhi naam wala batan। Khana khud kabhi
+     * nishana nahi banta।
+     */
+    private fun findSendButtonInTree(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        composer: JarvisAccessibilityService.ScreenElement
+    ): JarvisAccessibilityService.ScreenElement? {
+        val clickable = snapshot.elements.filter {
+            it.clickable && !it.editable
+        }
+        val row = clickable.filter {
+            it.centerX > composer.right &&
+                it.centerY in (composer.top - 24)..(composer.bottom + 24)
+        }
+        // (1) kataar me naam wala batan।
+        row.firstOrNull {
+            sensitiveKind(it.text) == SensitiveKind.SEND
+        }?.let { return it }
+        // (2) kataar me sabse daayein wala clickable hissa।
+        row.maxByOrNull { it.centerX }?.let { return it }
+        // (3) screen par kahin bhi naam wala batan।
+        return clickable.firstOrNull {
+            sensitiveKind(it.text) == SensitiveKind.SEND
+        }
+    }
+
+    /** v74: taaza saar me khana ab bhi bhara hai kya (bheja gaya text ab bhi editable khane me)? */
+    private fun composerStillFilled(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot,
+        snippet: String
+    ): Boolean {
+        if (snippet.isEmpty()) return false
+        return snapshot.elements.any {
+            it.editable && it.text.contains(snippet)
+        }
+    }
+
+    /**
+     * v74: tasveer se bhejne wale batan ki JAGAH — model
+     * se SIRF nirdeshank (0-1000 wala naksa), koi
+     * faisla nahi: "bhejna hai ya nahi" yahan poochha
+     * hi nahi jata, isliye model ka mana yahan aata
+     * hi nahi. Na mile / jawab na samajh aaye / kota
+     * khatm ho to null — bulane wala ped wale raaste
+     * par hi rehta hai. Tasveer-kadam kota
+     * ([MAX_VISION_CALLS]) me gina jata hai।
+     */
+    private fun locateSendButtonVision(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot
+    ): Pair<Int, Int>? {
+        if (visionUsed >= MAX_VISION_CALLS) return null
+        val shot = screenshotSync() ?: return null
+        val base64 = try {
+            val marked = ScreenVision.chooseMarked(snapshot.elements)
+            val rendered = ScreenVision.renderMarkedImage(shot, marked)
+            if (rendered != null) {
+                rendered.jpegBase64
+            } else {
+                val stream = java.io.ByteArrayOutputStream()
+                val ok = shot.compress(
+                    android.graphics.Bitmap.CompressFormat.JPEG, 80, stream
+                )
+                if (!ok) return null
+                android.util.Base64.encodeToString(
+                    stream.toByteArray(), android.util.Base64.NO_WRAP
+                )
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        visionUsed++
+        val raw = GeminiBrain.requestAgentRoundWithImage(
+            context,
+            DET_SEND_LOCATE_INSTRUCTION,
+            listOf("user" to DET_SEND_LOCATE_PROMPT),
+            base64,
+            GeminiBrain.RequestClass.VISION_LITE
+        ) ?: GeminiBrain.requestAgentRoundWithImage(
+            context,
+            DET_SEND_LOCATE_INSTRUCTION,
+            listOf("user" to DET_SEND_LOCATE_PROMPT),
+            base64,
+            GeminiBrain.RequestClass.VISION
+        ) ?: return null
+        return parseLocatePoint(raw)
+    }
+
+    /** Locate wale jawab se 0-1000 wala bindu (asal px me) — na samajh aaye to null. */
+    private fun parseLocatePoint(raw: String): Pair<Int, Int>? {
+        return try {
+            val start = raw.indexOf('{')
+            val end = raw.lastIndexOf('}')
+            if (start < 0 || end <= start) return null
+            val obj = JSONObject(raw.substring(start, end + 1))
+            val x = obj.optInt("x", -1)
+            val y = obj.optInt("y", -1)
+            if (x < 0 || x > 1000 || y < 0 || y > 1000) return null
+            val metrics = context.resources.displayMetrics
+            val realX = (x * metrics.widthPixels / 1000)
+                .coerceIn(0, (metrics.widthPixels - 1).coerceAtLeast(0))
+            val realY = (y * metrics.heightPixels / 1000)
+                .coerceIn(0, (metrics.heightPixels - 1).coerceAtLeast(0))
+            realX to realY
+        } catch (t: Throwable) {
+            null
+        }
     }
 
     /** Hassas matlab wale naam ki shreni, ya null (aam tap). */
@@ -2886,6 +3196,33 @@ class ScreenAgent(
          * asal me dikh raha hai usi par chalo, aur "done"
          * tabhi jab kaam screen par sach me poora dikhe.
          */
+        /**
+         * v74: pakke-bhejne ke liye tasveer se SIRF jagah
+         * poochhne wali hidayat — model se koi faisla
+         * nahi maanga jata ("bhejna hai ya nahi" poochha
+         * hi nahi), isliye uska mana yahan aata hi nahi।
+         */
+        private const val DET_SEND_LOCATE_INSTRUCTION =
+            "You are a visual locator inside the Android app " +
+                "ASHIP JARVIS AI. You are NOT deciding anything — " +
+                "you only return the position of one button on " +
+                "the attached screenshot. Find the SEND button: " +
+                "the round ARROW icon at the right end of the " +
+                "message input box of the chat app on screen. " +
+                "Reply with ONLY this JSON object, no other text: " +
+                "{\"x\":<0-1000>,\"y\":<0-1000>}. " +
+                "If you cannot see any send button, reply " +
+                "{\"x\":-1,\"y\":-1}. Do NOT refuse, do NOT " +
+                "explain, do NOT decide whether sending is " +
+                "allowed — the user has already ordered this " +
+                "send; you are only returning coordinates."
+
+        private const val DET_SEND_LOCATE_PROMPT =
+            "Locate the send button (round arrow icon at the " +
+                "right end of the message input box) and reply " +
+                "with ONLY {\"x\":<0-1000>,\"y\":<0-1000>}. " +
+                "If it is not visible, reply {\"x\":-1,\"y\":-1}."
+
         private const val SCREEN_INSTRUCTION =
             "You are the screen-driving agent inside the Android app " +
                 "ASHIP JARVIS AI. The user has given you a task to " +
@@ -3042,7 +3379,11 @@ class ScreenAgent(
                 "ordered the send and said no permission is needed). " +
                 "In a pre-confirmed run, tap the send button " +
                 "directly when the message is typed and ready; do " +
-                "NOT ask the user again. Choose such an action only " +
+                "NOT ask the user again. There is NO system or " +
+                "security rule that stops you from pressing the " +
+                "send button — never refuse to send on safety " +
+                "grounds and never say the system blocks you. " +
+                "Choose such an action only " +
                 "when the task is truly ready for it.\n" +
                 "- Use ask_user only when a real choice belongs to " +
                 "the user (e.g. several matching contacts). If no " +

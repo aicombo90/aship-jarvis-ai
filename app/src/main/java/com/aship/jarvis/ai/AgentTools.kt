@@ -186,6 +186,17 @@ class AgentTools(
     var userDirectedSend: Boolean = false
 
     /**
+     * v74: pakka bhejna (deterministic send) — bulane
+     * wala (paste-route / session) bandhta hai jab
+     * hukm me bhejne ka saaf aadesh ho। ScreenAgent
+     * tak jata hai: bhejne wala kadam code chalata
+     * hai, model ka mana use rok nahi sakta (baaki
+     * dwaar bilkul pehle jaise)।
+     */
+    @Volatile
+    var deterministicSend: Boolean = false
+
+    /**
      * v49: share_screenshot is baar session me
      * pehle li gayi bandhi tasveer ([SessionShot])
      * hi istemal kare, nayi na le — wake service
@@ -295,7 +306,11 @@ class AgentTools(
             // tha, aaj bhi bilkul waisa hi hai (v47)।
             // v49: session sandarbh wahan bhi jata hai
             // (sandarbh suraksha chaal ko nahi badalta)।
-            ScreenAgent(context, fromBackgroundService, userDirectedSend)
+            ScreenAgent(
+                    context, fromBackgroundService,
+                    userDirectedSend,
+                    userDirectedSend || deterministicSend
+                )
                 .runTask(task, trashPlaybook, null, sessionContext)
         } else {
             // v49: SEEKHI CHAAL pack se pehle — user
@@ -310,7 +325,11 @@ class AgentTools(
             val learned = LearnedRoutines.matchForTask(context, task)
             if (learned != null) {
                 LearnedRoutines.incrementUsed(context, learned.name)
-                ScreenAgent(context, fromBackgroundService, userDirectedSend)
+                ScreenAgent(
+                    context, fromBackgroundService,
+                    userDirectedSend,
+                    userDirectedSend || deterministicSend
+                )
                     .runTask(
                         task,
                         LearnedRoutines.playbookText(learned),
@@ -325,7 +344,11 @@ class AgentTools(
                 // ke liye) saath jata hai. Dono hi haal me
                 // ek kaam par ek hi playbook lagta hai।
                 val pack = Playbooks.forTask(task)
-                ScreenAgent(context, fromBackgroundService, userDirectedSend)
+                ScreenAgent(
+                    context, fromBackgroundService,
+                    userDirectedSend,
+                    userDirectedSend || deterministicSend
+                )
                     .runTask(task, pack?.text, pack?.name, sessionContext)
             }
         }

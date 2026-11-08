@@ -154,6 +154,11 @@ object SessionCommands {
         "সেন্ড করে দাও", "সেন্ড করো", "সেন্ড করে",
         "পাঠিয়ে দাও", "পাঠিয়ে দিও", "পাঠিয়ে দে",
         "পাঠিয়ে", "পাঠাও",
+        // v74: sawal wali shakal ("আমি কেন সেন্ড বাটন
+        // প্রেস করব তুমি সেন্ড করে দেবে") bhi bhejne
+        // ka aadesh hi hai — baatchit wala mastishk
+        // is par bahana banata tha ("system security")।
+        "সেন্ড বাটন", "সেন্ড বোতাম",
         // Bangla (roman roop — recognizer kabhi ye bhi deta hai)
         "pathiye dao", "pathiye", "pathao",
         // Hindi

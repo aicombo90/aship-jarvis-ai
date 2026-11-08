@@ -1955,6 +1955,18 @@ class MainActivity : Activity() {
             runDirectPasteSendTask(commandText, pasteTask, vocativeLang)
             return
         }
+        // v74: sawal wali shakal me bhejne ka hukm ("তুমি
+        // সেন্ড করে দেবে" / "আমি কেন সেন্ড বাটন প্রেস
+        // করব") — app ka naam/text nahi hai, isliye
+        // paste-route nahi pakadta; baatchit wala
+        // mastishk is par bahana banata tha ("system
+        // security")। Ab ye bhi pakka screen_task hai:
+        // jo app khula hai usi me type hua text bhejna।
+        val questionSendTask = PasteSendIntent.extractQuestionSendTask(commandText)
+        if (questionSendTask != null) {
+            runDirectPasteSendTask(commandText, questionSendTask, vocativeLang)
+            return
+        }
         // v25: online brain uplabdh ho (mode Offline na ho,
         // key set ho, net chalu ho) to pehle AGENT — app ke
         // andar EK hi mastishk (user ka pakka design):
@@ -2306,6 +2318,10 @@ class MainActivity : Activity() {
             // v66: askAgentBrain wala hi niyam — hukm me saaf
             // bhejne ka aadesh ho to Send pehle-se-pusht।
             tools.userDirectedSend = SessionCommands.isSendInstruction(text)
+            // v74: pakka bhejna bhi usi aadesh se — send
+            // wala kadam ab code chalata hai, model ka
+            // mana use rok nahi sakta।
+            tools.deterministicSend = SessionCommands.isSendInstruction(text)
             val result = try {
                 tools.execute("screen_task", JSONObject().put("task", task))
             } catch (t: Throwable) {
@@ -2360,6 +2376,10 @@ class MainActivity : Activity() {
             // jhanda nahi lagta — paste hoga, bhejna tabhi
             // jab screen agent ko saaf aadesh mile।
             tools.userDirectedSend = SessionCommands.isSendInstruction(text)
+            // v74: pakka bhejna bhi usi aadesh se — send
+            // wala kadam ab code chalata hai, model ka
+            // mana use rok nahi sakta।
+            tools.deterministicSend = SessionCommands.isSendInstruction(text)
             val result = try {
                 tools.execute("screen_task", JSONObject().put("task", task))
             } catch (t: Throwable) {

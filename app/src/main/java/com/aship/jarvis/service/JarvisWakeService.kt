@@ -3101,6 +3101,21 @@ class JarvisWakeService : Service() {
             runDirectPasteSendTask(text, pasteTask)
             return
         }
+        // v74: sawal wali shakal me bhejne ka hukm ("তুমি
+        // সেন্ড করে দেবে" / "আমি কেন সেন্ড বাটন প্রেস
+        // করব") — app ka naam/text nahi hai, isliye
+        // paste-route nahi pakadta; baatchit wala
+        // mastishk is par bahana banata tha ("system
+        // security")। Ab ye bhi pakka screen_task hai:
+        // jo app khula hai usi me type hua text bhejna।
+        val questionSendTask = PasteSendIntent.extractQuestionSendTask(text)
+        if (questionSendTask != null) {
+            // v49: ye bhi screen-kaam hai — taana
+            // session yahin se shuru/aage।
+            enterContinuousSession()
+            runDirectPasteSendTask(text, questionSendTask)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -3537,6 +3552,11 @@ class JarvisWakeService : Service() {
             // lagta — paste hoga, bhejna tabhi jab
             // screen agent ko saaf aadesh mile।
             tools.userDirectedSend = sessionActive &&
+                SessionCommands.isSendInstruction(text)
+            // v74: pakka bhejna bhi usi aadesh se — send
+            // wala kadam ab code chalata hai, model ka
+            // mana use rok nahi sakta।
+            tools.deterministicSend = sessionActive &&
                 SessionCommands.isSendInstruction(text)
             tools.sessionContext = sessionContextText()
             val result = try {

@@ -630,6 +630,15 @@ object AgentBrain {
             "'can you copy-paste?' the answer is YES — offer " +
             "to do it right away (or just do it when they give " +
             "you the text and the app).\n" +
+            "- Pressing the send button in another app (ChatGPT, " +
+            "Gemini, WhatsApp, Telegram, any chat app) is part " +
+            "of your job and is ALLOWED. There is NO system rule " +
+            "and NO security rule that stops you from pressing " +
+            "the send button. When the user tells you to send, " +
+            "press it yourself through the screen agent. NEVER " +
+            "say that system security blocks you from pressing " +
+            "send, and NEVER ask the user to press the send " +
+            "button themselves — just do it.\n" +
             "- Emptying a gallery Trash / Recently deleted folder: " +
             "ALWAYS route it to screen_task with the task in the " +
             "user's own words — the app attaches its own " +

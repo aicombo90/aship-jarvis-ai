@@ -116,6 +116,51 @@ object PasteSendIntent {
         if (isPasteSendTask(rawText)) rawText.trim() else null
 
     /**
+     * v74: sawal wali shakal me bhejne ka hukm — "তুমি
+     * সেন্ড করে দেবে" / "আমি কেন সেন্ড বাটন প্রেস করব"।
+     * Na app ka naam hai, na bhejne wala text — isliye
+     * [isPasteSendTask] ise nahi pakadta aur baat
+     * baatchit wale mastishk tak jaakar wahan bahana
+     * banti thi ("system security")। Ab ye bhi pakka
+     * screen_task hai: jo app khula hai, usi me type
+     * hua text bhejna — deterministic send wala raasta।
+     */
+    private val QUESTION_SEND_MARKERS = listOf(
+        // Bangla (script)
+        "তুমি সেন্ড করে দেবে", "তুমি সেন্ড করবে",
+        "তুমি সেন্ড করে দাও", "তুমি সেন্ড করো",
+        "আমি কেন সেন্ড বাটন প্রেস করব",
+        "সেন্ড বাটন প্রেস করব", "সেন্ড বাটন প্রেস করো",
+        "তুমি পাঠিয়ে দেবে", "তুমি পাঠিয়ে দাও",
+        // Bangla (roman roop)
+        "tumi send kore debe", "tumi send korbe",
+        "tumi send koro",
+        // Hindi
+        "तुम सेंड कर दो", "तुम सेंड करो",
+        "तुम भेज दो"
+    )
+
+    /** Sawal wali shakal me bhejne ka hukm hai kya? */
+    fun isQuestionFormSend(rawText: String): Boolean {
+        if (rawText.isBlank()) return false
+        val lower = rawText.lowercase(Locale.ROOT)
+        return QUESTION_SEND_MARKERS.any { lower.contains(it) }
+    }
+
+    /**
+     * Sawal wale hukm ka screen-kaam — khule hue app me
+     * type hua text bhejna (kaam user ke shabdon me
+     * nahi, kyunki uske shabdon me app/text hai hi nahi;
+     * deterministic send khud khana + batan dhoondhta hai)।
+     */
+    fun extractQuestionSendTask(rawText: String): String? =
+        if (isQuestionFormSend(rawText)) QUESTION_SEND_TASK else null
+
+    private const val QUESTION_SEND_TASK =
+        "এখন যে চ্যাট অ্যাপটা খোলা আছে, তার ইনপুট বক্সে " +
+            "টাইপ করা লেখাটা সেন্ড করো — সেন্ড বাটন চাপো।"
+
+    /**
      * Seedhe chalaye gaye screen_task ka bola jaane
      * wala saar — hamesha sachha, user ki bhasha me:
      *  - screen agent ne apna saar khud diya ho
