@@ -27,6 +27,19 @@
          mana karne par jaanch vision/isChecked se, ya
          imaandaar "pata nahi" — jhootha SUCCESS kabhi nahi। -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- v73: mobile data SEEDHA system setting se badalne ke
+         liye — panel/tile/vision ka bharosa chhodo (vivo
+         SystemUI tile ko accessibility tree me dikhata hi
+         nahi; 08:48 ko combo ne galat tile — flashlight —
+         dabayi thi, data phir bhi ON raha)। Ye anumati
+         runtime par kabhi NAHI maangi jati (maangne se milti
+         hi nahi); computer se ek baar ADB se di jati hai:
+         adb shell pm grant com.aship.jarvis android.permission.WRITE_SECURE_SETTINGS
+         Manifest me likhna ZAROORI hai — bina ghoshna ke
+         pm grant kaam hi nahi karta (PackageManager
+         "Unknown permission" kehta hai)। Grant reboot aur
+         app update ke baad bhi rehta hai। -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <!-- Downloading the offline Vosk model; later also online AI -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v21 Phase 3: Gemini ko bulane se pehle net chalu hai ya

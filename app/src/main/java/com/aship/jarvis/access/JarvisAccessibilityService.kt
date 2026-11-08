@@ -1,5 +1,6 @@
 package com.aship.jarvis.access
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
@@ -12,6 +13,7 @@ import android.content.ComponentName
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.telephony.TelephonyManager
@@ -2056,9 +2058,62 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * v73: DECISIVE raasta — panel ko chhodo, data seedha system
+     * setting se badlo. Sirf tab jab WRITE_SECURE_SETTINGS ADB
+     * se ek baar di gayi ho; warna null (caller purana panel
+     * wala raasta chalata hai). Setting likhte hi badalti hai,
+     * radio ko 1-2 second lag sakta hai — isliye likhne ke baad
+     * asli haalat padhkar hi SUCCESS (v63/v64 imaandaari niyam);
+     * na badle to null — panel wala raasta apni pehle-wali
+     * haalat ki jaanch ke baad hi dabayega, isliye do-baar
+     * toggle ka khatra nahi. Sirf worker thread se bulana.
+     */
+    private fun runDirectToggle(turnOn: Boolean): DataResult? {
+        if (!hasDirectDataControl(this)) return null
+        toggleTrace.append("direct: permission hai; ")
+        // Pehle se chahi hui haalat — likhna hi nahi.
+        val current = readSystemDataState()
+        if (current != null && current == turnOn) {
+            pendingScanReport =
+                "OK direct: mobile_data=" + (if (turnOn) "on" else "off") + " (verified)"
+            return DataResult.SUCCESS
+        }
+        val written = try {
+            Settings.Global.putInt(
+                contentResolver, "mobile_data", if (turnOn) 1 else 0
+            )
+        } catch (t: Throwable) {
+            false
+        }
+        if (!written) {
+            // Anumati dikhi par likhna mana (ya likhna fail) —
+            // panel wala raasta aazmao.
+            toggleTrace.append("direct: write fail; ")
+            return null
+        }
+        // Likh diya — ab asli haalat padhkar pakka karo.
+        if (waitForDataState(turnOn, VERIFY_TIMEOUT_MS)) {
+            pendingScanReport =
+                "OK direct: mobile_data=" + (if (turnOn) "on" else "off") + " (verified)"
+            return DataResult.SUCCESS
+        }
+        // Radio peeche ho sakta hai — setting khud padhkar dekho:
+        // setting hi data ka switch hai, tile bhi yahi padhta hai.
+        if (readGlobalDataState() == turnOn) {
+            pendingScanReport =
+                "OK direct: mobile_data=" + (if (turnOn) "on" else "off") + " (setting verified)"
+            return DataResult.SUCCESS
+        }
+        toggleTrace.append("direct: likha par haalat nahi badli; ")
+        return null
+    }
+
     /** Asal kaam — sirf worker thread se bulana. */
     private fun runToggle(turnOn: Boolean): DataResult {
         toggleTrace.clear()
+        // v73: anumati hai to panel khole bina seedha setting se.
+        runDirectToggle(turnOn)?.let { return it }
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
             // Panel khula tha par text se tile nahi mila —
@@ -2137,6 +2192,16 @@ class JarvisAccessibilityService : AccessibilityService() {
     /** v18: asal ulta-karne wala kaam — sirf worker thread se bulana. */
     private fun runFlip(): DataOutcome {
         toggleTrace.clear()
+        // v73: anumati hai to seedha ultao — tile dabana hi nahi.
+        if (hasDirectDataControl(this)) {
+            val current = readSystemDataState() ?: readCurrentDataState()
+            if (current != null) {
+                val direct = runDirectToggle(!current)
+                if (direct == DataResult.SUCCESS) {
+                    return if (!current) DataOutcome.TURNED_ON else DataOutcome.TURNED_OFF
+                }
+            }
+        }
         val search = searchPanelTile()
         val foundTile = search.tile ?: run {
             // v57: text fail ho to vision wala raasta.
@@ -3288,6 +3353,25 @@ class JarvisAccessibilityService : AccessibilityService() {
         @Volatile
         var lastYouTubeTapReport: String? = null
             private set
+
+        /**
+         * v73: kya app ke paas WRITE_SECURE_SETTINGS hai (computer
+         * se ADB se ek baar di gayi anumati)? Hai to mobile data
+         * seedha system setting se badla ja sakta hai — panel,
+         * tile, vision kuch nahi chahiye. Nahi hai to purana
+         * panel wala raasta hi chalta hai. Ye anumati runtime
+         * par kabhi maangi NAHI jati (maangne se milti hi nahi)
+         * — sirf jaanchi jati hai.
+         */
+        fun hasDirectDataControl(context: Context): Boolean {
+            return try {
+                context.checkSelfPermission(
+                    Manifest.permission.WRITE_SECURE_SETTINGS
+                ) == PackageManager.PERMISSION_GRANTED
+            } catch (t: Throwable) {
+                false
+            }
+        }
 
         /**
          * Service chalu hai ya nahi. Pehle chalti hui instance

@@ -1434,12 +1434,20 @@ class MainActivity : Activity() {
         try {
             if (!::dataButtonStatusText.isInitialized) return
             if (dataButtonLearning) return
+            // v73: data kis raaste se badlega — seedha (ADB
+            // anumati mili) ya panel se (anumati nahi mili)।
+            val directLine =
+                if (JarvisAccessibilityService.hasDirectDataControl(this)) {
+                    "\n📶 ডেটা: সরাসরি ✓ (প্যানেল খুলতে হয় না)"
+                } else {
+                    "\n📶 ডেটা: প্যানেল দিয়ে — সরাসরি করতে কম্পিউটার থেকে একবার অনুমতি দিতে হয় (ধাপগুলো Jett দেবে)"
+                }
             if (DataButtonLearner.isLearned(this)) {
                 dataButtonStatusText.text =
-                    "✅ ডেটা বাটন শেখা হয়েছে — ${DataButtonLearner.summaryLine(this)}"
+                    "✅ ডেটা বাটন শেখা হয়েছে — ${DataButtonLearner.summaryLine(this)}$directLine"
             } else {
                 dataButtonStatusText.text =
-                    "ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।"
+                    "ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।$directLine"
             }
         } catch (t: Throwable) {
             // Status bonus hai — asal kaam kabhi na ruke.
