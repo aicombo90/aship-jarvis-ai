@@ -1,8 +1,13 @@
 package com.aship.jarvis.commands
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import com.aship.jarvis.prefs.AppPrefs
+import com.aship.jarvis.service.JarvisWakeService
 
 /**
  * v68: phone reboot ke baad reminder dobara lagana —
@@ -34,6 +39,29 @@ class BootReceiver : BroadcastReceiver() {
             if (context == null) return
             if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
             val ctx = context.applicationContext
+            // v80: boot par background sunna khud chalu — SIRF
+            // tab jab user ne "শাটডাউন" se band na kiya ho
+            // (wakeStoppedByShutdown jhanda dekho)। Ruka hua
+            // ho to kuch nahi — app kholna hi dobara chalu
+            // karega। Mic permission na ho to bhi kuch nahi।
+            // Reminder wala kaam neeche aam chalta hai —
+            // khaali reminder list wake start ko rokegi nahi
+            // (pehle wala jaldi-return ab wake ke baad hai)।
+            try {
+                val prefs = AppPrefs(ctx)
+                if (!prefs.wakeStoppedByShutdown &&
+                    ContextCompat.checkSelfPermission(
+                        ctx, Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    ContextCompat.startForegroundService(
+                        ctx, JarvisWakeService.startIntent(ctx)
+                    )
+                }
+            } catch (t: Throwable) {
+                // Boot par wake start na ho — app khulne par
+                // ensureWakeServiceRunning phir koshish karega।
+            }
             val all = ReminderCommands.loadAll(ctx)
             if (all.isEmpty()) return
             val now = System.currentTimeMillis()

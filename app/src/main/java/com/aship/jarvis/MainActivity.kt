@@ -68,6 +68,7 @@ import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PhoneLearner
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
+import com.aship.jarvis.commands.ScreenDescribeIntent
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
@@ -608,6 +609,10 @@ class MainActivity : Activity() {
         // In-app update: app khulne par ek baar chup-chaap check.
         // Fail ho to koi error nahi dikhta (silent by design).
         checkForUpdate(manual = false)
+
+        // v80: app khulte hi background sunna khud chalu —
+        // alag se WakeSetup kholna nahi hota।
+        ensureWakeServiceRunning()
     }
 
     override fun onResume() {
@@ -741,6 +746,11 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
         }
+        // v80: asli orb — hero orb + mic pill sirf sajawat
+        // nahi: tap karte hi wake service ka taana session
+        // khulta hai (bina wake naam ke), baatchit rukti nahi।
+        homeOrbView.setOnClickListener { orbTapToTalk() }
+        micStatusPill.setOnClickListener { orbTapToTalk() }
     }
 
     private fun openApiKeys() {
@@ -841,13 +851,19 @@ class MainActivity : Activity() {
         greetingText.text = "$greet, বস"
     }
 
-    /** Hero wali mic pill — sun raha ho ya band। */
+    /**
+     * Hero wali mic pill — sun raha ho ya band। v80: sirf
+     * saamne wala sunna nahi — background wake service
+     * chal rahi ho to bhi "শুনছি" (wake naam se), warna
+     * pill jhooth bolega ("মাইক বন্ধ" jabki Maya peeche
+     * sun rahi hai)। Dono band hon to hi "মাইক বন্ধ"।
+     */
     private fun refreshMicPill() {
         if (!::micStatusPill.isInitialized) return
-        micStatusPill.text = if (listening) {
-            "🎤 শুনছি — বলো, বস"
-        } else {
-            "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+        micStatusPill.text = when {
+            listening -> "🎤 শুনছি — বলো, বস"
+            JarvisWakeService.isRunning -> "🎤 ব্যাকগ্রাউন্ডে শুনছি — মায়া / তারা বলো"
+            else -> "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
         }
     }
 
@@ -1199,6 +1215,83 @@ class MainActivity : Activity() {
         return out
     }
 
+    /** v80: orb tap ke baad mic permission ka intezaar — mile to talk-now bhejo। */
+    private var orbTalkPending: Boolean = false
+
+    /**
+     * v80: asli orb — tap = seedha baat। Neeche wala mic
+     * button (toggleListening) ek-baari sunna hai; orb
+     * wake service ka TAANA session kholta hai (bina wake
+     * naam ke) — baatchit "আর কিছু?" ke saath chalti
+     * rehti hai, jab tak user "শাটডাউন" na bole। Sunna
+     * chal raha ho to tap use rokta hai (toggle jaisa)।
+     */
+    private fun orbTapToTalk() {
+        if (listening) {
+            engine?.stopListening()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            orbTalkPending = true
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            return
+        }
+        sendTalkNow()
+    }
+
+    private fun sendTalkNow() {
+        orbTalkPending = false
+        try {
+            // v80: shaksiyat saamne wali cascade ki pehli
+            // bhasha se — Bangla ho to Tara (bn-IN), warna
+            // Maya (hi-IN); wake-by-name wala hi niyam।
+            val persona = if (
+                CascadeOrder.firstLanguage(lastForegroundPersona(), prefs.listenLanguage) == "bn-IN"
+            ) {
+                Persona.TARA
+            } else {
+                Persona.MAYA
+            }
+            startForegroundService(
+                JarvisWakeService.talkNowIntent(this, persona.name)
+            )
+        } catch (t: Throwable) {
+            Toast.makeText(
+                this,
+                "মায়াকে চালু করতে পারলাম না — আবার চেষ্টা করো।",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        responseText.text = "Maya: শুনছি, বস — বলো।"
+    }
+
+    /**
+     * v80: app khulte hi background sunna khud chalu —
+     * alag se WakeSetup kholna nahi hota। "শাটডাউন" ke
+     * baad khola ho to ruka hua jhanda saaf karke phir
+     * chalu (v75 wala niyam — kholna hi dobara chalu
+     * karna hai)। Mic permission na ho to chup-chaap
+     * kuch nahi — orb tap par permission maangi jayegi।
+     */
+    private fun ensureWakeServiceRunning() {
+        if (JarvisWakeService.isRunning) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        try {
+            prefs.wakeStoppedByShutdown = false
+            startForegroundService(JarvisWakeService.startIntent(this))
+        } catch (t: Throwable) {
+            // Service shuru na ho — app aam chalega; orb
+            // tap par phir koshish hogi।
+        }
+    }
+
     private fun toggleListening() {
         if (listening) {
             engine?.stopListening()
@@ -1293,8 +1386,15 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_RECORD_AUDIO) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startListening()
+                // v80: orb tap ke liye maanga gaya ho to
+                // taana session kholo, warna aam sunna।
+                if (orbTalkPending) {
+                    sendTalkNow()
+                } else {
+                    startListening()
+                }
             } else {
+                orbTalkPending = false
                 Toast.makeText(
                     this,
                     "Mic permission ke bina voice command nahi chalega.",
@@ -1935,6 +2035,7 @@ class MainActivity : Activity() {
         }
         try {
             prefs.markWakeServiceStoppedSync()
+            prefs.markWakeStoppedByShutdownSync()
         } catch (t: Throwable) {
             // Flag bonus hai — marna asal hai.
         }
@@ -2342,6 +2443,16 @@ class MainActivity : Activity() {
         val imageKind = ImageIntent.classify(commandText)
         if (imageKind != null) {
             runDirectImageGen(commandText, imageKind, vocativeLang)
+            return
+        }
+        // v80: SCREEN BATAO — "এই স্ক্রিনে কী আছে / স্ক্রিনটা
+        // দেখে বলো" — WebSearchIntent se PEHLE (v79 ka code
+        // chhua nahi): "what is on my screen" me "what is"
+        // wala strong marker hai, web wali jaanch use khoj
+        // samajhkar nigal leti — isliye describe pehle।
+        // Bangla chinhon se web khoj kabhi takrati nahi।
+        if (ScreenDescribeIntent.isDescribeTask(commandText)) {
+            runDirectScreenDescribe(commandText, vocativeLang)
             return
         }
         // v79: LIVE KHOJ + KHOBOR — "X কী / X সম্পর্কে বলো /
@@ -2806,6 +2917,29 @@ class MainActivity : Activity() {
      * wali screen — OverlayLauncher sirf background
      * raaste ke liye hai)।
      */
+    /**
+     * v80: screen-describe runner — vision + ped, background
+     * thread par; jawab foreground speaker se (runDirectShowMe
+     * wala hi pattern)। "দেখতে পেলাম না" bhi yahin se bolta
+     * hai — kabhi andaze se barnan nahi।
+     */
+    private fun runDirectScreenDescribe(
+        text: String,
+        vocativeLang: PlayIntent.SpokenLang?
+    ) {
+        val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
+        responseText.text = "Maya: ${ScreenDescribeIntent.thinkingLine(lang)}"
+        background.execute {
+            val line = ScreenDescribeIntent.describeSync(this, lang)
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                responseText.text = "Maya: $line"
+                speaker.speak(line)
+            }
+        }
+    }
+
     private fun runDirectShowMe(
         text: String,
         kind: ShowMeIntent.Kind,
@@ -3359,11 +3493,17 @@ class MainActivity : Activity() {
     private val wakeRefreshRunnable = object : Runnable {
         override fun run() {
             refreshDiagLines()
+            // v80: mic pill bhi har 2 s taaza — service
+            // chalu/band hote hi pill sach bole।
+            refreshMicPill()
             // v77: home orb — Maya bol rahi ho to tez bahav
             // (SPEAKING), warna sunne wala (LISTENING)।
+            // v80: service ka TTS bhi yahin — orb session
+            // me jawab service bolti hai, saamne wala
+            // speaker nahi (serviceSpeaking dekho)।
             if (::homeOrbView.isInitialized) {
                 homeOrbView.setMode(
-                    if (speaker.isSpeakingNow) OrbView.Mode.SPEAKING
+                    if (speaker.isSpeakingNow || JarvisWakeService.serviceSpeaking) OrbView.Mode.SPEAKING
                     else OrbView.Mode.LISTENING
                 )
             }

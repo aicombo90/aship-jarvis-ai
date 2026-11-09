@@ -70,6 +70,27 @@ class AppPrefs(context: Context) {
         prefs.edit().putBoolean(KEY_WAKE_SERVICE_RUNNING, false).commit()
     }
 
+    /**
+     * v80: "শাটডাউন" ke baad ka jhanda — BOOT par aur app
+     * khulne par wake service khud chalu hone se pehle ye
+     * dekha jata hai। App khulte hi saaf hota hai (dobara
+     * kholna hi dobara chalu karna hai); v75 wala
+     * full-shutdown is jhande ko sync likhta hai, taaki
+     * kill se pehle disk tak pahunch jaye। Sirf is jhande
+     * se faisla hota hai — wakeServiceRunning se nahi
+     * (woh service kabhi chali hi na ho to bhi false
+     * hota hai)।
+     */
+    var wakeStoppedByShutdown: Boolean
+        get() = prefs.getBoolean(KEY_WAKE_STOPPED_BY_SHUTDOWN, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_WAKE_STOPPED_BY_SHUTDOWN, value).apply()
+        }
+
+    fun markWakeStoppedByShutdownSync() {
+        prefs.edit().putBoolean(KEY_WAKE_STOPPED_BY_SHUTDOWN, true).commit()
+    }
+
     /** v1.7 diagnostics: latest non-blank final text heard by the wake recognizer. */
     var lastHeardText: String
         get() = prefs.getString(KEY_LAST_HEARD_TEXT, "") ?: ""
@@ -160,6 +181,7 @@ class AppPrefs(context: Context) {
         private const val KEY_LISTEN_LANGUAGE = "listen_language"
         private const val KEY_WAKE_HITS = "wake_hits"
         private const val KEY_WAKE_SERVICE_RUNNING = "wake_service_running"
+        private const val KEY_WAKE_STOPPED_BY_SHUTDOWN = "wake_stopped_by_shutdown"
         private const val KEY_LAST_HEARD_TEXT = "last_heard_text"
         private const val KEY_LAST_HEARD_PARTIAL_TEXT = "last_heard_partial_text"
         private const val KEY_LAST_HEARD_AT_MS = "last_heard_at_ms"

@@ -242,6 +242,9 @@ abstract class WakeSetupActivity : Activity() {
 
     private fun startWakeServiceNow() {
         try {
+            // v80: user ne khud chalu kiya — "শাটডাউন" wala
+            // ruka jhanda saaf (boot par phir khud chalega)।
+            prefs.wakeStoppedByShutdown = false
             startForegroundService(JarvisWakeService.startIntent(this))
         } catch (e: Exception) {
             Toast.makeText(
