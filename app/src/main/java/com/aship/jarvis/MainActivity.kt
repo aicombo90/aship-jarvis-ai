@@ -68,7 +68,6 @@ import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PhoneLearner
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
-import com.aship.jarvis.commands.ScreenDescribeIntent
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
@@ -749,9 +748,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
         }
-        // v80: asli orb — hero orb + mic pill sirf sajawat
-        // nahi: tap karte hi wake service ka taana session
-        // khulta hai (bina wake naam ke), baatchit rukti nahi।
+        // v82: orb = POWER BUTTON — tap = Maya chalu/band।
         homeOrbView.setOnClickListener { orbPowerToggle() }
         micStatusPill.setOnClickListener { orbPowerToggle() }
     }
@@ -854,20 +851,13 @@ class MainActivity : Activity() {
         greetingText.text = "$greet, বস"
     }
 
-    /**
-     * v82: orb = POWER BUTTON (user ki marzi, 2026-11-09) —
-     * orb tap se Maya chalu/band, ek baar chalu to chalu
-     * hi rehti hai (boot par bhi wapas aati hai)। App
-     * khulte hi auto-start NAHI (v80 wala launch crash,
-     * v81 se band) — power sirf orb tap se।
-     * Mic pill bhi sach bolti hai: chalu/band saaf।
-     */
+    /** Hero wali mic pill — sun raha ho ya band। */
     private fun refreshMicPill() {
         if (!::micStatusPill.isInitialized) return
-        micStatusPill.text = when {
-            listening -> "🎤 শুনছি — বলো, বস"
-            JarvisWakeService.isRunning -> "🎤 মায়া চালু আছে — বলো, বস"
-            else -> "🎤 মায়া বন্ধ — অর্বে হাত দাও"
+        micStatusPill.text = if (listening) {
+            "🎤 শুনছি — বলো, বস"
+        } else {
+            "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
         }
     }
 
@@ -879,14 +869,16 @@ class MainActivity : Activity() {
      * Kabhi ON dikhakar jhooth nahi — service band ho to
      * orb bhi band dikhega। onResume + har 2 s (runnable)
      * + power toggle ke baad chalta hai।
+     * v83: service wala TTS flag hata — sirf foreground speaker
+     * dekho (v79 jaisa); pill ka chalu/band bhi yahin
+     * likha jata hai (refreshMicPill v79 wapas)।
      */
     private fun refreshOrbPowerState() {
         if (!::homeOrbView.isInitialized) return
         val on = JarvisWakeService.isRunning
         homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
         if (on) {
-            val speaking = (::speaker.isInitialized && speaker.isSpeakingNow) ||
-                JarvisWakeService.serviceSpeaking
+            val speaking = ::speaker.isInitialized && speaker.isSpeakingNow
             homeOrbView.setMode(
                 if (speaking) OrbView.Mode.SPEAKING else OrbView.Mode.LISTENING
             )
@@ -894,7 +886,13 @@ class MainActivity : Activity() {
         } else {
             homeOrbView.stopAnimations()
         }
-        refreshMicPill()
+        if (::micStatusPill.isInitialized) {
+            micStatusPill.text = when {
+                listening -> "🎤 শুনছি — বলো, বস"
+                on -> "🎤 মায়া চালু আছে — বলো, বস"
+                else -> "🎤 মায়া বন্ধ — অর্বে হাত দাও"
+            }
+        }
     }
 
     /** Cache wala mausam turant dikhao (net ka intezaar nahi)। */
@@ -2462,16 +2460,6 @@ class MainActivity : Activity() {
             runDirectImageGen(commandText, imageKind, vocativeLang)
             return
         }
-        // v80: SCREEN BATAO — "এই স্ক্রিনে কী আছে / স্ক্রিনটা
-        // দেখে বলো" — WebSearchIntent se PEHLE (v79 ka code
-        // chhua nahi): "what is on my screen" me "what is"
-        // wala strong marker hai, web wali jaanch use khoj
-        // samajhkar nigal leti — isliye describe pehle।
-        // Bangla chinhon se web khoj kabhi takrati nahi।
-        if (ScreenDescribeIntent.isDescribeTask(commandText)) {
-            runDirectScreenDescribe(commandText, vocativeLang)
-            return
-        }
         // v79: LIVE KHOJ + KHOBOR — "X কী / X সম্পর্কে বলো /
         // X-এর দাম কত / X কবে / X কোথায়" (taaza web se
         // dhoondhkar pehle natije bolna), "আজকের খবর বলো"
@@ -2934,29 +2922,6 @@ class MainActivity : Activity() {
      * wali screen — OverlayLauncher sirf background
      * raaste ke liye hai)।
      */
-    /**
-     * v80: screen-describe runner — vision + ped, background
-     * thread par; jawab foreground speaker se (runDirectShowMe
-     * wala hi pattern)। "দেখতে পেলাম না" bhi yahin se bolta
-     * hai — kabhi andaze se barnan nahi।
-     */
-    private fun runDirectScreenDescribe(
-        text: String,
-        vocativeLang: PlayIntent.SpokenLang?
-    ) {
-        val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
-        responseText.text = "Maya: ${ScreenDescribeIntent.thinkingLine(lang)}"
-        background.execute {
-            val line = ScreenDescribeIntent.describeSync(this, lang)
-            mainHandler.post {
-                if (isFinishing || isDestroyed) return@post
-                politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $line"
-                speaker.speak(line)
-            }
-        }
-    }
-
     private fun runDirectShowMe(
         text: String,
         kind: ShowMeIntent.Kind,

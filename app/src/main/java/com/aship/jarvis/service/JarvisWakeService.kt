@@ -55,7 +55,6 @@ import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
-import com.aship.jarvis.commands.ScreenDescribeIntent
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
@@ -545,18 +544,6 @@ class JarvisWakeService : Service() {
     @Volatile
     private var sessionPersona: Persona = Persona.MAYA
 
-    /**
-     * v80: orb tap ka talk-now — model load hote hue aaya
-     * ho to ye jhanda startWakeSession me kholega; shaksiyat
-     * ka naam intent se aata hai (MainActivity cascade ki
-     * pehli bhasha se — Bangla ho to TARA)।
-     */
-    @Volatile
-    private var talkNowPending: Boolean = false
-
-    @Volatile
-    private var talkNowPersonaName: String? = null
-
     @Volatile
     private var pendingEndReason: String = SESSION_END_COMPLETED
 
@@ -685,24 +672,6 @@ class JarvisWakeService : Service() {
                 }
                 return START_NOT_STICKY
             }
-            ACTION_TALK_NOW -> {
-                // v80: orb tap — bina wake naam ke seedha
-                // baat। Shaksiyat intent ke saath aati hai
-                // (MainActivity cascade ki pehli bhasha se)।
-                // Service chal rahi ho to taana session abhi
-                // kholo; band ho to neeche wala aam start-path
-                // chalega aur model load hote hi startWakeSession
-                // talk-now kholega (talkNowPending dekho)।
-                // Yahan return NAHI — neeche wala start-path
-                // hi faisla karega ki load karna hai ya nahi।
-                talkNowPersonaName = intent?.getStringExtra(EXTRA_TALK_PERSONA)
-                sessionPersona =
-                    if (talkNowPersonaName == "TARA") Persona.TARA else Persona.MAYA
-                talkNowPending = true
-                if (state != State.STOPPED) {
-                    executor.execute { openTalkNowSession() }
-                }
-            }
         }
         if (state != State.STOPPED) {
             // Already running: a second START changes nothing.
@@ -714,8 +683,6 @@ class JarvisWakeService : Service() {
         setStatus("Model load ho raha hai...")
         startForegroundWith(buildNotification("Model load ho raha hai..."))
         executor.execute { loadModelAndStartWake() }
-        // v80: home orb ke liye TTS haalat taaza rakho।
-        mainHandler.post(speakStateRunnable)
         return START_NOT_STICKY
     }
 
@@ -863,11 +830,6 @@ class JarvisWakeService : Service() {
             // instead of restarting forever.
             setStatus("Sun raha hoon — 'Jarvis' boliye")
             updateNotification("Jarvis sun raha hai — 'Jarvis' boliye")
-            // v80: orb tap ka talk-now model load hote hue
-            // aaya ho to ab kholo (WAKE chal pada hai)।
-            if (talkNowPending) {
-                openTalkNowSession()
-            }
         } catch (t: Throwable) {
             handleWakeError()
         }
@@ -1329,61 +1291,6 @@ class JarvisWakeService : Service() {
         SessionShot.clear()
         disarmSessionIdle()
         mainHandler.removeCallbacks(sessionReopenRunnable)
-    }
-
-    /**
-     * v80: orb tap — bina wake naam ke seedha baat।
-     * WAKE ho to taana session kholo + command khidki;
-     * baatchit pehle se chal rahi ho (ACK/COMMAND/REPLY)
-     * to use taana banao; model abhi load ho raha ho to
-     * jhanda laga rehne do — startWakeSession load hote
-     * hi kholega। Sirf executor thread se bulao।
-     */
-    private fun openTalkNowSession() {
-        if (destroyed) return
-        if (state == State.LOADING || state == State.STOPPED) {
-            talkNowPending = true
-            return
-        }
-        talkNowPending = false
-        if (wakePaused) {
-            resumeWakeListening()
-        }
-        when (state) {
-            State.WAKE -> {
-                enterContinuousSession()
-                startCommandSession()
-            }
-            State.ACK, State.COMMAND, State.REPLY -> {
-                // Baatchit pehle se chal rahi hai — use
-                // taana banao (agle jawab ke baad "আর কিছু?"
-                // aayega)।
-                enterContinuousSession()
-            }
-            else -> {
-                // LOADING/STOPPED upar hi sambhale।
-            }
-        }
-    }
-
-    /**
-     * v80: home orb ko sachha SPEAKING dikhane ke liye —
-     * service ka TTS bol raha hai ya nahi, har 500 ms
-     * taaza (companion wala serviceSpeaking; MainActivity
-     * wakeRefreshRunnable padhta hai)। Runnable ka
-     * initializer khud ko refer NAHI karta (v75 wala
-     * recursive-type jaal) — kaam pollSpeakState me hai।
-     */
-    private val speakStateRunnable: Runnable = Runnable { pollSpeakState() }
-
-    private fun pollSpeakState() {
-        if (destroyed) return
-        try {
-            serviceSpeaking = if (::speaker.isInitialized) speaker.isSpeakingNow else false
-        } catch (t: Throwable) {
-            serviceSpeaking = false
-        }
-        mainHandler.postDelayed(speakStateRunnable, 500)
     }
 
     /**
@@ -3393,18 +3300,6 @@ class JarvisWakeService : Service() {
             runDirectImageGen(text, imageKind)
             return
         }
-        // v80: SCREEN BATAO — "এই স্ক্রিনে কী আছে / স্ক্রিনটা
-        // দেখে বলো" — WebSearchIntent se PEHLE (v79 ka code
-        // chhua nahi): "what is on my screen" me "what is"
-        // wala strong marker hai, web wali jaanch use khoj
-        // samajhkar nigal leti — isliye describe pehle।
-        // Ye bhi screen-kaam hai — taana session yahin se
-        // shuru/aage।
-        if (ScreenDescribeIntent.isDescribeTask(text)) {
-            enterContinuousSession()
-            runDirectScreenDescribe(text)
-            return
-        }
         // v79: LIVE KHOJ + KHOBOR — "X কী / X সম্পর্কে বলো /
         // X-এর দাম কত / X কবে / X কোথায়" (taaza web se
         // dhoondhkar pehle natije bolna), "আজকের খবর বলো"
@@ -3871,36 +3766,6 @@ class JarvisWakeService : Service() {
         executor.execute {
             if (destroyed || state != State.REPLY) return@execute
             setStatus("Seedha jawab mila — bol rahi hoon")
-            updateNotification("Jarvis jawab de raha hai...")
-            pendingEndReason = SESSION_END_COMPLETED
-            noteSessionOutcome(userText, line)
-            lightScreenOnWake()
-            speaker.speak(line)
-            armReplyFallback(line)
-            orbOverlay.setReply(line)
-        }
-    }
-
-    /**
-     * v80: screen-describe — vision (ScreenshotStore +
-     * Gemini) ya ped ki likhai; blocking kaam alag thread
-     * par, jawab REPLY wala raasta (speakDescribeLine)।
-     */
-    private fun runDirectScreenDescribe(text: String) {
-        val lang = personaSpokenLang()
-        setStatus("Screen dekh raha hoon...")
-        updateNotification("Screen dekh raha hoon...")
-        Thread {
-            val line = ScreenDescribeIntent.describeSync(applicationContext, lang)
-            speakDescribeLine(line, text)
-        }.start()
-    }
-
-    /** v80: describe wala jawab — speakShowLine wala hi bandobast। */
-    private fun speakDescribeLine(line: String, userText: String) {
-        executor.execute {
-            if (destroyed || state != State.REPLY) return@execute
-            setStatus("Screen ka jawab — bol raha hoon")
             updateNotification("Jarvis jawab de raha hai...")
             pendingEndReason = SESSION_END_COMPLETED
             noteSessionOutcome(userText, line)
@@ -5109,10 +4974,6 @@ class JarvisWakeService : Service() {
         const val ACTION_PAUSE_WAKE = "com.aship.jarvis.action.WAKE_PAUSE"
         const val ACTION_RESUME_WAKE = "com.aship.jarvis.action.WAKE_RESUME"
 
-        /** v80: orb tap — bina wake naam ke seedha baat (taana session)। */
-        const val ACTION_TALK_NOW = "com.aship.jarvis.action.WAKE_TALK_NOW"
-        const val EXTRA_TALK_PERSONA = "talk_persona"
-
         /** v51 (item 6a): saamne wali screen mic lene se pehle bheja jaane wala "mic chhodo" sanket। */
         const val ACTION_YIELD_MIC = "com.aship.jarvis.action.WAKE_YIELD_MIC"
 
@@ -5352,24 +5213,8 @@ class JarvisWakeService : Service() {
         var statusMessage: String = "Band hai"
             private set
 
-        /**
-         * v80: service ka TTS abhi bol raha hai ya nahi — home
-         * orb ko sachha SPEAKING dikhane ke liye (MainActivity
-         * wakeRefreshRunnable har 2 s padhta hai; service
-         * andar har 500 ms taaza karta hai)।
-         */
-        @Volatile
-        var serviceSpeaking: Boolean = false
-            private set
-
         fun startIntent(context: Context): Intent =
             Intent(context, JarvisWakeService::class.java).setAction(ACTION_START)
-
-        /** v80: orb tap wala intent — shaksiyat ka naam ("MAYA"/"TARA") saath। */
-        fun talkNowIntent(context: Context, personaName: String): Intent =
-            Intent(context, JarvisWakeService::class.java)
-                .setAction(ACTION_TALK_NOW)
-                .putExtra(EXTRA_TALK_PERSONA, personaName)
 
         fun stopIntent(context: Context): Intent =
             Intent(context, JarvisWakeService::class.java).setAction(ACTION_STOP)
