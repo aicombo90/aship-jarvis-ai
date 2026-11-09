@@ -67,13 +67,11 @@ import kotlin.math.sqrt
  *  - ON hone par bahav tez (~12 s ka chakra) taaki dekhte hi
  *    pata chale chalu hai; OFF par harkat band + dhunda (alpha)।
  *
- * v86: ON hone par gole ke upar GHOOMTA KANA-GOLA (particle
- * sphere) — video (bawal_techh OpenJarvis HUD) jaisa: 160 bindu
- * gole ki satah par, khade aksh ke chaaron taraf ghoomte hue
- * (~6 s me ek chakkar), aage wale ujle/bade, peeche wale
- * dhundhle — dekhte hi saaf pata chale chalu hai; OFF par
- * bilkul nahi (normal still ball)। SPEAKING me bindu halke
- * dhadakte hain।
+ * v87: hero orb ab 320dp — poora box bhar kar (video ke HUD
+ * globe jaisa bada); kana-gola aur ghana/bada (bindu bade,
+ * gola 0.95r) taaki ON hone par wahi sabse pehle dikhe।
+ * Chhota neeche wala ball (wake service ka overlay orb, 148dp)
+ * waisa hi hai — uska animator alag chalta hai।
  *
  * Do framework animator hi saari harkat karte hain:
  *  - "saans" (breathing): roshni/aabha ki chamak dheere badhti-
@@ -634,7 +632,9 @@ class OrbView(context: Context) : View(context) {
         val sinR = sin(rot)
         // SPEAKING me bindu dhadakte hain (waveform jaisa pulse)।
         val pulse = if (speaking) 1f + 0.18f * sin(ph * twoPi * 6f) else 1f
-        val pr = radius * 0.92f
+        // v87: kana-gola gole ko lagbhag poora bhare + bindu bade,
+        // taaki bade hero orb par HUD globe jaisa saaf dikhe।
+        val pr = radius * 0.95f
         for (i in 0 until PARTICLE_COUNT) {
             val x = particleX[i]
             val y = particleY[i]
@@ -645,7 +645,7 @@ class OrbView(context: Context) : View(context) {
             // Gehrai: aage (+1) ujla/bada, peeche (-1) dhundhla/chhota।
             val depth = (zr + 1f) / 2f
             val alpha = (50f + 205f * depth).toInt().coerceIn(0, 255)
-            val dotR = (radius * 0.02f * (0.55f + 0.65f * depth) * pulse)
+            val dotR = (radius * 0.026f * (0.55f + 0.65f * depth) * pulse)
                 .coerceAtLeast(0.6f)
             particlePaint.color = Color.rgb(190, 242, 255)
             particlePaint.alpha = alpha

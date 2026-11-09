@@ -749,9 +749,9 @@ class MainActivity : Activity() {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
         findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
-        // v86: beech me mic NAHI — chhota POWER button (vector icon + label),
+        // v87: POWER button ab hero box ke ANDAR hai (nav me NAHI) —
         // orb ki tarah hi toggle।
-        findViewById<ImageView>(R.id.navPowerButton)?.setOnClickListener { orbPowerToggle() }
+        findViewById<ImageView>(R.id.heroPowerButton)?.setOnClickListener { orbPowerToggle() }
         findViewById<TextView>(R.id.navSettingsButton).setOnClickListener { openApiKeys() }
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -922,22 +922,19 @@ class MainActivity : Activity() {
                 else -> "🎤 মায়া বন্ধ — পাওয়ার চাপো"
             }
         }
-        // v86: neeche wala chhota POWER button bhi haalat dikhaye —
-        // vector icon + "পাওয়ার" label; OFF me bhi saaf dikhe
-        // (ujla icon + halka kinara + alpha 1), ON me hara।
-        findViewById<ImageView>(R.id.navPowerButton)?.let { btn ->
+        // v87: hero box ke ANDAR wala POWER button bhi haalat dikhaye —
+        // gol button + "পাওয়ার" label; ON = NEELA, OFF = LAAL,
+        // taaki ek nazar me saaf pata chale chalu hai ya band।
+        findViewById<ImageView>(R.id.heroPowerButton)?.let { btn ->
             btn.setBackgroundResource(
-                if (on) R.drawable.power_fab_on_bg else R.drawable.power_fab_bg
+                if (on) R.drawable.power_hero_on_bg else R.drawable.power_hero_off_bg
             )
-            btn.setColorFilter(
-                if (on) android.graphics.Color.rgb(187, 247, 208)
-                else android.graphics.Color.rgb(241, 245, 249)
-            )
+            btn.setColorFilter(android.graphics.Color.WHITE)
             btn.alpha = 1f
         }
-        findViewById<TextView>(R.id.navPowerLabel)?.setTextColor(
-            if (on) android.graphics.Color.rgb(187, 247, 208)
-            else android.graphics.Color.rgb(199, 206, 234)
+        findViewById<TextView>(R.id.heroPowerLabel)?.setTextColor(
+            if (on) android.graphics.Color.rgb(191, 219, 254)
+            else android.graphics.Color.rgb(254, 202, 202)
         )
     }
 

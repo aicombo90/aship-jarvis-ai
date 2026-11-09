@@ -120,36 +120,6 @@
             android:textColor="#C7CEEA"
             android:textSize="11sp" />
 
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <!-- v86: beech me mic NAHI — chhota POWER button (tap = chalu, phir tap = band)।
-                 ⏻ TEXT glyph ki jagah vector icon + "পাওয়ার" label, taaki koi bhi
-                 device par saaf dikhe aur dhoondhna na pade। -->
-            <ImageView
-                android:id="@+id/navPowerButton"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="@drawable/power_fab_bg"
-                android:clickable="true"
-                android:contentDescription="পাওয়ার"
-                android:focusable="true"
-                android:padding="8dp"
-                android:src="@drawable/ic_power"
-                android:tint="#F1F5F9" />
-            <TextView
-                android:id="@+id/navPowerLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="পাওয়ার"
-                android:textColor="#C7CEEA"
-                android:textSize="11sp" />
-        </LinearLayout>
-
         <TextView
             android:id="@+id/navSettingsButton"
             android:layout_width="0dp"
@@ -192,10 +162,11 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <!-- Hero: orb + mic pill + hint — v82: orb ab
-                 200dp aur screen ke beech ki taraf
-                 (minHeight + gravity center); orb hi power
-                 button hai (tap = Maya chalu/band)। -->
+            <!-- Hero: orb + mic pill + hint + power — v87: orb ab
+                 320dp (poora box bhar kar, video ke HUD globe
+                 jaisa bada); POWER button ab box ke ANDAR neeche
+                 (neeche wale nav me NAHI) — ON = neela, OFF = laal।
+                 Orb par tap bhi power toggle hi hai। -->
             <LinearLayout
                 android:id="@+id/heroCard"
                 android:layout_width="match_parent"
@@ -209,8 +180,8 @@
 
                 <com.aship.jarvis.service.OrbView
                     android:id="@+id/homeOrbView"
-                    android:layout_width="200dp"
-                    android:layout_height="200dp"
+                    android:layout_width="320dp"
+                    android:layout_height="320dp"
                     android:layout_gravity="center_horizontal" />
 
                 <TextView
@@ -237,6 +208,40 @@
                     android:text="বলুন — যেমন 'ইউটিউব খোলো', 'শাড়ি দেখতে চাই'"
                     android:textColor="#9AA5D1"
                     android:textSize="13sp" />
+
+                <!-- v87: POWER on/off — box ke ANDAR neeche, taaki
+                     saaf dikhe: gol button + "পাওয়ার" label।
+                     ON = NEELA, OFF = LAAL (hara/slate nahi)।
+                     Tap = orbPowerToggle (orb par tap bhi wahi)। -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <ImageView
+                        android:id="@+id/heroPowerButton"
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:background="@drawable/power_hero_off_bg"
+                        android:clickable="true"
+                        android:contentDescription="পাওয়ার"
+                        android:focusable="true"
+                        android:padding="12dp"
+                        android:src="@drawable/ic_power"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:id="@+id/heroPowerLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="পাওয়ার"
+                        android:textColor="#FECACA"
+                        android:textSize="13sp" />
+                </LinearLayout>
             </LinearLayout>
 
             <!-- Weather card -->
