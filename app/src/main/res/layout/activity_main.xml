@@ -181,20 +181,25 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <!-- Hero: orb + mic pill + hint -->
+            <!-- Hero: orb + mic pill + hint — v82: orb ab
+                 200dp aur screen ke beech ki taraf
+                 (minHeight + gravity center); orb hi power
+                 button hai (tap = Maya chalu/band)। -->
             <LinearLayout
                 android:id="@+id/heroCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="12dp"
                 android:background="@drawable/hero_bg"
+                android:gravity="center"
+                android:minHeight="520dp"
                 android:orientation="vertical"
                 android:padding="16dp">
 
                 <com.aship.jarvis.service.OrbView
                     android:id="@+id/homeOrbView"
-                    android:layout_width="148dp"
-                    android:layout_height="148dp"
+                    android:layout_width="200dp"
+                    android:layout_height="200dp"
                     android:layout_gravity="center_horizontal" />
 
                 <TextView
@@ -208,7 +213,7 @@
                     android:paddingEnd="14dp"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
-                    android:text="🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+                    android:text="🎤 মায়া বন্ধ — অর্বে হাত দাও"
                     android:textColor="#E8EBFA"
                     android:textSize="13sp" />
 

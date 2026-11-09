@@ -59,8 +59,8 @@ class BootReceiver : BroadcastReceiver() {
                     )
                 }
             } catch (t: Throwable) {
-                // Boot par wake start na ho — app khulne par
-                // ensureWakeServiceRunning phir koshish karega।
+                // Boot par wake start na ho — orb tap se
+                // power on karne par phir koshish hogi।
             }
             val all = ReminderCommands.loadAll(ctx)
             if (all.isEmpty()) return

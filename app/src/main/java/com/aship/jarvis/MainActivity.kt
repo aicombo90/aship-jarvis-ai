@@ -610,14 +610,10 @@ class MainActivity : Activity() {
         // Fail ho to koi error nahi dikhta (silent by design).
         checkForUpdate(manual = false)
 
-        // v81: auto-start BANDH — v80 me app khulte hi
+        // v81/v82: auto-start BANDH — v80 me app khulte hi
         // wake service chalu karne se app khulkar turant
-        // band ho raha tha (service same process me hai,
-        // uske start me crash poora app gira deta hai)।
-        // App pehle v79 jaise khule; service orb tap ya
-        // WakeSetup se chalu hogi। Asal crash ka kaaran
-        // milte hi auto-start wapas aayega।
-        // ensureWakeServiceRunning()
+        // band ho raha tha। Power sirf orb tap se
+        // (orbPowerToggle dekho) — app aam v79 jaise khule।
     }
 
     override fun onResume() {
@@ -632,7 +628,9 @@ class MainActivity : Activity() {
         // net chhoota hi nahi)।
         refreshGreeting()
         refreshLanguageCard()
-        if (::homeOrbView.isInitialized) homeOrbView.startAnimations()
+        // v82: orb ki power haalat taaza — service chal
+        // rahi ho to chamakta/ghoomta, band ho to dhunda।
+        refreshOrbPowerState()
         refreshWeather()
         // v62: API Keys screen se lautkar Gemini key badli ho to
         // Maya wali status line bhi turant taza ho।
@@ -754,8 +752,8 @@ class MainActivity : Activity() {
         // v80: asli orb — hero orb + mic pill sirf sajawat
         // nahi: tap karte hi wake service ka taana session
         // khulta hai (bina wake naam ke), baatchit rukti nahi।
-        homeOrbView.setOnClickListener { orbTapToTalk() }
-        micStatusPill.setOnClickListener { orbTapToTalk() }
+        homeOrbView.setOnClickListener { orbPowerToggle() }
+        micStatusPill.setOnClickListener { orbPowerToggle() }
     }
 
     private fun openApiKeys() {
@@ -857,19 +855,46 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Hero wali mic pill — sun raha ho ya band। v80: sirf
-     * saamne wala sunna nahi — background wake service
-     * chal rahi ho to bhi "শুনছি" (wake naam se), warna
-     * pill jhooth bolega ("মাইক বন্ধ" jabki Maya peeche
-     * sun rahi hai)। Dono band hon to hi "মাইক বন্ধ"।
+     * v82: orb = POWER BUTTON (user ki marzi, 2026-11-09) —
+     * orb tap se Maya chalu/band, ek baar chalu to chalu
+     * hi rehti hai (boot par bhi wapas aati hai)। App
+     * khulte hi auto-start NAHI (v80 wala launch crash,
+     * v81 se band) — power sirf orb tap se।
+     * Mic pill bhi sach bolti hai: chalu/band saaf।
      */
     private fun refreshMicPill() {
         if (!::micStatusPill.isInitialized) return
         micStatusPill.text = when {
             listening -> "🎤 শুনছি — বলো, বস"
-            JarvisWakeService.isRunning -> "🎤 ব্যাকগ্রাউন্ডে শুনছি — মায়া / তারা বলো"
-            else -> "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+            JarvisWakeService.isRunning -> "🎤 মায়া চালু আছে — বলো, বস"
+            else -> "🎤 মায়া বন্ধ — অর্বে হাত দাও"
         }
+    }
+
+    /**
+     * v82: orb ki power haalat — ASLI service haalat
+     * (JarvisWakeService.isRunning) se, har baar taaza।
+     * ON: chamakta, ghoomta (LISTENING/SPEAKING)।
+     * OFF: halka/dhunda (alpha), harkat band, chamak nahi।
+     * Kabhi ON dikhakar jhooth nahi — service band ho to
+     * orb bhi band dikhega। onResume + har 2 s (runnable)
+     * + power toggle ke baad chalta hai।
+     */
+    private fun refreshOrbPowerState() {
+        if (!::homeOrbView.isInitialized) return
+        val on = JarvisWakeService.isRunning
+        homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
+        if (on) {
+            val speaking = (::speaker.isInitialized && speaker.isSpeakingNow) ||
+                JarvisWakeService.serviceSpeaking
+            homeOrbView.setMode(
+                if (speaking) OrbView.Mode.SPEAKING else OrbView.Mode.LISTENING
+            )
+            homeOrbView.startAnimations()
+        } else {
+            homeOrbView.stopAnimations()
+        }
+        refreshMicPill()
     }
 
     /** Cache wala mausam turant dikhao (net ka intezaar nahi)। */
@@ -1220,81 +1245,68 @@ class MainActivity : Activity() {
         return out
     }
 
-    /** v80: orb tap ke baad mic permission ka intezaar — mile to talk-now bhejo। */
-    private var orbTalkPending: Boolean = false
+    /** v82: orb tap ke baad mic permission ka intezaar — mile to power on karo। */
+    private var orbPowerPending: Boolean = false
 
     /**
-     * v80: asli orb — tap = seedha baat। Neeche wala mic
-     * button (toggleListening) ek-baari sunna hai; orb
-     * wake service ka TAANA session kholta hai (bina wake
-     * naam ke) — baatchit "আর কিছু?" ke saath chalti
-     * rehti hai, jab tak user "শাটডাউন" na bole। Sunna
-     * chal raha ho to tap use rokta hai (toggle jaisa)।
+     * v82: orb = POWER BUTTON — tap = Maya chalu/band।
+     * Chalu ho to band karo, band ho to chalu karo।
+     * Chalu karna = wake service aam wake-sunna mode me
+     * (wake naam Maya/Tara, pehle jaisa) — ek baar chalu
+     * to chalu hi rehti hai (boot par bhi wapas aati hai,
+     * jhanda dekho)। Band karna = wahi purana stop raasta
+     * (ACTION_STOP) — app nahi marti, v75 wala full
+     * shutdown bhi chhoota nahi ("শাটডাউন" waisa hi hai)।
+     * Saamne wala (foreground) sunna alag raasta hai —
+     * orb usme haath nahi dalta।
      */
-    private fun orbTapToTalk() {
-        if (listening) {
-            engine?.stopListening()
+    private fun orbPowerToggle() {
+        if (JarvisWakeService.isRunning) {
+            powerOff()
             return
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            orbTalkPending = true
+            orbPowerPending = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
             return
         }
-        sendTalkNow()
+        powerOn()
     }
 
-    private fun sendTalkNow() {
-        orbTalkPending = false
+    /** Power ON: jhanda saaf (boot par wapas aayegi) + service chalu। */
+    private fun powerOn() {
+        orbPowerPending = false
         try {
-            // v80: shaksiyat saamne wali cascade ki pehli
-            // bhasha se — Bangla ho to Tara (bn-IN), warna
-            // Maya (hi-IN); wake-by-name wala hi niyam।
-            val persona = if (
-                CascadeOrder.firstLanguage(lastForegroundPersona(), prefs.listenLanguage) == "bn-IN"
-            ) {
-                Persona.TARA
-            } else {
-                Persona.MAYA
-            }
-            startForegroundService(
-                JarvisWakeService.talkNowIntent(this, persona.name)
-            )
+            prefs.wakeStoppedByShutdown = false
+            startForegroundService(JarvisWakeService.startIntent(this))
         } catch (t: Throwable) {
             Toast.makeText(
                 this,
                 "মায়াকে চালু করতে পারলাম না — আবার চেষ্টা করো।",
                 Toast.LENGTH_SHORT
             ).show()
-            return
         }
-        responseText.text = "Maya: শুনছি, বস — বলো।"
+        // Asli haalat 2 s wala refresh sach batayega —
+        // yahan turant pill/orb taaza karo (service abhi
+        // bhi load ho rahi ho to agla refresh theek karega)।
+        refreshOrbPowerState()
     }
 
-    /**
-     * v80: app khulte hi background sunna khud chalu —
-     * alag se WakeSetup kholna nahi hota। "শাটডাউন" ke
-     * baad khola ho to ruka hua jhanda saaf karke phir
-     * chalu (v75 wala niyam — kholna hi dobara chalu
-     * karna hai)। Mic permission na ho to chup-chaap
-     * kuch nahi — orb tap par permission maangi jayegi।
-     */
-    private fun ensureWakeServiceRunning() {
-        if (JarvisWakeService.isRunning) return
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
+    /** Power OFF: jhanda lagao (boot par wapas NA aaye) + service band। */
+    private fun powerOff() {
         try {
-            prefs.wakeStoppedByShutdown = false
-            startForegroundService(JarvisWakeService.startIntent(this))
+            prefs.wakeStoppedByShutdown = true
+            startService(JarvisWakeService.stopIntent(this))
         } catch (t: Throwable) {
-            // Service shuru na ho — app aam chalega; orb
-            // tap par phir koshish hogi।
+            Toast.makeText(
+                this,
+                "মায়াকে বন্ধ করতে পারলাম না — আবার চেষ্টা করো।",
+                Toast.LENGTH_SHORT
+            ).show()
         }
+        refreshOrbPowerState()
     }
 
     private fun toggleListening() {
@@ -1391,15 +1403,15 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_RECORD_AUDIO) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // v80: orb tap ke liye maanga gaya ho to
-                // taana session kholo, warna aam sunna।
-                if (orbTalkPending) {
-                    sendTalkNow()
+                // v82: orb tap ke liye maanga gaya ho to
+                // power on karo, warna aam sunna।
+                if (orbPowerPending) {
+                    powerOn()
                 } else {
                     startListening()
                 }
             } else {
-                orbTalkPending = false
+                orbPowerPending = false
                 Toast.makeText(
                     this,
                     "Mic permission ke bina voice command nahi chalega.",
@@ -3498,20 +3510,10 @@ class MainActivity : Activity() {
     private val wakeRefreshRunnable = object : Runnable {
         override fun run() {
             refreshDiagLines()
-            // v80: mic pill bhi har 2 s taaza — service
-            // chalu/band hote hi pill sach bole।
-            refreshMicPill()
-            // v77: home orb — Maya bol rahi ho to tez bahav
-            // (SPEAKING), warna sunne wala (LISTENING)।
-            // v80: service ka TTS bhi yahin — orb session
-            // me jawab service bolti hai, saamne wala
-            // speaker nahi (serviceSpeaking dekho)।
-            if (::homeOrbView.isInitialized) {
-                homeOrbView.setMode(
-                    if (speaker.isSpeakingNow || JarvisWakeService.serviceSpeaking) OrbView.Mode.SPEAKING
-                    else OrbView.Mode.LISTENING
-                )
-            }
+            // v82: orb ki power haalat + mic pill har 2 s
+            // taaza — service chalu/band hote hi orb/pill
+            // sach bole (asli haalat se, andaze se nahi)।
+            refreshOrbPowerState()
             mainHandler.postDelayed(this, WAKE_REFRESH_MS)
         }
     }
@@ -4000,6 +4002,8 @@ class MainActivity : Activity() {
         private const val REQUEST_READ_CONTACTS = 1004
         private const val REQUEST_READ_PHONE_STATE = 1006
         private const val WAKE_REFRESH_MS = 2_000L
+        // v82: band orb kitna dhunda dikhe (alpha 0–1)।
+        private const val ORB_OFF_ALPHA = 0.35f
 
         /** v51 (item 2): saamne wala gate ruke to bina bole zyada se zyada itni baar phir sunna. */
         private const val FG_MAX_GATE_RESTARTS = 2
