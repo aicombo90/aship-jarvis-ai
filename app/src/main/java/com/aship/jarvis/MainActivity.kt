@@ -610,9 +610,14 @@ class MainActivity : Activity() {
         // Fail ho to koi error nahi dikhta (silent by design).
         checkForUpdate(manual = false)
 
-        // v80: app khulte hi background sunna khud chalu —
-        // alag se WakeSetup kholna nahi hota।
-        ensureWakeServiceRunning()
+        // v81: auto-start BANDH — v80 me app khulte hi
+        // wake service chalu karne se app khulkar turant
+        // band ho raha tha (service same process me hai,
+        // uske start me crash poora app gira deta hai)।
+        // App pehle v79 jaise khule; service orb tap ya
+        // WakeSetup se chalu hogi। Asal crash ka kaaran
+        // milte hi auto-start wapas aayega।
+        // ensureWakeServiceRunning()
     }
 
     override fun onResume() {
