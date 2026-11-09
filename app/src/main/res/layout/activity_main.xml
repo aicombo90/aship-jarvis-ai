@@ -212,8 +212,11 @@
                 <!-- v87: POWER on/off — box ke ANDAR neeche, taaki
                      saaf dikhe: gol button + "পাওয়ার" label।
                      ON = NEELA, OFF = LAAL (hara/slate nahi)।
-                     Tap = orbPowerToggle (orb par tap bhi wahi)। -->
+                     Tap = orbPowerToggle (orb par tap bhi wahi)।
+                     v88: heroPowerRow id — poori row par tap bhi
+                     toggle kare (bada tap target)। -->
                 <LinearLayout
+                    android:id="@+id/heroPowerRow"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_gravity="center_horizontal"

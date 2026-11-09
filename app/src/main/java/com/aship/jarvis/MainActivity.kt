@@ -436,6 +436,9 @@ class MainActivity : Activity() {
         languageCardSubText = findViewById(R.id.languageCardSubText)
         homeScrollView = findViewById(R.id.homeScrollView)
         setupHomeUi()
+        // v88: layout poori tarah basne ke baad power toggle
+        // ek baar aur jodo (onCreate me kabhi view nahi milta)।
+        mainHandler.postDelayed({ attachPowerToggle() }, 500L)
         refreshGreeting()
         refreshMicPill()
         refreshLanguageCard()
@@ -634,6 +637,9 @@ class MainActivity : Activity() {
         // v82: orb ki power haalat taaza — service chal
         // rahi ho to chamakta/ghoomta, band ho to dhunda।
         refreshOrbPowerState()
+        // v88: power toggle dobara jodo — onCreate me view
+        // na mila ho to bhi ab milega।
+        attachPowerToggle()
         refreshWeather()
         // v62: API Keys screen se lautkar Gemini key badli ho to
         // Maya wali status line bhi turant taza ho।
@@ -751,7 +757,9 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
         // v87: POWER button ab hero box ke ANDAR hai (nav me NAHI) —
         // orb ki tarah hi toggle।
-        findViewById<ImageView>(R.id.heroPowerButton)?.setOnClickListener { orbPowerToggle() }
+        // v88: attachPowerToggle — button + label + poori row;
+        // onResume + der se bhi dobara jodo (v83 wala null)।
+        attachPowerToggle()
         findViewById<TextView>(R.id.navSettingsButton).setOnClickListener { openApiKeys() }
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -761,6 +769,22 @@ class MainActivity : Activity() {
         // (lateinit field par seedha haath — v83 wala crash)।
         findViewById<OrbView>(R.id.homeOrbView)?.setOnClickListener { orbPowerToggle() }
         findViewById<TextView>(R.id.micStatusPill)?.setOnClickListener { orbPowerToggle() }
+    }
+
+    /**
+     * v88: power toggle ko pakka jodo — hero button + "পাওয়ার"
+     * label + poori power row (bada tap target), taaki row ki
+     * khaali jagah par tap bhi kaam kare। setOnClickListener
+     * dobara lagana safe hai (purana listener badal jata hai),
+     * isliye onCreate ke alawa onResume aur der se bhi dobara
+     * jodo — onCreate me findViewById kabhi view nahi deta
+     * (v83 wala homeOrbView null), aur wahi button ke saath
+     * hua to tap chupchaap bekaar jata hai।
+     */
+    private fun attachPowerToggle() {
+        findViewById<ImageView>(R.id.heroPowerButton)?.setOnClickListener { orbPowerToggle() }
+        findViewById<TextView>(R.id.heroPowerLabel)?.setOnClickListener { orbPowerToggle() }
+        findViewById<LinearLayout>(R.id.heroPowerRow)?.setOnClickListener { orbPowerToggle() }
     }
 
     private fun openApiKeys() {
@@ -903,6 +927,13 @@ class MainActivity : Activity() {
      * likha jata hai (refreshMicPill v79 wapas)।
      */
     private fun refreshOrbPowerState() {
+        // v88: onCreate wala findViewById kabhi null de deta hai
+        // (v83 wala homeOrbView masla) — har refresh par taaza
+        // dhoondho; mila to field bhi theek kar do, taaki orb
+        // sach me animate ho aur button haalat dikhaye। Jo
+        // pehle se set hai, use chhedo nahi (null mile to)।
+        findViewById<OrbView>(R.id.homeOrbView)?.let { homeOrbView = it }
+        findViewById<TextView>(R.id.micStatusPill)?.let { micStatusPill = it }
         if (!::homeOrbView.isInitialized) return
         val on = JarvisWakeService.isRunning
         homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
@@ -1355,6 +1386,9 @@ class MainActivity : Activity() {
         try {
             prefs.wakeStoppedByShutdown = false
             startForegroundService(JarvisWakeService.startIntent(this))
+            // v88: tap ka turant jawab — pehle chupchaap kuch
+            // nahi hota tha, user ko lagta tha button kaam nahi karta।
+            Toast.makeText(this, "মায়া চালু করছি…", Toast.LENGTH_SHORT).show()
         } catch (t: Throwable) {
             Toast.makeText(
                 this,
@@ -1366,6 +1400,22 @@ class MainActivity : Activity() {
         // yahan turant pill/orb taaza karo (service abhi
         // bhi load ho rahi ho to agla refresh theek karega)।
         refreshOrbPowerState()
+        // v88: service sach me chalu hui ya chupchaap band ho
+        // gayi (model load fail), 5 s baad saaf batao — taaki
+        // "kuch nahi hota" wali haalat dobara na aaye। Service
+        // chalu hote hi isRunning true ho jata hai (model load
+        // se pehle), isliye 5 s baad bhi band = sach me fail।
+        mainHandler.postDelayed({
+            if (!isFinishing && !JarvisWakeService.isRunning) {
+                val reason = JarvisWakeService.statusMessage
+                Toast.makeText(
+                    this,
+                    if (reason.isNotBlank() && reason != "Band hai") reason
+                    else "মায়া চালু হলো না — আবার পাওয়ার চাপো।",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }, 5_000L)
     }
 
     /** Power OFF: jhanda lagao (boot par wapas NA aaye) + service band। */
