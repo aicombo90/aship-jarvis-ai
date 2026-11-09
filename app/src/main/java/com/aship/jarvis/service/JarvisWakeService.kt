@@ -34,6 +34,7 @@ import com.aship.jarvis.ai.AgentTools
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.ImageGen
 import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.SessionShot
@@ -42,11 +43,13 @@ import com.aship.jarvis.ai.UserProfile
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.actions.LaunchOutcome
+import com.aship.jarvis.actions.OverlayLauncher
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.HearingGate
+import com.aship.jarvis.commands.ImageIntent
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
@@ -73,6 +76,7 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -3281,6 +3285,19 @@ class JarvisWakeService : Service() {
             runDirectShowMe(text, showKind)
             return
         }
+        // v78: CHHOBI BANAO — "X-এর ছবি বানাও" (Gemini se
+        // AI tasveer banana), "আরেকটা বানাও" (dobara),
+        // "শেয়ার করো" (aakhiri tasveer share) — pakka
+        // deterministic raasta, baatchit wala mastishk is
+        // par aata hi nahi (ImageIntent dekho)। Ye bhi
+        // screen-kaam hai — taana session yahin se
+        // shuru/aage।
+        val imageKind = ImageIntent.classify(text)
+        if (imageKind != null) {
+            enterContinuousSession()
+            runDirectImageGen(text, imageKind)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -3769,6 +3786,212 @@ class JarvisWakeService : Service() {
             }
             speakShowLine(line, userText)
         }.start()
+    }
+
+    /**
+     * v78: CHHOBI BANAO wala kaam ([ImageIntent]) — background
+     * wala raasta (runDirectShowMe wala hi bandobast):
+     *  - GENERATE: vishay nikaalo (na ho to "কিসের ছবি
+     *    বানাবো?"), gate (Offline mode / Gemini key /
+     *    net) paar karo, phir [ImageGen] se banao;
+     *  - REGENERATE: aakhiri vishay par dobara, alag
+     *    variation ke saath;
+     *  - SHARE: aakhiri tasveer ka share screen
+     *    OverlayLauncher wale pul se kholo.
+     * Tasveer banti hai [ImageGen] ke executor thread
+     * par — file likhna / gallery bachana usi callback
+     * me; viewer OverlayLauncher se (Thread par, bilkul
+     * openShowImagesBackground jaisa); boli hamesha
+     * [speakImageLine] se (speakShowLine wala hi dhang)।
+     *
+     * EK FARQ (jaan-boojh kar): banate hue "বানাচ্ছি,
+     * একটু দাঁড়াও" wali line yahan BOLI nahi jati —
+     * sirf status / notification / orb me dikhti hai.
+     * Wajah: background me har boli ke khatm hone par
+     * onTtsFinished reply turn band karke "আর কিছু?"
+     * wala prompt chalu kar deta hai — beech wali boli
+     * se generation chalte hue hi turn khatm ho jata
+     * aur aakhiri boli + viewer dono chhoot jate. Saamne
+     * wali screen (MainActivity) me ye samasya nahi hai,
+     * isliye wahan "বানাচ্ছি" turant boli jati hai.
+     */
+    private fun runDirectImageGen(text: String, kind: ImageIntent.Kind) {
+        val lang = personaSpokenLang()
+        when (kind) {
+            ImageIntent.Kind.SHARE -> {
+                val last = ImageIntent.loadLastImage(applicationContext)
+                if (last == null) {
+                    speakImageLine(ImageIntent.noImageLine(kind, lang), text)
+                    return
+                }
+                val (path) = last
+                val file = File(path)
+                if (!file.exists()) {
+                    speakImageLine(ImageIntent.noImageLine(kind, lang), text)
+                    return
+                }
+                setStatus("শেয়ার করছি...")
+                updateNotification("শেয়ার করছি...")
+                Thread {
+                    val chooser = ImageIntent.buildShareChooserIntent(
+                        applicationContext, file, lang
+                    )
+                    val outcome = if (chooser == null) {
+                        LaunchOutcome.FAILED
+                    } else {
+                        try {
+                            OverlayLauncher.launch(applicationContext, chooser)
+                        } catch (t: Throwable) {
+                            LaunchOutcome.FAILED
+                        }
+                    }
+                    val line = when (outcome) {
+                        LaunchOutcome.LAUNCHED ->
+                            ImageIntent.shareOpenedLine(lang)
+                        LaunchOutcome.LOCKED -> ImageIntent.lockedLine(lang)
+                        LaunchOutcome.PERMISSION_NEEDED ->
+                            ImageIntent.permissionLine(lang)
+                        else -> ImageIntent.shareFailedLine(lang)
+                    }
+                    speakImageLine(line, text)
+                }.start()
+            }
+            ImageIntent.Kind.REGENERATE -> {
+                val last = ImageIntent.loadLastImage(applicationContext)
+                if (last == null) {
+                    speakImageLine(ImageIntent.noImageLine(kind, lang), text)
+                    return
+                }
+                val (_, prompt) = last
+                startImageGenerationBackground(
+                    prompt, variation = true, kind, lang, text
+                )
+            }
+            ImageIntent.Kind.GENERATE -> {
+                val prompt = ImageIntent.extractImagePrompt(text)
+                if (prompt == null) {
+                    speakImageLine(ImageIntent.askWhatLine(lang), text)
+                    return
+                }
+                startImageGenerationBackground(
+                    prompt, variation = false, kind, lang, text
+                )
+            }
+        }
+    }
+
+    /** v78: tasveer wali boli — runDirectYouTubePlay wala hi bandobast. */
+    private fun speakImageLine(line: String, userText: String) {
+        executor.execute {
+            if (destroyed || state != State.REPLY) return@execute
+            setStatus("Seedha jawab mila — bol rahi hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            pendingEndReason = SESSION_END_COMPLETED
+            noteSessionOutcome(userText, line)
+            lightScreenOnWake()
+            speaker.speak(line)
+            armReplyFallback(line)
+            orbOverlay.setReply(line)
+        }
+    }
+
+    /** v78: gate paar karo, phir [ImageGen] se banao; natija bolkar + kholkar dikhao. */
+    private fun startImageGenerationBackground(
+        prompt: String,
+        variation: Boolean,
+        kind: ImageIntent.Kind,
+        lang: PlayIntent.SpokenLang,
+        userText: String
+    ) {
+        // Gate — saamne wale raaste wala hi (Offline mode /
+        // Gemini key khaas taur par / net)। Har manaahi
+        // imaandaar, alag line.
+        if (prefs.mode == JarvisMode.OFFLINE) {
+            speakImageLine(ImageIntent.offlineLine(lang), userText)
+            ImageIntent.saveRouteDiag(applicationContext, kind, false)
+            return
+        }
+        if (!GeminiBrain.isConfigured(applicationContext)) {
+            speakImageLine(ImageIntent.noKeyLine(lang), userText)
+            ImageIntent.saveRouteDiag(applicationContext, kind, false)
+            return
+        }
+        if (!isNetworkUp()) {
+            speakImageLine(ImageIntent.noNetLine(lang), userText)
+            ImageIntent.saveRouteDiag(applicationContext, kind, false)
+            return
+        }
+        val genLine = ImageIntent.generatingLine(lang)
+        setStatus(genLine)
+        updateNotification(genLine)
+        try {
+            orbOverlay.setReply(genLine)
+        } catch (t: Throwable) {
+            // Orb bonus hai — asal kaam isse nahi rukta.
+        }
+        ImageGen.generate(applicationContext, prompt, variation) { result ->
+            when (result) {
+                ImageGen.ImageGenResult.NoKey -> {
+                    ImageIntent.saveRouteDiag(applicationContext, kind, false)
+                    speakImageLine(ImageIntent.noKeyLine(lang), userText)
+                }
+                ImageGen.ImageGenResult.Quota -> {
+                    ImageIntent.saveRouteDiag(applicationContext, kind, false)
+                    speakImageLine(ImageIntent.quotaLine(lang), userText)
+                }
+                is ImageGen.ImageGenResult.Failed -> {
+                    ImageIntent.saveRouteDiag(applicationContext, kind, false)
+                    speakImageLine(ImageIntent.failedLine(lang), userText)
+                }
+                is ImageGen.ImageGenResult.Success -> {
+                    // File IO yahin (callback thread) — viewer
+                    // Thread par, boli speakImageLine se.
+                    val file = ImageIntent.writeImageFile(
+                        applicationContext, result.bytes, result.mimeType
+                    )
+                    if (file == null) {
+                        ImageIntent.saveRouteDiag(applicationContext, kind, false)
+                        speakImageLine(ImageIntent.failedLine(lang), userText)
+                        return@generate
+                    }
+                    ImageIntent.saveLastImage(
+                        applicationContext, file.absolutePath, prompt
+                    )
+                    ImageIntent.saveImageToGallery(
+                        applicationContext, result.bytes
+                    )
+                    setStatus("ছবি খুলছি...")
+                    updateNotification("ছবি খুলছি...")
+                    Thread {
+                        val viewIntent = ImageIntent.buildViewIntent(
+                            applicationContext, file, result.mimeType
+                        )
+                        val outcome = if (viewIntent == null) {
+                            LaunchOutcome.FAILED
+                        } else {
+                            try {
+                                OverlayLauncher.launch(
+                                    applicationContext, viewIntent
+                                )
+                            } catch (t: Throwable) {
+                                LaunchOutcome.FAILED
+                            }
+                        }
+                        val ok = outcome == LaunchOutcome.LAUNCHED
+                        ImageIntent.saveRouteDiag(applicationContext, kind, ok)
+                        val line = when (outcome) {
+                            LaunchOutcome.LAUNCHED ->
+                                ImageIntent.readyLine(lang)
+                            LaunchOutcome.LOCKED -> ImageIntent.lockedLine(lang)
+                            LaunchOutcome.PERMISSION_NEEDED ->
+                                ImageIntent.permissionLine(lang)
+                            else -> ImageIntent.viewFailedLine(lang)
+                        }
+                        speakImageLine(line, userText)
+                    }.start()
+                }
+            }
+        }
     }
 
     /**
