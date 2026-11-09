@@ -73,6 +73,7 @@ import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
+import com.aship.jarvis.commands.WebSearchIntent
 import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.update.UpdateChecker
@@ -2343,6 +2344,22 @@ class MainActivity : Activity() {
             runDirectImageGen(commandText, imageKind, vocativeLang)
             return
         }
+        // v79: LIVE KHOJ + KHOBOR — "X কী / X সম্পর্কে বলো /
+        // X-এর দাম কত / X কবে / X কোথায়" (taaza web se
+        // dhoondhkar pehle natije bolna), "আজকের খবর বলো"
+        // (taaza khabrein sunana), "খুলে দাও" (aakhiri khoj
+        // ka pehla natija kholna) — pakka deterministic
+        // raasta, baatchit wala mastishk is par aata hi nahi
+        // (WebSearchIntent dekho)। ShowMeIntent / ImageIntent
+        // ke BAAD (v76 DETAILS "এটার দাম কত" aur v78 apna
+        // raasta pehle lein), agent se pehle ye pakki jaanch।
+        val webKind = WebSearchIntent.classify(
+            commandText, WebSearchIntent.hasLastSearch(this)
+        )
+        if (webKind != null) {
+            runDirectWebSearch(commandText, webKind, vocativeLang)
+            return
+        }
         // v25: online brain uplabdh ho (mode Offline na ho,
         // key set ho, net chalu ho) to pehle AGENT — app ke
         // andar EK hi mastishk (user ka pakka design):
@@ -2895,6 +2912,115 @@ class MainActivity : Activity() {
             ShowMeIntent.showingLine(topic, lang)
         } else {
             ShowMeIntent.openFailedLine(lang)
+        }
+        politeFailureSpokenThisTurn = false
+        responseText.text = "Maya: $line"
+        speaker.speak(line)
+    }
+
+    /**
+     * v79: LIVE KHOJ + KHOBOR wala kaam ([WebSearchIntent]) —
+     * saamne wali screen wala raasta:
+     *  - SEARCH: vishay nikaalo, DuckDuckGo se live
+     *    dhoondho (apne thread par), pehle 3 natije
+     *    bolkar sunao + "খুলে দাও" ki peshkash;
+     *  - NEWS: Google News RSS se aaj ki top 5 khabar
+     *    bolkar sunao ("খবর অনুযায়ী");
+     *  - OPEN: aakhiri khoj ka pehla natija browser me
+     *    kholo (na ho to imaandaar jawab)।
+     * Fetch apne thread par hota hai (10 s timeout) —
+     * boli / screen hamesha mainHandler se. Browser
+     * seedha [PhoneActions.openUrl] se khulta hai।
+     */
+    private fun runDirectWebSearch(
+        text: String,
+        kind: WebSearchIntent.Kind,
+        vocativeLang: PlayIntent.SpokenLang?
+    ) {
+        val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
+        when (kind) {
+            WebSearchIntent.Kind.NEWS -> {
+                responseText.text = "Maya: ${WebSearchIntent.fetchingNewsLine(lang)}"
+                Thread {
+                    val items = WebSearchIntent.fetchNews()
+                    val line = if (items.isNullOrEmpty()) {
+                        WebSearchIntent.newsFailLine(lang)
+                    } else {
+                        WebSearchIntent.newsSpoken(items, lang)
+                    }
+                    WebSearchIntent.saveRouteDiag(
+                        this, kind, !items.isNullOrEmpty()
+                    )
+                    mainHandler.post {
+                        if (isFinishing || isDestroyed) return@post
+                        politeFailureSpokenThisTurn = false
+                        responseText.text = "Maya: $line"
+                        speaker.speak(line)
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+            WebSearchIntent.Kind.SEARCH -> {
+                val query = WebSearchIntent.extractSearchTopic(text)
+                if (query == null) {
+                    val line = WebSearchIntent.askTopicLine(lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                responseText.text = "Maya: ${WebSearchIntent.searchingLine(lang)}"
+                Thread {
+                    val results = WebSearchIntent.searchWeb(query)
+                    if (results.isNotEmpty()) {
+                        WebSearchIntent.saveLastSearch(this, query, results)
+                    }
+                    val line = if (results.isEmpty()) {
+                        WebSearchIntent.searchFailLine(lang)
+                    } else {
+                        WebSearchIntent.searchSpoken(query, results, lang)
+                    }
+                    WebSearchIntent.saveRouteDiag(
+                        this, kind, results.isNotEmpty()
+                    )
+                    mainHandler.post {
+                        if (isFinishing || isDestroyed) return@post
+                        politeFailureSpokenThisTurn = false
+                        responseText.text = "Maya: $line"
+                        speaker.speak(line)
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+            WebSearchIntent.Kind.OPEN -> {
+                val last = WebSearchIntent.loadLastSearch(this)
+                val first = last?.second?.firstOrNull()
+                if (first == null) {
+                    val line = WebSearchIntent.openNoSearchLine(lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                openWebResult(first, kind, lang)
+            }
+        }
+    }
+
+    /** Aakhiri khoj ka pehla natija kholo + hamesha sachha jawab bolo. */
+    private fun openWebResult(
+        result: WebSearchIntent.WebResult,
+        kind: WebSearchIntent.Kind,
+        lang: PlayIntent.SpokenLang
+    ) {
+        val ok = try {
+            PhoneActions.openUrl(this, result.url)
+        } catch (t: Throwable) {
+            false
+        }
+        WebSearchIntent.saveRouteDiag(this, kind, ok)
+        val line = if (ok) {
+            WebSearchIntent.openedLine(result.title, lang)
+        } else {
+            WebSearchIntent.openFailedLine(lang)
         }
         politeFailureSpokenThisTurn = false
         responseText.text = "Maya: $line"

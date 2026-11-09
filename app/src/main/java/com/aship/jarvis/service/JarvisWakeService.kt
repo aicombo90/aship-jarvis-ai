@@ -60,6 +60,7 @@ import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
+import com.aship.jarvis.commands.WebSearchIntent
 import com.aship.jarvis.commands.spokenLang
 import com.aship.jarvis.prefs.AppPrefs
 import com.aship.jarvis.prefs.JarvisMode
@@ -3298,6 +3299,24 @@ class JarvisWakeService : Service() {
             runDirectImageGen(text, imageKind)
             return
         }
+        // v79: LIVE KHOJ + KHOBOR — "X কী / X সম্পর্কে বলো /
+        // X-এর দাম কত / X কবে / X কোথায়" (taaza web se
+        // dhoondhkar pehle natije bolna), "আজকের খবর বলো"
+        // (taaza khabrein sunana), "খুলে দাও" (aakhiri khoj
+        // ka pehla natija kholna) — pakka deterministic
+        // raasta, baatchit wala mastishk is par aata hi nahi
+        // (WebSearchIntent dekho)। ShowMeIntent / ImageIntent
+        // ke BAAD (v76 DETAILS "এটার দাম কত" aur v78 apna
+        // raasta pehle lein), agent se pehle। Ye bhi
+        // screen-kaam hai — taana session yahin se shuru/aage।
+        val webKind = WebSearchIntent.classify(
+            text, WebSearchIntent.hasLastSearch(applicationContext)
+        )
+        if (webKind != null) {
+            enterContinuousSession()
+            runDirectWebSearch(text, webKind)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -3785,6 +3804,121 @@ class JarvisWakeService : Service() {
                 else -> ShowMeIntent.openFailedLine(lang)
             }
             speakShowLine(line, userText)
+        }.start()
+    }
+
+    /**
+     * v79: LIVE KHOJ + KHOBOR wala kaam ([WebSearchIntent]) —
+     * background wala raasta (runDirectShowMe wala hi bandobast):
+     *  - SEARCH: vishay nikaalo, DuckDuckGo se live dhoondho
+     *    (apne thread par), pehle 3 natije bolkar sunao;
+     *  - NEWS: Google News RSS se aaj ki top 5 khabar sunao;
+     *  - OPEN: aakhiri khoj ka pehla natija browser me kholo.
+     * Browser background se [PhoneActions.openUrlFromBackground]
+     * se khulta hai (OverlayLauncher wala pul)। Boli
+     * runDirectYouTubePlay jaisi hi: executor par, state
+     * REPLY me, session ke sandarbh ke saath।
+     */
+    private fun runDirectWebSearch(text: String, kind: WebSearchIntent.Kind) {
+        val lang = personaSpokenLang()
+        when (kind) {
+            WebSearchIntent.Kind.NEWS -> {
+                setStatus("Aaj ki khabar la rahi hoon...")
+                updateNotification("Aaj ki khabar la rahi hoon...")
+                Thread {
+                    val items = WebSearchIntent.fetchNews()
+                    val line = if (items.isNullOrEmpty()) {
+                        WebSearchIntent.newsFailLine(lang)
+                    } else {
+                        WebSearchIntent.newsSpoken(items, lang)
+                    }
+                    WebSearchIntent.saveRouteDiag(
+                        applicationContext, kind, !items.isNullOrEmpty()
+                    )
+                    speakWebLine(line, text)
+                }.apply { isDaemon = true }.start()
+            }
+            WebSearchIntent.Kind.SEARCH -> {
+                val query = WebSearchIntent.extractSearchTopic(text)
+                if (query == null) {
+                    speakWebLine(WebSearchIntent.askTopicLine(lang), text)
+                    return
+                }
+                setStatus("Internet me dhoondh rahi hoon...")
+                updateNotification("Internet me dhoondh rahi hoon...")
+                Thread {
+                    val results = WebSearchIntent.searchWeb(query)
+                    if (results.isNotEmpty()) {
+                        WebSearchIntent.saveLastSearch(
+                            applicationContext, query, results
+                        )
+                    }
+                    val line = if (results.isEmpty()) {
+                        WebSearchIntent.searchFailLine(lang)
+                    } else {
+                        WebSearchIntent.searchSpoken(query, results, lang)
+                    }
+                    WebSearchIntent.saveRouteDiag(
+                        applicationContext, kind, results.isNotEmpty()
+                    )
+                    speakWebLine(line, text)
+                }.apply { isDaemon = true }.start()
+            }
+            WebSearchIntent.Kind.OPEN -> {
+                val last = WebSearchIntent.loadLastSearch(applicationContext)
+                val first = last?.second?.firstOrNull()
+                if (first == null) {
+                    speakWebLine(WebSearchIntent.openNoSearchLine(lang), text)
+                    return
+                }
+                openWebResultBackground(first, kind, lang, text)
+            }
+        }
+    }
+
+    /** v79: live khoj/khabar wali boli — runDirectYouTubePlay wala hi bandobast. */
+    private fun speakWebLine(line: String, userText: String) {
+        executor.execute {
+            if (destroyed || state != State.REPLY) return@execute
+            setStatus("Seedha jawab mila — bol rahi hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            pendingEndReason = SESSION_END_COMPLETED
+            noteSessionOutcome(userText, line)
+            lightScreenOnWake()
+            speaker.speak(line)
+            armReplyFallback(line)
+            orbOverlay.setReply(line)
+        }
+    }
+
+    /** v79: aakhiri khoj ka pehla natija background se kholo + hamesha sachha jawab bolo. */
+    private fun openWebResultBackground(
+        result: WebSearchIntent.WebResult,
+        kind: WebSearchIntent.Kind,
+        lang: PlayIntent.SpokenLang,
+        userText: String
+    ) {
+        setStatus("Pehla natija khol rahi hoon...")
+        updateNotification("Pehla natija khol rahi hoon...")
+        Thread {
+            val outcome = try {
+                PhoneActions.openUrlFromBackground(
+                    applicationContext, result.url
+                )
+            } catch (t: Throwable) {
+                LaunchOutcome.FAILED
+            }
+            val ok = outcome == LaunchOutcome.LAUNCHED
+            WebSearchIntent.saveRouteDiag(applicationContext, kind, ok)
+            val line = when (outcome) {
+                LaunchOutcome.LAUNCHED ->
+                    WebSearchIntent.openedLine(result.title, lang)
+                LaunchOutcome.LOCKED -> ShowMeIntent.lockedLine(lang)
+                LaunchOutcome.PERMISSION_NEEDED ->
+                    ShowMeIntent.permissionLine(lang)
+                else -> WebSearchIntent.openFailedLine(lang)
+            }
+            speakWebLine(line, userText)
         }.start()
     }
 
