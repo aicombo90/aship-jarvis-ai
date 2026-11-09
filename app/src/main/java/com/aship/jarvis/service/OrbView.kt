@@ -121,6 +121,9 @@ class OrbView(context: Context) : View(context) {
     private val haloPaintB = Paint(Paint.ANTI_ALIAS_FLAG)
     private val haloMatrix = Matrix()
 
+    // v85: gole ke neeche ki chhaaya (contact shadow) — naram kaala daag.
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
     // Rang-blob (marble ki badi naram dhaarein).
     private val blobPaints = Array(BLOB_COUNT) { Paint(Paint.ANTI_ALIAS_FLAG) }
     private val blobShaders = arrayOfNulls<Shader>(BLOB_COUNT)
