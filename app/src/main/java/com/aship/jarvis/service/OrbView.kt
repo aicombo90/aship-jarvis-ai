@@ -57,6 +57,15 @@ import kotlin.math.sin
  * zyada chamakti hain. LISTENING me "saans" sirf roshni ki
  * chamak me aati hai — size v1.8 ke niyam se fixed hi rehta hai.
  *
+ * v85: gola ab saaf GOL BALL dikhe (techgptx reference jaisa):
+ *  - upar-bayein tez safed jhalak (gloss) + chhoti tez chamak
+ *    aur gehra neeche ka saaya — roshni ek taraf se aati lage,
+ *    gola ubhra hua lage, flat circle nahi।
+ *  - gole ke neeche satah par naram chhaaya (contact shadow) —
+ *    ball satah par rakha lage।
+ *  - ON hone par bahav tez (~12 s ka chakra) taaki dekhte hi
+ *    pata chale chalu hai; OFF par harkat band + dhunda (alpha)।
+ *
  * Do framework animator hi saari harkat karte hain:
  *  - "saans" (breathing): roshni/aabha ki chamak dheere badhti-
  *    ghatti hai — size nahi.
@@ -248,10 +257,12 @@ class OrbView(context: Context) : View(context) {
 
         // Gole ki buniyad: upar-bayein gehri cyan roshni, beech
         // royal blue, neeche gehri baingani-kaali gehrai.
+        // v85: pehla rang aur ujla — upar-bayein roshni se
+        // gola ubhra hua BALL lage।
         spherePaint.shader = RadialGradient(
             centerX - radius * 0.35f, centerY - radius * 0.40f, radius * 1.70f,
             intArrayOf(
-                Color.rgb(14, 116, 144),
+                Color.rgb(8, 145, 178),
                 Color.rgb(30, 64, 175),
                 Color.rgb(91, 33, 182),
                 Color.rgb(18, 8, 46)
@@ -260,11 +271,12 @@ class OrbView(context: Context) : View(context) {
             Shader.TileMode.CLAMP
         )
         // Neeche ke kinare ki gehrai: neeche se upar halki hoti
-        // kaali-neeli chhaaya.
+        // kaali-neeli chhaaya. v85: aur gehri, taaki gole ka
+        // neeche wala hissa peeche ki taraf mude lage।
         shadePaint.shader = RadialGradient(
             centerX, centerY + radius * 1.15f, radius * 1.05f,
             intArrayOf(
-                Color.argb(165, 3, 0, 20),
+                Color.argb(200, 3, 0, 20),
                 Color.argb(70, 3, 0, 20),
                 Color.argb(0, 3, 0, 20)
             ),
@@ -272,21 +284,36 @@ class OrbView(context: Context) : View(context) {
             Shader.TileMode.CLAMP
         )
         // Upar ki safed jhalak — glossy look ke liye (naram, badi).
+        // v85: aur tez + thodi kas kar — saaf gloss lage।
         highlightPaint.shader = RadialGradient(
-            centerX - radius * 0.4f, centerY - radius * 0.5f, radius * 0.55f,
+            centerX - radius * 0.4f, centerY - radius * 0.5f, radius * 0.50f,
             intArrayOf(
-                Color.argb(165, 255, 255, 255),
+                Color.argb(210, 255, 255, 255),
                 Color.argb(0, 255, 255, 255)
             ),
             floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
         )
         // Chhoti tez chamak (bead) — geeli chamak wala nukta.
+        // v85: aur tez + chhoti, taaki chamak nukte jaisi lage।
         beadPaint.shader = RadialGradient(
-            centerX - radius * 0.42f, centerY - radius * 0.48f, radius * 0.22f,
+            centerX - radius * 0.42f, centerY - radius * 0.48f, radius * 0.18f,
             intArrayOf(
-                Color.argb(120, 255, 255, 255),
+                Color.argb(175, 255, 255, 255),
                 Color.argb(0, 255, 255, 255)
+            ),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        // v85: neeche ki chhaaya — gole ke neeche satah par
+        // naram kaala daag (contact shadow), beech ghana,
+        // kinare halka। onDraw me chapta karke (scale) ande
+        // jaisa banaya jata hai।
+        shadowPaint.shader = RadialGradient(
+            0f, 0f, radius * 0.95f,
+            intArrayOf(
+                Color.argb(120, 0, 0, 0),
+                Color.argb(0, 0, 0, 0)
             ),
             floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
@@ -387,6 +414,15 @@ class OrbView(context: Context) : View(context) {
         canvas.save()
         // v1.8/v1.11: koi scale nahi — gola hamesha ek hi size
         // ka rehta hai, harkat sirf andar ke bahav me hoti hai.
+
+        // --- v85: gole ke neeche ki chhaaya (contact shadow) ---
+        // Gola satah par rakha BALL lage — chapta kaala daag
+        // gole ke neeche, bahari aabha se pehle।
+        canvas.save()
+        canvas.translate(centerX, centerY + radius * 1.12f)
+        canvas.scale(1f, 0.20f)
+        canvas.drawCircle(0f, 0f, radius * 0.95f, shadowPaint)
+        canvas.restore()
 
         // --- Bahari aabha (clip se bahar, gole ke peeche) ---
         val haloAlpha = ((150f + 90f * glowStrength) *
@@ -550,9 +586,11 @@ class OrbView(context: Context) : View(context) {
 
     private companion object {
         const val BREATH_PERIOD_MS = 2_300L
-        // Master bahav: ek poora chakra ~18 second (dheema,
-        // plasma jaisa). SPEAKING me iski raftaar dugni se zyada.
-        const val FLOW_PERIOD_MS = 18_000L
+        // Master bahav: ek poora chakra ~12 second (v85: pehle
+        // ~18 s tha — ON hone par harkat dekhte hi saaf pata
+        // chale, isliye tez; dheema, plasma jaisa). SPEAKING
+        // me iski raftaar dugni se zyada.
+        const val FLOW_PERIOD_MS = 12_000L
         const val SPEAKING_SPEED = 2.2f
         const val FRAME_MS = 33L
         const val GLOW_MIN = 0.5f

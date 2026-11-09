@@ -127,15 +127,18 @@
             android:gravity="center"
             android:orientation="vertical">
 
+            <!-- v85: beech me mic NAHI — chhota POWER button (tap = chalu, phir tap = band)।
+                 Orb ki tarah ye bhi orbPowerToggle hi chalata hai। -->
             <TextView
-                android:id="@+id/navMicButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="@drawable/mic_fab_bg"
+                android:id="@+id/navPowerButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/power_fab_bg"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
-                android:text="🎤"
+                android:text="⏻"
+                android:textColor="#94A3B8"
                 android:textSize="24sp" />
         </LinearLayout>
 

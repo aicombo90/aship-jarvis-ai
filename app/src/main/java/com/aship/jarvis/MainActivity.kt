@@ -748,7 +748,8 @@ class MainActivity : Activity() {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
         findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
-        findViewById<TextView>(R.id.navMicButton).setOnClickListener { toggleListening() }
+        // v85: beech me mic NAHI — chhota POWER button, orb ki tarah hi toggle।
+        findViewById<TextView>(R.id.navPowerButton)?.setOnClickListener { orbPowerToggle() }
         findViewById<TextView>(R.id.navSettingsButton).setOnClickListener { openApiKeys() }
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -916,8 +917,20 @@ class MainActivity : Activity() {
             micStatusPill.text = when {
                 listening -> "🎤 শুনছি — বলো, বস"
                 on -> "🎤 মায়া চালু আছে — বলো, বস"
-                else -> "🎤 মায়া বন্ধ — অর্বে হাত দাও"
+                else -> "🎤 মায়া বন্ধ — পাওয়ার চাপো"
             }
+        }
+        // v85: neeche wala chhota POWER button bhi haalat dikhaye —
+        // chalu ho to hara + chamakta, band ho to dhunda।
+        findViewById<TextView>(R.id.navPowerButton)?.let { btn ->
+            btn.setBackgroundResource(
+                if (on) R.drawable.power_fab_on_bg else R.drawable.power_fab_bg
+            )
+            btn.setTextColor(
+                if (on) android.graphics.Color.rgb(187, 247, 208)
+                else android.graphics.Color.rgb(148, 163, 184)
+            )
+            btn.alpha = if (on) 1f else 0.7f
         }
     }
 
@@ -1281,6 +1294,10 @@ class MainActivity : Activity() {
     /** v82: orb tap ke baad mic permission ka intezaar — mile to power on karo। */
     private var orbPowerPending: Boolean = false
 
+    /** v85: power toggle ki debounce — 1 s ke andar dusra tap
+     *  chalu/band ki jhankaar na banaye (double-tap flap)। */
+    private var lastPowerToggleMs = 0L
+
     /**
      * v82: orb = POWER BUTTON — tap = Maya chalu/band।
      * Chalu ho to band karo, band ho to chalu karo।
@@ -1294,8 +1311,28 @@ class MainActivity : Activity() {
      * orb usme haath nahi dalta।
      */
     private fun orbPowerToggle() {
+        // v85: debounce — tez double-tap ek hi toggle gine।
+        val nowMs = SystemClock.uptimeMillis()
+        if (nowMs - lastPowerToggleMs < 1_000L) return
+        lastPowerToggleMs = nowMs
         if (JarvisWakeService.isRunning) {
             powerOff()
+            return
+        }
+        // v85: Hindi offline model bina service chalu karke
+        // turant khud band ho jati thi (flap ki sabse badi
+        // wajah — clean install ke baad model mit jata hai)।
+        // Model na ho to service chalu hi mat karo — seedha
+        // download shuru karo aur user ko saaf batao।
+        if (::modelManager.isInitialized &&
+            !modelManager.isModelReady(ModelLanguage.HINDI)
+        ) {
+            Toast.makeText(
+                this,
+                "অফলাইন মডেল ডাউনলোড করা নেই — ডাউনলোড করছি, শেষ হলে আবার পাওয়ার চাপো।",
+                Toast.LENGTH_LONG
+            ).show()
+            downloadHindiModel()
             return
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=

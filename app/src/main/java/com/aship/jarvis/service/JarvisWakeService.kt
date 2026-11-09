@@ -778,6 +778,11 @@ class JarvisWakeService : Service() {
                     "Pehle app kholkar model download kijiye."
             )
             updateNotification("Model nahi hai — app kholkar pehle download kijiye")
+            // v85: model bina boot par bhi har baar chalu hokar
+            // turant band hone ka chakra na bane — jhanda lagao
+            // taaki boot wapas na laye; user model download karke
+            // power dabayega to powerOn jhanda saaf kar dega।
+            prefs.wakeStoppedByShutdown = true
             mainHandler.post { stopSelf() }
             return
         }
@@ -1021,13 +1026,18 @@ class JarvisWakeService : Service() {
             mainHandler.post { stopSelf() }
             return
         }
+        // v85: flap dheela karo — har galti ke baad der badhti
+        // jaye (4 s, 8 s, phir 12 s), taaki chalu/band ki
+        // jhankaar na lage; 5 galti ke baad pehle jaisa band।
+        val restartDelayMs =
+            WAKE_RESTART_DELAY_MS * minOf(wakeErrorCount.coerceAtLeast(1), 3)
         mainHandler.postDelayed({
             executor.execute {
                 if (!destroyed && state == State.WAKE) {
                     startWakeSession()
                 }
             }
-        }, WAKE_RESTART_DELAY_MS)
+        }, restartDelayMs)
     }
 
     private val wakeListener = object : RecognitionListener {
@@ -5132,7 +5142,7 @@ class JarvisWakeService : Service() {
         private const val REPLY_FALLBACK_BASE_MS = 4_000L
         private const val REPLY_FALLBACK_PER_CHAR_MS = 110L
         private const val REPLY_FALLBACK_MAX_MS = 20_000L
-        private const val WAKE_RESTART_DELAY_MS = 1_500L
+        private const val WAKE_RESTART_DELAY_MS = 4_000L
         private const val MAX_WAKE_ERRORS = 5
         private const val WAKE_AUTO_RESUME_MS = 12_000L
         private const val REPLY_RESUME_RETRY_MS = 2_000L
