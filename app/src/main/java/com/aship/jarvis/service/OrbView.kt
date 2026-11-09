@@ -20,6 +20,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * v1.5: Siri jaisa chamakta gola (orb).
@@ -65,6 +66,14 @@ import kotlin.math.sin
  *    ball satah par rakha lage।
  *  - ON hone par bahav tez (~12 s ka chakra) taaki dekhte hi
  *    pata chale chalu hai; OFF par harkat band + dhunda (alpha)।
+ *
+ * v86: ON hone par gole ke upar GHOOMTA KANA-GOLA (particle
+ * sphere) — video (bawal_techh OpenJarvis HUD) jaisa: 160 bindu
+ * gole ki satah par, khade aksh ke chaaron taraf ghoomte hue
+ * (~6 s me ek chakkar), aage wale ujle/bade, peeche wale
+ * dhundhle — dekhte hi saaf pata chale chalu hai; OFF par
+ * bilkul nahi (normal still ball)। SPEAKING me bindu halke
+ * dhadakte hain।
  *
  * Do framework animator hi saari harkat karte hain:
  *  - "saans" (breathing): roshni/aabha ki chamak dheere badhti-
@@ -185,6 +194,26 @@ class OrbView(context: Context) : View(context) {
         }
     }
     private val sparkPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // v86: ghoomta kana-gola (particle sphere) — video (bawal_techh
+    // OpenJarvis HUD) jaisa: chhote bindu gole ki satah par,
+    // khade aksh (Y) ke chaaron taraf ghoomte hue — ON hone par
+    // dekhte hi saaf pata chale chalu hai; OFF par bilkul nahi।
+    private val particlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // Fibonacci gola — bindu satah par barabar phailte hain।
+    private val particleX = FloatArray(PARTICLE_COUNT) { i ->
+        val y = 1f - 2f * (i + 0.5f) / PARTICLE_COUNT
+        val r = sqrt((1f - y * y).coerceAtLeast(0f))
+        (cos(i * 2.399963f) * r)
+    }
+    private val particleY = FloatArray(PARTICLE_COUNT) { i ->
+        1f - 2f * (i + 0.5f) / PARTICLE_COUNT
+    }
+    private val particleZ = FloatArray(PARTICLE_COUNT) { i ->
+        val y = 1f - 2f * (i + 0.5f) / PARTICLE_COUNT
+        val r = sqrt((1f - y * y).coerceAtLeast(0f))
+        (sin(i * 2.399963f) * r)
+    }
 
     private var lastInvalidateMs = 0L
 
@@ -476,6 +505,10 @@ class OrbView(context: Context) : View(context) {
         // Chingariyan: chhoti ghoomti-tiltilati roshniyaan.
         drawSparks(canvas, ph, twoPi)
 
+        // v86: ON hone par ghoomta kana-gola (particle sphere) —
+        // dekhte hi pata chale chalu hai; OFF par bilkul nahi।
+        if (flowAnimator.isRunning) drawParticleSphere(canvas, ph, twoPi, speaking)
+
         // Gloss: naram safed jhalak + chhoti tez chamak.
         canvas.drawCircle(centerX, centerY, radius, highlightPaint)
         canvas.drawCircle(centerX, centerY, radius, beadPaint)
@@ -587,6 +620,39 @@ class OrbView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * v86: ghoomta kana-gola — ON hone par gole ke upar ghoomte
+     * bindu (HUD globe jaisa). Khade aksh ke chaaron taraf
+     * ghoomta hai; aage wale bindu bade/ujle, peeche wale
+     * chhote/dhundhle — gole ki gehrai dikhti hai। SPEAKING me
+     * bindu halke dhadakte hain (pulse)।
+     */
+    private fun drawParticleSphere(canvas: Canvas, ph: Float, twoPi: Float, speaking: Boolean) {
+        // Ek chakra (12 s) me do poore ghoom — ~6 s me ek chakkar।
+        val rot = ph * twoPi * 2f
+        val cosR = cos(rot)
+        val sinR = sin(rot)
+        // SPEAKING me bindu dhadakte hain (waveform jaisa pulse)।
+        val pulse = if (speaking) 1f + 0.18f * sin(ph * twoPi * 6f) else 1f
+        val pr = radius * 0.92f
+        for (i in 0 until PARTICLE_COUNT) {
+            val x = particleX[i]
+            val y = particleY[i]
+            val z = particleZ[i]
+            // Y aksh ke chaaron taraf ghoomao।
+            val xr = x * cosR + z * sinR
+            val zr = -x * sinR + z * cosR
+            // Gehrai: aage (+1) ujla/bada, peeche (-1) dhundhla/chhota।
+            val depth = (zr + 1f) / 2f
+            val alpha = (50f + 205f * depth).toInt().coerceIn(0, 255)
+            val dotR = (radius * 0.02f * (0.55f + 0.65f * depth) * pulse)
+                .coerceAtLeast(0.6f)
+            particlePaint.color = Color.rgb(190, 242, 255)
+            particlePaint.alpha = alpha
+            canvas.drawCircle(centerX + xr * pr, centerY + y * pr, dotR, particlePaint)
+        }
+    }
+
     private companion object {
         const val BREATH_PERIOD_MS = 2_300L
         // Master bahav: ek poora chakra ~12 second (v85: pehle
@@ -631,5 +697,8 @@ class OrbView(context: Context) : View(context) {
         )
 
         const val SPARK_COUNT = 11
+
+        // v86: kana-gole ke bindu — HUD globe jaisa ghana jaal।
+        const val PARTICLE_COUNT = 160
     }
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v86: POWER button ka vector icon — ⏻ TEXT glyph ki jagah, taaki har
+     device par ek jaisa saaf dikhe (glyph OriginOS par halka padta tha)।
+     Material power icon: gol ghata hua ghera + upar khadi lakeer। -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13,3C9.25,3 6.21,5.55 5.19,9H6.95C7.7,6.26 10.13,4.5 13,4.5C16.87,4.5 20,7.63 20,11.5C20,15.37 16.87,18.5 13,18.5C10.13,18.5 7.7,16.74 6.95,14H5.19C6.21,17.45 9.25,20 13,20C17.97,20 22,15.97 22,11C22,6.03 17.97,3 13,3M11,7H13V13H11V7Z" />
+</vector>

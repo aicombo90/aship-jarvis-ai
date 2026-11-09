@@ -26,6 +26,7 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.ScrollView
@@ -748,8 +749,9 @@ class MainActivity : Activity() {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
         findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
-        // v85: beech me mic NAHI — chhota POWER button, orb ki tarah hi toggle।
-        findViewById<TextView>(R.id.navPowerButton)?.setOnClickListener { orbPowerToggle() }
+        // v86: beech me mic NAHI — chhota POWER button (vector icon + label),
+        // orb ki tarah hi toggle।
+        findViewById<ImageView>(R.id.navPowerButton)?.setOnClickListener { orbPowerToggle() }
         findViewById<TextView>(R.id.navSettingsButton).setOnClickListener { openApiKeys() }
         findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -920,18 +922,23 @@ class MainActivity : Activity() {
                 else -> "🎤 মায়া বন্ধ — পাওয়ার চাপো"
             }
         }
-        // v85: neeche wala chhota POWER button bhi haalat dikhaye —
-        // chalu ho to hara + chamakta, band ho to dhunda।
-        findViewById<TextView>(R.id.navPowerButton)?.let { btn ->
+        // v86: neeche wala chhota POWER button bhi haalat dikhaye —
+        // vector icon + "পাওয়ার" label; OFF me bhi saaf dikhe
+        // (ujla icon + halka kinara + alpha 1), ON me hara।
+        findViewById<ImageView>(R.id.navPowerButton)?.let { btn ->
             btn.setBackgroundResource(
                 if (on) R.drawable.power_fab_on_bg else R.drawable.power_fab_bg
             )
-            btn.setTextColor(
+            btn.setColorFilter(
                 if (on) android.graphics.Color.rgb(187, 247, 208)
-                else android.graphics.Color.rgb(148, 163, 184)
+                else android.graphics.Color.rgb(241, 245, 249)
             )
-            btn.alpha = if (on) 1f else 0.7f
+            btn.alpha = 1f
         }
+        findViewById<TextView>(R.id.navPowerLabel)?.setTextColor(
+            if (on) android.graphics.Color.rgb(187, 247, 208)
+            else android.graphics.Color.rgb(199, 206, 234)
+        )
     }
 
     /** Cache wala mausam turant dikhao (net ka intezaar nahi)। */
