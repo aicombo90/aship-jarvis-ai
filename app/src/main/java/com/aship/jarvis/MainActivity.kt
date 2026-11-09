@@ -281,7 +281,7 @@ class MainActivity : Activity() {
     private val screenConfirmHost = ScreenConfirm.Host { question ->
         mainHandler.post {
             if (isFinishing || isDestroyed) return@post
-            responseText.text = "Maya: $question"
+            showResponse("Maya: $question")
             speaker.speak(question)
             if (activityInForeground && !listening &&
                 checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
@@ -467,7 +467,7 @@ class MainActivity : Activity() {
             )
         }
 
-        micButton.setOnClickListener { toggleListening() }
+        findViewById<Button>(R.id.micButton)?.setOnClickListener { toggleListening() }
 
         findViewById<Button>(R.id.sendButton).setOnClickListener {
             submitTypedCommand()
@@ -524,18 +524,21 @@ class MainActivity : Activity() {
         }
         // v51 (item 8): offline kaan pehle wala badlav।
         offlineEarsFirstSwitch = findViewById(R.id.offlineEarsFirstSwitch)
-        offlineEarsFirstSwitch.isChecked = prefs.offlineEarsFirst
-        offlineEarsFirstSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.offlineEarsFirst = checked
-            // Saamne wala engine bhi naye niyam se bane।
-            createEngine()
-            updateStatus()
+        // v84: view na mile to chupchaap chhodo।
+        findViewById<Switch>(R.id.offlineEarsFirstSwitch)?.apply {
+            isChecked = prefs.offlineEarsFirst
+            setOnCheckedChangeListener { _, checked ->
+                prefs.offlineEarsFirst = checked
+                // Saamne wala engine bhi naye niyam se bane।
+                createEngine()
+                updateStatus()
+            }
         }
-        banglaModelButton.setOnClickListener { downloadBanglaModel() }
+        findViewById<Button>(R.id.banglaModelButton)?.setOnClickListener { downloadBanglaModel() }
         refreshBanglaModelUi()
         listenLangLabel = findViewById(R.id.listenLangLabel)
         listenLangButton = findViewById(R.id.listenLangButton)
-        listenLangButton.setOnClickListener {
+        findViewById<Button>(R.id.listenLangButton)?.setOnClickListener {
             // v33: shune wali bhasha ghumao — v77 se
             // Language card bhi wahi ek kaam karta hai।
             cycleListenLanguage()
@@ -552,7 +555,7 @@ class MainActivity : Activity() {
         // alag screen par। v62: Gemini key bhi ab SIRF yahin
         // (ek hi jagah); upar wali Maya jagah me sirf status।
         apiKeysButton = findViewById(R.id.apiKeysButton)
-        apiKeysButton.setOnClickListener {
+        findViewById<Button>(R.id.apiKeysButton)?.setOnClickListener {
             startActivity(Intent(this, ApiKeysActivity::class.java))
         }
         refreshApiKeysButton()
@@ -560,7 +563,7 @@ class MainActivity : Activity() {
         // list; tap karte hi wohi hukm phir chalega।
         historyList = findViewById(R.id.historyList)
         historyClearButton = findViewById(R.id.historyClearButton)
-        historyClearButton.setOnClickListener {
+        findViewById<Button>(R.id.historyClearButton)?.setOnClickListener {
             CommandHistory.clear(this)
             refreshHistoryUi()
             Toast.makeText(this, "ইতিহাস মুছে দেওয়া হয়েছে।", Toast.LENGTH_SHORT).show()
@@ -570,7 +573,7 @@ class MainActivity : Activity() {
         // [HistoryCommands.lastRepeatable], isliye kabhi
         // loop nahi banta)। Kuch na ho to sirf Toast।
         repeatLastButton = findViewById(R.id.repeatLastButton)
-        repeatLastButton.setOnClickListener {
+        findViewById<Button>(R.id.repeatLastButton)?.setOnClickListener {
             val last = HistoryCommands.lastRepeatable(this)
             if (last == null) {
                 Toast.makeText(
@@ -586,12 +589,12 @@ class MainActivity : Activity() {
         // v56: START button — ফোন চিনে নেওয়া।
         startLearnButton = findViewById(R.id.startLearnButton)
         phoneLearnStatusText = findViewById(R.id.phoneLearnStatusText)
-        startLearnButton.setOnClickListener { startPhoneLearning() }
+        findViewById<Button>(R.id.startLearnButton)?.setOnClickListener { startPhoneLearning() }
         refreshPhoneLearnStatus()
         // v57: ডেটা বাটন শেখানো।
         learnDataButton = findViewById(R.id.learnDataButton)
         dataButtonStatusText = findViewById(R.id.dataButtonStatusText)
-        learnDataButton.setOnClickListener { startDataButtonLearning() }
+        findViewById<Button>(R.id.learnDataButton)?.setOnClickListener { startDataButtonLearning() }
         refreshDataButtonStatus()
         // v37: screen-agent ke sawalon ki mezbaani is
         // screen ke naam bandho (onDestroy me hat ti hai).
@@ -681,6 +684,8 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     private fun setupModeSelector() {
+        // v84: view na mile to chupchaap chhodo, crash nahi।
+        if (!::modeGroup.isInitialized) return
         val checkedId = when (prefs.mode) {
             JarvisMode.OFFLINE -> R.id.modeOffline
             JarvisMode.ONLINE -> R.id.modeOnline
@@ -740,7 +745,7 @@ class MainActivity : Activity() {
         findViewById<LinearLayout>(R.id.memoriesCard).setOnClickListener { showMemoriesDialog() }
         findViewById<LinearLayout>(R.id.languageCard).setOnClickListener { cycleListenLanguage() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
-            homeScrollView.smoothScrollTo(0, 0)
+            findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
         findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
         findViewById<TextView>(R.id.navMicButton).setOnClickListener { toggleListening() }
@@ -749,8 +754,10 @@ class MainActivity : Activity() {
             checkForUpdate(manual = true)
         }
         // v82: orb = POWER BUTTON — tap = Maya chalu/band।
-        homeOrbView.setOnClickListener { orbPowerToggle() }
-        micStatusPill.setOnClickListener { orbPowerToggle() }
+        // v84: view na mile to chupchaap chhodo, crash nahi
+        // (lateinit field par seedha haath — v83 wala crash)।
+        findViewById<OrbView>(R.id.homeOrbView)?.setOnClickListener { orbPowerToggle() }
+        findViewById<TextView>(R.id.micStatusPill)?.setOnClickListener { orbPowerToggle() }
     }
 
     private fun openApiKeys() {
@@ -759,6 +766,8 @@ class MainActivity : Activity() {
 
     /** Chat = type box par focus + keyboard kholo। */
     private fun focusChat() {
+        // v84: view na mile to chupchaap chhodo, crash nahi।
+        if (!::commandInput.isInitialized) return
         commandInput.requestFocus()
         val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.showSoftInput(commandInput, InputMethodManager.SHOW_IMPLICIT)
@@ -772,8 +781,7 @@ class MainActivity : Activity() {
      * "ChatGPT খুলে লেখাটা পাঠিয়ে দাও"।
      */
     private fun startScreenVoice() {
-        responseText.text =
-            "Maya: স্ক্রিনে কী করাতে চাও বলো — যেমন ChatGPT খুলে লেখাটা পাঠিয়ে দাও।"
+        showResponse("Maya: স্ক্রিনে কী করাতে চাও বলো — যেমন ChatGPT খুলে লেখাটা পাঠিয়ে দাও।")
         if (!listening) toggleListening()
     }
 
@@ -851,6 +859,24 @@ class MainActivity : Activity() {
         greetingText.text = "$greet, বস"
     }
 
+    /**
+     * v84: jawab / pehchan / status wali linein likho —
+     * view na mile to chupchaap chhodo, crash nahi।
+     * (lateinit field par seedha haath — v83 wala crash;
+     * ye helpers hi ek jagah guard rakhte hain।)
+     */
+    private fun showResponse(s: String) {
+        if (::responseText.isInitialized) responseText.text = s
+    }
+
+    private fun showRecognized(s: String) {
+        if (::recognizedText.isInitialized) recognizedText.text = s
+    }
+
+    private fun setStatusText(s: String) {
+        if (::statusText.isInitialized) statusText.text = s
+    }
+
     /** Hero wali mic pill — sun raha ho ya band। */
     private fun refreshMicPill() {
         if (!::micStatusPill.isInitialized) return
@@ -902,7 +928,15 @@ class MainActivity : Activity() {
     }
 
     private fun paintWeather(w: WeatherFetcher.Weather) {
-        if (!::weatherTempText.isInitialized) return
+        // v84: har mausam wali line ki guard — ek bhi view
+        // na mile to kuch na likho, crash nahi।
+        if (!::weatherTempText.isInitialized ||
+            !::weatherConditionText.isInitialized ||
+            !::weatherIconText.isInitialized ||
+            !::weatherFeelsText.isInitialized ||
+            !::weatherHighLowText.isInitialized ||
+            !::weatherHumidityText.isInitialized
+        ) return
         weatherTempText.text = "${w.tempC}°"
         weatherConditionText.text = WeatherFetcher.conditionBangla(w.code)
         weatherIconText.text = WeatherFetcher.iconFor(w.code)
@@ -982,17 +1016,20 @@ class MainActivity : Activity() {
                 // do (agar is session ke liye use roka tha to hi).
                 resumeWakeService()
             }
-            micButton.text = if (isListening) {
-                "🛑 Sun raha hoon... (band karne ke liye tap kijiye)"
-            } else {
-                "🎤 Tap to speak"
+            // v84: button na mile to sirf label chhodo, crash nahi।
+            if (::micButton.isInitialized) {
+                micButton.text = if (isListening) {
+                    "🛑 Sun raha hoon... (band karne ke liye tap kijiye)"
+                } else {
+                    "🎤 Tap to speak"
+                }
             }
             // v77: hero wali mic pill bhi wahi haalat dikhaye।
             refreshMicPill()
         }
 
         override fun onPartialResult(text: String) {
-            recognizedText.text = "Aap bol rahe hain: $text"
+            showRecognized("Aap bol rahe hain: $text")
         }
 
         override fun onFinalResult(text: String) {
@@ -1019,13 +1056,11 @@ class MainActivity : Activity() {
                     // diya hoga, par turn abhi chal raha
                     // hai (v51 item 6a)।
                     MicArbiter.claim(this@MainActivity, MicArbiter.OWNER_FOREGROUND)
-                    statusText.text =
-                        "ঠিক শোনা গেল না — আবার শুনছি, বলুন..."
+                    setStatusText("ঠিক শোনা গেল না — আবার শুনছি, বলুন...")
                     engine?.startListening()
                 } else {
                     resumeWakeService()
-                    statusText.text =
-                        "কিছু ঠিক শোনা গেল না — আবার ট্যাপ করে বলুন।"
+                    setStatusText("কিছু ঠিক শোনা গেল না — আবার ট্যাপ করে বলুন।")
                 }
                 return
             }
@@ -1089,7 +1124,7 @@ class MainActivity : Activity() {
             // wapas kar do. (Fallback wale raaste par naya session
             // shuru hote hi khud pause bhej dega.)
             resumeWakeService()
-            statusText.text = message
+            setStatusText(message)
         }
     }
 
@@ -1153,11 +1188,11 @@ class MainActivity : Activity() {
         MicArbiter.claim(this, MicArbiter.OWNER_FOREGROUND)
         val lang = cascadeLanguages[cascadeIndex]
         sys.languageOverride = lang
-        statusText.text = when (lang) {
+        setStatusText(when (lang) {
             "bn-IN" -> "শোনা গেল না — এবার বাংলায় চেষ্টা করছি..."
             "hi-IN" -> "শোনা গেল না — এবার হিন্দিতে চেষ্টা করছি..."
             else -> "শোনা গেল না — আবার চেষ্টা করছি..."
-        }
+        })
         engineStartedOk = false
         engine?.startListening()
         return true
@@ -1482,6 +1517,8 @@ class MainActivity : Activity() {
      * kuch bheja hi nahi।
      */
     private fun submitTypedCommand(): Boolean {
+        // v84: type box na mile to bhejne ko kuch nahi, crash nahi।
+        if (!::commandInput.isInitialized) return false
         val typed = commandInput.text.toString()
         if (typed.isBlank()) return false
         commandInput.text.clear()
@@ -2080,8 +2117,8 @@ class MainActivity : Activity() {
             if (ScreenConfirm.hasPending()) {
                 ScreenConfirm.deliverAnswer("না")
             }
-            recognizedText.text = "Aapne kaha: $text"
-            responseText.text = "Jarvis: কমপ্লিট — পুরো বন্ধ হচ্ছে..."
+            showRecognized("Aapne kaha: $text")
+            showResponse("Jarvis: কমপ্লিট — পুরো বন্ধ হচ্ছে...")
             startFullShutdown()
             return
         }
@@ -2100,8 +2137,8 @@ class MainActivity : Activity() {
             } catch (t: Throwable) {
                 // Boli rokna bonus hai — band hona asal hai.
             }
-            recognizedText.text = "Aapne kaha: $text"
-            responseText.text = "Jarvis: (শাটডাউন — চুপচাপ বন্ধ)"
+            showRecognized("Aapne kaha: $text")
+            showResponse("Jarvis: (শাটডাউন — চুপচাপ বন্ধ)")
             return
         }
         // v37: screen-agent ka sawal latka ho (send ki
@@ -2112,9 +2149,8 @@ class MainActivity : Activity() {
         // se aata hai — send button bhi processCommand hi
         // bulata hai.)
         if (ScreenConfirm.deliverAnswer(text)) {
-            recognizedText.text = "Aapne kaha: $text"
-            responseText.text =
-                "Maya: jawab mil gaya — screen wala kaam aage badh raha hai..."
+            showRecognized("Aapne kaha: $text")
+            showResponse("Maya: jawab mil gaya — screen wala kaam aage badh raha hai...")
             return
         }
         // v53: COMMAND HISTORY — naya hukm yaad rakho
@@ -2122,7 +2158,7 @@ class MainActivity : Activity() {
         // woh upar pehle hi pakde gaye)।
         CommandHistory.record(this, text)
         refreshHistoryUi()
-        recognizedText.text = "Aapne kaha: $text"
+        showRecognized("Aapne kaha: $text")
         // v48: baat kisi shaksiyat ko NAAM lekar shuru
         // ho ("মায়া, ..." / "তারা, ...") to naam
         // hatakar asal hukm par chalo, aur is baar ke
@@ -2161,7 +2197,7 @@ class MainActivity : Activity() {
                     vocativeLang ?: PlayIntent.requestLanguage(commandText)
                 )
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $emptyLine"
+                showResponse("Maya: $emptyLine")
                 speaker.speak(emptyLine)
             }
             return
@@ -2176,7 +2212,7 @@ class MainActivity : Activity() {
                     vocativeLang ?: PlayIntent.requestLanguage(commandText)
                 )
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $line"
+                showResponse("Maya: $line")
                 speaker.speak(line)
             } else {
                 processCommand(last)
@@ -2190,7 +2226,7 @@ class MainActivity : Activity() {
                 vocativeLang ?: PlayIntent.requestLanguage(commandText)
             )
             politeFailureSpokenThisTurn = false
-            responseText.text = "Maya: $line"
+            showResponse("Maya: $line")
             speaker.speak(line)
             return
         }
@@ -2222,7 +2258,7 @@ class MainActivity : Activity() {
             vocativeLang ?: PlayIntent.requestLanguage(commandText)
         )?.let { teachLine ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Maya: $teachLine"
+            showResponse("Maya: $teachLine")
             speaker.speak(teachLine)
             return
         }
@@ -2241,7 +2277,7 @@ class MainActivity : Activity() {
             vocativeLang ?: PlayIntent.requestLanguage(commandText)
         )?.let { comboLine ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Maya: $comboLine"
+            showResponse("Maya: $comboLine")
             speaker.speak(comboLine)
             return
         }
@@ -2261,7 +2297,7 @@ class MainActivity : Activity() {
             vocativeLang ?: PlayIntent.requestLanguage(commandText)
         )?.let { ruleLine ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Maya: $ruleLine"
+            showResponse("Maya: $ruleLine")
             speaker.speak(ruleLine)
             return
         }
@@ -2270,7 +2306,7 @@ class MainActivity : Activity() {
             vocativeLang ?: PlayIntent.requestLanguage(commandText)
         )?.let { learnLine ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Maya: $learnLine"
+            showResponse("Maya: $learnLine")
             speaker.speak(learnLine)
             return
         }
@@ -2280,7 +2316,7 @@ class MainActivity : Activity() {
         // wali screen par (permission + panel yahin hai)।
         if (isStartLearningCommand(commandText)) {
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: শেখা শুরু করছি — ফোনটাকে চিনে নিচ্ছি।"
+            showResponse("Jarvis: শেখা শুরু করছি — ফোনটাকে চিনে নিচ্ছি।")
             startPhoneLearning()
             return
         }
@@ -2290,7 +2326,7 @@ class MainActivity : Activity() {
         // saamne wali screen par)।
         if (isLearnDataButtonCommand(commandText)) {
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: ডেটা বাটনটা শিখছি — ছবি দেখে চিহ্নটা চিনে নিচ্ছি।"
+            showResponse("Jarvis: ডেটা বাটনটা শিখছি — ছবি দেখে চিহ্নটা চিনে নিচ্ছি।")
             startDataButtonLearning()
             return
         }
@@ -2317,7 +2353,7 @@ class MainActivity : Activity() {
                 vocativeLang ?: PlayIntent.requestLanguage(commandText)
             )
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: ${taughtExec.result.responseText}"
+            showResponse("Jarvis: ${taughtExec.result.responseText}")
             speaker.speak(taughtExec.result.responseText)
             return
         }
@@ -2336,7 +2372,7 @@ class MainActivity : Activity() {
             allowScreenshot = false
         )?.let { comboLine ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: $comboLine"
+            showResponse("Jarvis: $comboLine")
             speaker.speak(comboLine)
             return
         }
@@ -2360,7 +2396,7 @@ class MainActivity : Activity() {
         // aur likhkar bheja gaya hukm bhi yahi se jata hai.
         commandEngine.deterministicScrollCommand(commandText)?.let { scrollResult ->
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: ${scrollResult.responseText}"
+            showResponse("Jarvis: ${scrollResult.responseText}")
             speaker.speak(scrollResult.responseText)
             return
         }
@@ -2486,7 +2522,7 @@ class MainActivity : Activity() {
         // me null aayega aur neeche wala purana offline
         // raasta bilkul pehle jaisa chalega.
         if (geminiBrainAllowed()) {
-            responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
+            showResponse("Maya soch rahi hai — kaam kar rahi hai...")
             askAgentBrain(commandText, vocativeLang)
             return
         }
@@ -2527,11 +2563,11 @@ class MainActivity : Activity() {
             } else {
                 step.text
             }
-            responseText.text = if (addaEngine.isActive) {
+            showResponse(if (addaEngine.isActive) {
                 "Maya: $spokenText\nAdda mode: ON — 'bye' bolne par band hoga."
             } else {
                 "Maya: $spokenText"
-            }
+            })
             speaker.speak(spokenText)
             return
         }
@@ -2540,7 +2576,7 @@ class MainActivity : Activity() {
             // Kaam ho gaya — agle turn ke liye "samajh nahi
             // aaya" ki ek-baar-wali ginati taaza.
             politeFailureSpokenThisTurn = false
-            responseText.text = "Jarvis: ${result.responseText}"
+            showResponse("Jarvis: ${result.responseText}")
             speaker.speak(result.responseText)
             return
         }
@@ -2550,7 +2586,7 @@ class MainActivity : Activity() {
         // Gemini agent ke paas bhejo — "samajh nahi aaya" par
         // rukna hi dead end tha.
         if (!agentAlreadyTried && geminiBrainAllowed()) {
-            responseText.text = "Maya soch rahi hai — kaam kar rahi hai..."
+            showResponse("Maya soch rahi hai — kaam kar rahi hai...")
             askAgentBrain(text, vocativeLang)
             return
         }
@@ -2567,7 +2603,7 @@ class MainActivity : Activity() {
         ) {
             val line = PlayIntent.quotaReply(PlayIntent.requestLanguage(text))
             politeFailureSpokenThisTurn = true
-            responseText.text = "Maya: $line"
+            showResponse("Maya: $line")
             speaker.speak(line)
             return
         }
@@ -2577,8 +2613,8 @@ class MainActivity : Activity() {
         // jaanchne / likhkar bhejne ka ishara bhi — screen par
         // Bangla me, awaaz me usi ka Hindi roop (ek boli me ek
         // hi script saaf padhti hai).
-        responseText.text = "Jarvis: ${result.responseText}\n" +
-            "(শোনার ভাষা ঠিক আছে কিনা দেখুন — না হলে লিখে পাঠান।)"
+        showResponse("Jarvis: ${result.responseText}\n" +
+            "(শোনার ভাষা ঠিক আছে কিনা দেখুন — না হলে লিখে পাঠান।)")
         if (!politeFailureSpokenThisTurn) {
             politeFailureSpokenThisTurn = true
             speaker.speak(
@@ -2745,7 +2781,7 @@ class MainActivity : Activity() {
                     geminiHistory.removeAt(0)
                     geminiHistory.removeAt(0)
                 }
-                responseText.text = "Maya: $safeReply"
+                showResponse("Maya: $safeReply")
                 speaker.speak(safeReply)
             }
         }
@@ -2766,7 +2802,7 @@ class MainActivity : Activity() {
         replyLanguage: PlayIntent.SpokenLang? = null
     ) {
         if (geminiBrainAllowed()) {
-            responseText.text = "Maya soch rahi hai — gaana chala rahi hai..."
+            showResponse("Maya soch rahi hai — gaana chala rahi hai...")
             askAgentBrain(text, replyLanguage) { runDirectYouTubePlay(text, query) }
             return
         }
@@ -2783,7 +2819,7 @@ class MainActivity : Activity() {
      * nahi / khula hi nahi.
      */
     private fun runDirectYouTubePlay(text: String, query: String) {
-        responseText.text = "Maya: '$query' chala rahi hoon..."
+        showResponse("Maya: '$query' chala rahi hoon...")
         background.execute {
             val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
             val result = try {
@@ -2798,7 +2834,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $line"
+                showResponse("Maya: $line")
                 speaker.speak(line)
             }
         }
@@ -2821,7 +2857,7 @@ class MainActivity : Activity() {
         task: String,
         vocativeLang: PlayIntent.SpokenLang?
     ) {
-        responseText.text = "Maya: link wala kaam screen par kar rahi hoon..."
+        showResponse("Maya: link wala kaam screen par kar rahi hoon...")
         background.execute {
             val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
             // v66: askAgentBrain wala hi niyam — hukm me saaf
@@ -2843,7 +2879,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $line"
+                showResponse("Maya: $line")
                 speaker.speak(line)
             }
         }
@@ -2868,14 +2904,14 @@ class MainActivity : Activity() {
         vocativeLang: PlayIntent.SpokenLang?
     ) {
         val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
-        responseText.text = when (lang) {
+        showResponse(when (lang) {
             PlayIntent.SpokenLang.BENGALI ->
                 "Maya: লেখাটা পেস্ট করে পাঠাচ্ছি..."
             PlayIntent.SpokenLang.HINDI ->
                 "Maya: लिखा हुआ पेस्ट करके भेज रही हूँ..."
             PlayIntent.SpokenLang.ENGLISH ->
                 "Maya: Pasting the text and sending it..."
-        }
+        })
         background.execute {
             val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
             // v66: askAgentBrain wala hi niyam — hukm me saaf
@@ -2899,7 +2935,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: $line"
+                showResponse("Maya: $line")
                 speaker.speak(line)
             }
         }
@@ -2934,7 +2970,7 @@ class MainActivity : Activity() {
                 if (last == null) {
                     val line = ShowMeIntent.noTopicLine(kind, lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
@@ -2951,7 +2987,7 @@ class MainActivity : Activity() {
                 if (last == null) {
                     val line = ShowMeIntent.noTopicLine(kind, lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
@@ -2959,11 +2995,11 @@ class MainActivity : Activity() {
                 if (!geminiBrainAllowed()) {
                     val line = ShowMeIntent.offlineDetailsLine(lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
-                responseText.text = "Maya: ${ShowMeIntent.thinkingLine(lang)}"
+                showResponse("Maya: ${ShowMeIntent.thinkingLine(lang)}")
                 GeminiBrain.chat(
                     this, emptyList(),
                     ShowMeIntent.detailsPrompt(topic, lang)
@@ -2975,7 +3011,7 @@ class MainActivity : Activity() {
                     mainHandler.post {
                         if (isFinishing || isDestroyed) return@post
                         politeFailureSpokenThisTurn = false
-                        responseText.text = "Maya: $line"
+                        showResponse("Maya: $line")
                         speaker.speak(line)
                     }
                 }
@@ -2985,13 +3021,13 @@ class MainActivity : Activity() {
                 if (item == null) {
                     val line = ShowMeIntent.askWhatLine(lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
                 ShowMeIntent.saveLastShown(this, item, 0)
                 if (geminiBrainAllowed()) {
-                    responseText.text = "Maya: ${ShowMeIntent.thinkingLine(lang)}"
+                    showResponse("Maya: ${ShowMeIntent.thinkingLine(lang)}")
                     GeminiBrain.chat(
                         this, emptyList(),
                         ShowMeIntent.refineQueryPrompt(item)
@@ -3030,7 +3066,7 @@ class MainActivity : Activity() {
             ShowMeIntent.openFailedLine(lang)
         }
         politeFailureSpokenThisTurn = false
-        responseText.text = "Maya: $line"
+        showResponse("Maya: $line")
         speaker.speak(line)
     }
 
@@ -3056,7 +3092,7 @@ class MainActivity : Activity() {
         val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
         when (kind) {
             WebSearchIntent.Kind.NEWS -> {
-                responseText.text = "Maya: ${WebSearchIntent.fetchingNewsLine(lang)}"
+                showResponse("Maya: ${WebSearchIntent.fetchingNewsLine(lang)}")
                 Thread {
                     val items = WebSearchIntent.fetchNews()
                     val line = if (items.isNullOrEmpty()) {
@@ -3070,7 +3106,7 @@ class MainActivity : Activity() {
                     mainHandler.post {
                         if (isFinishing || isDestroyed) return@post
                         politeFailureSpokenThisTurn = false
-                        responseText.text = "Maya: $line"
+                        showResponse("Maya: $line")
                         speaker.speak(line)
                     }
                 }.apply { isDaemon = true }.start()
@@ -3080,11 +3116,11 @@ class MainActivity : Activity() {
                 if (query == null) {
                     val line = WebSearchIntent.askTopicLine(lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
-                responseText.text = "Maya: ${WebSearchIntent.searchingLine(lang)}"
+                showResponse("Maya: ${WebSearchIntent.searchingLine(lang)}")
                 Thread {
                     val results = WebSearchIntent.searchWeb(query)
                     if (results.isNotEmpty()) {
@@ -3101,7 +3137,7 @@ class MainActivity : Activity() {
                     mainHandler.post {
                         if (isFinishing || isDestroyed) return@post
                         politeFailureSpokenThisTurn = false
-                        responseText.text = "Maya: $line"
+                        showResponse("Maya: $line")
                         speaker.speak(line)
                     }
                 }.apply { isDaemon = true }.start()
@@ -3112,7 +3148,7 @@ class MainActivity : Activity() {
                 if (first == null) {
                     val line = WebSearchIntent.openNoSearchLine(lang)
                     politeFailureSpokenThisTurn = false
-                    responseText.text = "Maya: $line"
+                    showResponse("Maya: $line")
                     speaker.speak(line)
                     return
                 }
@@ -3139,7 +3175,7 @@ class MainActivity : Activity() {
             WebSearchIntent.openFailedLine(lang)
         }
         politeFailureSpokenThisTurn = false
-        responseText.text = "Maya: $line"
+        showResponse("Maya: $line")
         speaker.speak(line)
     }
 
@@ -3220,7 +3256,7 @@ class MainActivity : Activity() {
     /** v78: tasveer wali boli + screen — runDirectShowMe wala hi dhang. */
     private fun speakImageLine(line: String) {
         politeFailureSpokenThisTurn = false
-        responseText.text = "Maya: $line"
+        showResponse("Maya: $line")
         speaker.speak(line)
     }
 
@@ -3252,7 +3288,7 @@ class MainActivity : Activity() {
         }
         val genLine = ImageIntent.generatingLine(lang)
         politeFailureSpokenThisTurn = false
-        responseText.text = "Maya: $genLine"
+        showResponse("Maya: $genLine")
         speaker.speak(genLine)
         ImageGen.generate(this, prompt, variation) { result ->
             when (result) {
@@ -3332,7 +3368,7 @@ class MainActivity : Activity() {
      * screen surakshit / service band.
      */
     private fun runDirectScreenshot(text: String) {
-        responseText.text = "Maya: screenshot le rahi hoon..."
+        showResponse("Maya: screenshot le rahi hoon...")
         background.execute {
             val result = try {
                 commandEngine.runScreenshotCommand(text)
@@ -3342,7 +3378,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
-                responseText.text = "Maya: ${result.responseText}"
+                showResponse("Maya: ${result.responseText}")
                 speaker.speak(result.responseText)
             }
         }
@@ -3353,25 +3389,25 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
 
     private fun downloadHindiModel() {
-        statusText.text = "Hindi offline model download shuru ho raha hai..."
+        setStatusText("Hindi offline model download shuru ho raha hai...")
         background.execute {
             modelManager.downloadModel(
                 ModelLanguage.HINDI,
                 object : ModelManager.DownloadCallback {
                     override fun onProgress(message: String) {
-                        mainHandler.post { statusText.text = message }
+                        mainHandler.post { setStatusText(message) }
                     }
 
                     override fun onComplete(language: ModelLanguage) {
                         mainHandler.post {
-                            statusText.text = "Hindi offline model ready hai."
+                            setStatusText("Hindi offline model ready hai.")
                             createEngine()
                             updateStatus()
                         }
                     }
 
                     override fun onError(message: String) {
-                        mainHandler.post { statusText.text = message }
+                        mainHandler.post { setStatusText(message) }
                     }
                 }
             )
@@ -3384,31 +3420,29 @@ class MainActivity : Activity() {
 
     private fun downloadBanglaModel() {
         if (banglaModelManager.isReady()) {
-            statusText.text = "বাংলা অফলাইন মডেল আগেই তৈরি আছে।"
+            setStatusText("বাংলা অফলাইন মডেল আগেই তৈরি আছে।")
             refreshBanglaModelUi()
             return
         }
         if (banglaModelManager.isDownloading()) {
-            statusText.text = "বাংলা অফলাইন মডেল ডাউনলোড চলছে…"
+            setStatusText("বাংলা অফলাইন মডেল ডাউনলোড চলছে…")
             return
         }
-        statusText.text = "বাংলা অফলাইন মডেল ডাউনলোড শুরু হচ্ছে…"
+        setStatusText("বাংলা অফলাইন মডেল ডাউনলোড শুরু হচ্ছে…")
         background.execute {
             banglaModelManager.download(
                 object : BanglaModelManager.DownloadCallback {
                     override fun onProgress(percent: Int) {
                         mainHandler.post {
-                            statusText.text =
-                                "বাংলা অফলাইন মডেল ডাউনলোড হচ্ছে… $percent%"
+                            setStatusText("বাংলা অফলাইন মডেল ডাউনলোড হচ্ছে… $percent%")
                             refreshBanglaModelUi()
                         }
                     }
 
                     override fun onComplete() {
                         mainHandler.post {
-                            statusText.text =
-                                "বাংলা অফলাইন মডেল তৈরি — এবার ব্যাকগ্রাউন্ডে " +
-                                    "বাংলা কমান্ড অফলাইনেই শুনবে।"
+                            setStatusText("বাংলা অফলাইন মডেল তৈরি — এবার ব্যাকগ্রাউন্ডে " +
+                                "বাংলা কমান্ড অফলাইনেই শুনবে।")
                             refreshBanglaModelUi()
                             updateStatus()
                         }
@@ -3419,9 +3453,8 @@ class MainActivity : Activity() {
                             // Malik ne khud button dabakar maanga
                             // tha — nakami saaf Bangla me bolo,
                             // chup mat raho.
-                            statusText.text =
-                                "বাংলা অফলাইন মডেল ডাউনলোড হয়নি — নেট চেক করে " +
-                                    "আবার চেষ্টা করো।"
+                            setStatusText("বাংলা অফলাইন মডেল ডাউনলোড হয়নি — নেট চেক করে " +
+                                "আবার চেষ্টা করো।")
                             refreshBanglaModelUi()
                         }
                     }
@@ -3445,24 +3478,24 @@ class MainActivity : Activity() {
                 banglaModelStatusText.text =
                     "বাংলা অফলাইন মডেল: তৈরি আছে ✓ — ব্যাকগ্রাউন্ড বাংলা " +
                         "কমান্ড এবার অফলাইনেই শুনবে"
-                banglaModelButton.text = "বাংলা অফলাইন মডেল ✓ তৈরি"
+                if (::banglaModelButton.isInitialized) banglaModelButton.text = "বাংলা অফলাইন মডেল ✓ তৈরি"
             }
             banglaModelManager.isDownloading() -> {
                 val pct = banglaModelManager.downloadPercent()
                 banglaModelStatusText.text =
                     "বাংলা অফলাইন মডেল: ডাউনলোড হচ্ছে… $pct%"
-                banglaModelButton.text = "ডাউনলোড হচ্ছে… $pct%"
+                if (::banglaModelButton.isInitialized) banglaModelButton.text = "ডাউনলোড হচ্ছে… $pct%"
             }
             banglaModelManager.lastDownloadFailed() -> {
                 banglaModelStatusText.text =
                     "বাংলা অফলাইন মডেল: ডাউনলোড হয়নি — নেট চেক করে আবার চেষ্টা করো"
-                banglaModelButton.text = "বাংলা অফলাইন মডেল আবার ডাউনলোড করো"
+                if (::banglaModelButton.isInitialized) banglaModelButton.text = "বাংলা অফলাইন মডেল আবার ডাউনলোড করো"
             }
             else -> {
                 banglaModelStatusText.text =
                     "বাংলা অফলাইন মডেল: ডাউনলোড হয়নি (৭১ MB — একবার Wi-Fi-তে " +
                         "নামালেই হবে)"
-                banglaModelButton.text = "বাংলা অফলাইন মডেল ডাউনলোড করো"
+                if (::banglaModelButton.isInitialized) banglaModelButton.text = "বাংলা অফলাইন মডেল ডাউনলোড করো"
             }
         }
     }
@@ -3669,9 +3702,9 @@ class MainActivity : Activity() {
                 if (question != null &&
                     !responseText.text.toString().contains(question)
                 ) {
-                    responseText.text = "Maya: $question\n" +
+                    showResponse("Maya: $question\n" +
                         "(jawab yahin boliye ya likhiye — screen wala " +
-                        "kaam intezaar kar raha hai)"
+                        "kaam intezaar kar raha hai)")
                 }
             }
         } catch (t: Throwable) {
@@ -3959,7 +3992,7 @@ class MainActivity : Activity() {
         } else {
             "Hindi model: not downloaded"
         }
-        statusText.text = "Mode: $modeLabel | Engine: $engineName | $modelState"
+        setStatusText("Mode: $modeLabel | Engine: $engineName | $modelState")
     }
 
     companion object {
