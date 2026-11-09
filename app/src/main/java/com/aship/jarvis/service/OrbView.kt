@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.os.SystemClock
+import android.util.AttributeSet
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
@@ -69,6 +70,15 @@ import kotlin.math.sin
  * sirf sasti trig aur pehle-se-bane paint/path ka istemal.
  */
 class OrbView(context: Context) : View(context) {
+
+    // v77: home screen par XML layout se lagane ke liye —
+    // LayoutInflater ko (Context, AttributeSet) wala
+    // constructor chahiye; andar ka kaam bilkul wahi
+    // (primary constructor hi chalta hai)।
+    constructor(context: Context, attrs: AttributeSet?) : this(context)
+
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) :
+        this(context)
 
     enum class Mode { LISTENING, SPEAKING }
 

@@ -1,644 +1,1053 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- v54: UI/UX redesign — purana screen ek lamba, bina
-     hisse wala "hacker-type" list tha: saare button aur
-     report linein ek ke neeche ek, bina label ke. Ab har
-     hissa apne card me hai, saaf Bangla shirshak ke
-     saath: upar naam + haalat, phir "কীভাবে ব্যবহার
-     করবেন", "এক নজরে" summary, bolna, likhna, itihas,
-     API/buddhi, voice model, setting, aur aakhir me
-     bistarit report. Koi button ya feature hataya NAHI
-     gaya — sirf sajaya gaya hai; saare purane id wahi
-     hain, isliye MainActivity ka code bina badlav ke
-     chalta hai. MainActivity ab halki (light) theme me
-     khulti hai — andhere terminal jaisa rang nahi. -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- v77: home interface redesign — reference (user ke
+     bheje phone-Jarvis screenshot) ke andaaz me, par
+     apne tareeke se: upar "Jarvis" + samay wali Bangla
+     shubhkaamna + settings gear; beech me bada gola
+     (orb, 148dp, hamesha ghoomta) + mic-status pill +
+     bolne ka ishara; phir mausam card (Open-Meteo,
+     bina key); phir Screen / Memories / Language ke
+     teen card; neeche Home / Chat / mic / Settings /
+     Updates wala bottom nav.
+     - NAYI cheezein (hero/weather/cards/nav) UPAR hain;
+       neeche ke saare purane hisse (v54 wale 10 card)
+       bilkul waise hi hain — koi button/feature hataya
+       NAHI gaya, saare purane id wahi hain, isliye
+       MainActivity ka purana code bina badlav ke chalta
+       hai.
+     - Dark sirf naye frame me hai (top bar, hero panel,
+       bottom nav — gehra neela); purane card halke hi
+       hain, taaki unke kaale akshar padhe ja sakein. -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:background="#F2F4F8">
 
-    <LinearLayout
+    <!-- Top bar -->
+    <RelativeLayout
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp">
+        android:layout_alignParentTop="true"
+        android:background="#101736"
+        android:padding="6dp">
 
-        <!-- 1. Header -->
+        <TextView
+            android:id="@+id/topChatButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_alignParentStart="true"
+            android:layout_centerVertical="true"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="💬"
+            android:textSize="22sp" />
+
         <LinearLayout
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
+            android:layout_centerInParent="true"
+            android:gravity="center"
+            android:orientation="vertical">
 
             <TextView
+                android:id="@+id/titleText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="ASHIP JARVIS AI"
-                android:textColor="#1E40AF"
-                android:textSize="24sp"
+                android:text="Jarvis"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp"
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/greetingText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="আপনার ভয়েস সহকারী — বলুন, জার্ভিস কাজ করে দেবে"
-                android:textSize="14sp" />
-
-            <TextView
-                android:id="@+id/statusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Status: taiyaar ho raha hai..."
+                android:text="শুভ দুপুর, বস"
+                android:textColor="#C7CEEA"
                 android:textSize="13sp" />
         </LinearLayout>
 
-        <!-- 2. Kaise istemal karein -->
+        <TextView
+            android:id="@+id/topSettingsButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="⚙️"
+            android:textSize="22sp" />
+    </RelativeLayout>
+
+    <!-- Bottom nav -->
+    <LinearLayout
+        android:id="@+id/bottomNav"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_alignParentBottom="true"
+        android:background="#101736"
+        android:orientation="horizontal"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
+
+        <TextView
+            android:id="@+id/navHomeButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="🏠&#10;Home"
+            android:textColor="#C7CEEA"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/navChatButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="💬&#10;Chat"
+            android:textColor="#C7CEEA"
+            android:textSize="11sp" />
+
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/hint_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💡 কীভাবে ব্যবহার করবেন"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="১. 🎤 TAP TO SPEAK চাপুন  ২. কথা বলুন (যেমন: ইউটিউব খোলো)  ৩. জার্ভিস কাজ করে দেবে"
-                android:textSize="14sp" />
-        </LinearLayout>
-
-        <!-- 3. Ek nazar me (v54 status card) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="📊 এক নজরে"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/summaryText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="লোড হচ্ছে…"
-                android:textSize="14sp" />
-        </LinearLayout>
-
-        <!-- 3b. Phone seekhna (v56 START button) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🚀 ফোন চিনে নিন"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="START চাপলেই জার্ভিস আপনার ফোনটাকে চিনে নেবে — কোন অ্যাপ আছে, সেটিংসে কোন বাটন কোথায়, আর কন্টাক্ট। সবকিছু ফোনের ভেতরেই মনে রাখবে, কোথাও পাঠাবে না।"
-                android:textSize="14sp" />
-
-            <Button
-                android:id="@+id/startLearnButton"
-                android:layout_width="match_parent"
+                android:id="@+id/navMicButton"
+                android:layout_width="56dp"
                 android:layout_height="56dp"
-                android:layout_marginTop="10dp"
-                android:backgroundTint="#1E40AF"
-                android:text="▶️ START — ফোন চিনে নাও"
-                android:textColor="#FFFFFF"
-                android:textSize="17sp" />
-
-            <TextView
-                android:id="@+id/phoneLearnStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="এখনো ফোন চেনা হয়নি — START চাপুন।"
-                android:textSize="14sp" />
-
-            <!-- v57: ডেটা বাটন শেখানো — chihn dekhkar -->
-            <Button
-                android:id="@+id/learnDataButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="10dp"
-                android:backgroundTint="#0E7490"
-                android:text="📶 ডেটা বাটন শেখাও"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/dataButtonStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।"
-                android:textSize="14sp" />
+                android:background="@drawable/mic_fab_bg"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="🎤"
+                android:textSize="24sp" />
         </LinearLayout>
 
-        <!-- 4. Bolkar command -->
+        <TextView
+            android:id="@+id/navSettingsButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="⚙️&#10;Settings"
+            android:textColor="#C7CEEA"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/navUpdatesButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="🔔&#10;Updates"
+            android:textColor="#C7CEEA"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Scrollable home content -->
+    <ScrollView
+        android:id="@+id/homeScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/topBar"
+        android:layout_above="@id/bottomNav"
+        android:fillViewport="true">
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
             android:orientation="vertical"
-            android:padding="14dp">
+            android:padding="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🎤 কথা বলুন"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/micButton"
-                android:layout_width="match_parent"
-                android:layout_height="64dp"
-                android:layout_marginTop="8dp"
-                android:backgroundTint="#1E40AF"
-                android:text="🎤 Tap to speak"
-                android:textColor="#FFFFFF"
-                android:textSize="18sp" />
-
-            <TextView
-                android:id="@+id/recognizedText"
+            <!-- Hero: orb + mic pill + hint -->
+            <LinearLayout
+                android:id="@+id/heroCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="Aapne kaha: —"
-                android:textSize="15sp" />
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/hero_bg"
+                android:orientation="vertical"
+                android:padding="16dp">
 
-            <TextView
-                android:id="@+id/responseText"
+                <com.aship.jarvis.service.OrbView
+                    android:id="@+id/homeOrbView"
+                    android:layout_width="148dp"
+                    android:layout_height="148dp"
+                    android:layout_gravity="center_horizontal" />
+
+                <TextView
+                    android:id="@+id/micStatusPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/pill_bg"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+                    android:textColor="#E8EBFA"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/speakHintText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="10dp"
+                    android:text="বলুন — যেমন 'ইউটিউব খোলো', 'শাড়ি দেখতে চাই'"
+                    android:textColor="#9AA5D1"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- Weather card -->
+            <LinearLayout
+                android:id="@+id/weatherCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Jarvis: —"
-                android:textSize="15sp" />
-        </LinearLayout>
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
 
-        <!-- 5. Likhkar command -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="✍️ লিখে কমান্ড পাঠান"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/weatherTempText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—°"
+                        android:textColor="#1E40AF"
+                        android:textSize="34sp"
+                        android:textStyle="bold" />
 
-            <EditText
-                android:id="@+id/commandInput"
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/weatherConditionText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="আবহাওয়া লোড হচ্ছে…"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/weatherPlaceText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="বাদুড়িয়া, পশ্চিমবঙ্গ"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/weatherIconText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🌤️"
+                        android:textSize="34sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/weatherFeelsText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="অনুভূত: —°"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/weatherHighLowText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="সর্বোচ্চ —° · সর্বনিম্ন —°"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/weatherHumidityText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="end"
+                        android:text="আর্দ্রতা: —%"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Feature cards: Screen / Memories / Language -->
+            <LinearLayout
+                android:id="@+id/featureRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/input_box_light_bg"
-                android:hint="এখানে কমান্ড লিখুন (যেমন: টেলিগ্রাম খোলো, লাইট, স্ক্রল ডাউন)"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:maxLines="1"
-                android:minHeight="52dp"
-                android:padding="12dp" />
+                android:layout_marginBottom="12dp"
+                android:orientation="horizontal">
 
-            <Button
-                android:id="@+id/sendButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:backgroundTint="#1E40AF"
-                android:text="কমান্ড পাঠাও"
-                android:textColor="#FFFFFF" />
-        </LinearLayout>
+                <LinearLayout
+                    android:id="@+id/screenCard"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/card_bg"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?android:attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="12dp">
 
-        <!-- 6. Command history -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🖥️"
+                        android:textSize="26sp" />
 
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Screen"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="স্ক্রিনের কাজ"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/memoriesCard"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="3dp"
+                    android:layout_marginEnd="3dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/card_bg"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?android:attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🧠"
+                        android:textSize="26sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Memories"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="মনে রাখা কথা"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/languageCard"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/card_bg"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?android:attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🌐"
+                        android:textSize="26sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Language"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/languageCardSubText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="বাংলা"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 1. Header (v54, waisa hi) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
 
                 <TextView
-                    android:layout_width="0dp"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="📜 আগের কমান্ড"
+                    android:text="ASHIP JARVIS AI"
+                    android:textColor="#1E40AF"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="আপনার ভয়েস সহকারী — বলুন, জার্ভিস কাজ করে দেবে"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/statusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Status: taiyaar ho raha hai..."
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- 2. Kaise istemal karein -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/hint_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="💡 কীভাবে ব্যবহার করবেন"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="১. 🎤 TAP TO SPEAK চাপুন  ২. কথা বলুন (যেমন: ইউটিউব খোলো)  ৩. জার্ভিস কাজ করে দেবে"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 3. Ek nazar me (v54 status card) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📊 এক নজরে"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/summaryText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="লোড হচ্ছে…"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 3b. Phone seekhna (v56 START button) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🚀 ফোন চিনে নিন"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="START চাপলেই জার্ভিস আপনার ফোনটাকে চিনে নেবে — কোন অ্যাপ আছে, সেটিংসে কোন বাটন কোথায়, আর কন্টাক্ট। সবকিছু ফোনের ভেতরেই মনে রাখবে, কোথাও পাঠাবে না।"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/startLearnButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginTop="10dp"
+                    android:backgroundTint="#1E40AF"
+                    android:text="▶️ START — ফোন চিনে নাও"
+                    android:textColor="#FFFFFF"
+                    android:textSize="17sp" />
+
+                <TextView
+                    android:id="@+id/phoneLearnStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="এখনো ফোন চেনা হয়নি — START চাপুন।"
+                    android:textSize="14sp" />
+
+                <!-- v57: ডেটা বাটন শেখানো — chihn dekhkar -->
+                <Button
+                    android:id="@+id/learnDataButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:backgroundTint="#0E7490"
+                    android:text="📶 ডেটা বাটন শেখাও"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/dataButtonStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="ডেটা বাটন এখনো শেখা হয়নি — শেখালে লেখা না থাকলেও চিনতে পারবে।"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 4. Bolkar command -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🎤 কথা বলুন"
                     android:textColor="#1E40AF"
                     android:textSize="16sp"
                     android:textStyle="bold" />
 
                 <Button
-                    android:id="@+id/repeatLastButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🔁 আবার চালাও" />
-
-                <Button
-                    android:id="@+id/historyClearButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ইতিহাস মুছুন" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/historyList"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="vertical" />
-        </LinearLayout>
-
-        <!-- 7. API aur buddhi -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🔑 API ও বুদ্ধি"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="মোড:"
-                android:textStyle="bold" />
-
-            <RadioGroup
-                android:id="@+id/modeGroup"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <RadioButton
-                    android:id="@+id/modeOffline"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="অফলাইন" />
-
-                <RadioButton
-                    android:id="@+id/modeOnline"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="অনলাইন" />
-
-                <RadioButton
-                    android:id="@+id/modeAuto"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="অটো" />
-            </RadioGroup>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:text="Maya-র অনলাইন বুদ্ধি (Gemini API key)"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/geminiKeyStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="Key: nahi hai"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/geminiDiagText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Online koshish (aakhiri): abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <!-- v62: Gemini key ab sirf API Keys screen me (ek hi
-                 jagah) — yahan sirf upar wali status line hai।
-                 Key badalni/hatani ho to neeche wala button kholo। -->
-
-            <!-- v53: API Keys — saare free provideron ki key
-                 ek alag screen par (Gemini bhi sirf yahin)।
-                 Button par kitni key set hain, wohi dikhta hai। -->
-            <Button
-                android:id="@+id/apiKeysButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="🔑 API Keys (0/6 সেট)" />
-        </LinearLayout>
-
-        <!-- 8. Voice model -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🔊 ভয়েস মডেল"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/downloadModelButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Download Hindi offline voice model" />
-
-            <TextView
-                android:id="@+id/banglaModelStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="বাংলা অফলাইন মডেল: ডাউনলোড হয়নি"
-                android:textSize="13sp" />
-
-            <Button
-                android:id="@+id/banglaModelButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="বাংলা অফলাইন মডেল ডাউনলোড করো" />
-
-            <!-- v51: Hindi offline pack ki salaah — net
-                 kamzor ho to online wala kaan baar-baar
-                 fail hota hai; pack ho to wahi kaan bina
-                 net ke bhi sunega. Line tab tak dikhti hai
-                 jab tak offline kaan asal me safal na ho
-                 ya malik use band na kar de. -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal">
+                    android:id="@+id/micButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="64dp"
+                    android:layout_marginTop="8dp"
+                    android:backgroundTint="#1E40AF"
+                    android:text="🎤 Tap to speak"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp" />
 
                 <TextView
-                    android:id="@+id/offlinePackHintText"
-                    android:layout_width="0dp"
+                    android:id="@+id/recognizedText"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="💡 Google অ্যাপ → Settings → Voice → Offline speech থেকে हिन्दी প্যাক ডাউনলোড করলে নেট ছাড়াও ভালো শুনবে"
+                    android:layout_marginTop="12dp"
+                    android:text="Aapne kaha: —"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/responseText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Jarvis: —"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <!-- 5. Likhkar command -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="✍️ লিখে কমান্ড পাঠান"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/commandInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_box_light_bg"
+                    android:hint="এখানে কমান্ড লিখুন (যেমন: টেলিগ্রাম খোলো, লাইট, স্ক্রল ডাউন)"
+                    android:importantForAutofill="no"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:minHeight="52dp"
+                    android:padding="12dp" />
+
+                <Button
+                    android:id="@+id/sendButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:backgroundTint="#1E40AF"
+                    android:text="কমান্ড পাঠাও"
+                    android:textColor="#FFFFFF" />
+            </LinearLayout>
+
+            <!-- 6. Command history -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="📜 আগের কমান্ড"
+                        android:textColor="#1E40AF"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/repeatLastButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🔁 আবার চালাও" />
+
+                    <Button
+                        android:id="@+id/historyClearButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="ইতিহাস মুছুন" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/historyList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
+            <!-- 7. API aur buddhi -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔑 API ও বুদ্ধি"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="মোড:"
+                    android:textStyle="bold" />
+
+                <RadioGroup
+                    android:id="@+id/modeGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/modeOffline"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="অফলাইন" />
+
+                    <RadioButton
+                        android:id="@+id/modeOnline"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="অনলাইন" />
+
+                    <RadioButton
+                        android:id="@+id/modeAuto"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="অটো" />
+                </RadioGroup>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Maya-র অনলাইন বুদ্ধি (Gemini API key)"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/geminiKeyStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Key: nahi hai"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/geminiDiagText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Online koshish (aakhiri): abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <!-- v62: Gemini key ab sirf API Keys screen me (ek hi
+                     jagah) — yahan sirf upar wali status line hai।
+                     Key badalni/hatani ho to neeche wala button kholo। -->
+
+                <!-- v53: API Keys — saare free provideron ki key
+                     ek alag screen par (Gemini bhi sirf yahin)।
+                     Button par kitni key set hain, wohi dikhta hai। -->
+                <Button
+                    android:id="@+id/apiKeysButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="🔑 API Keys (0/6 সেট)" />
+            </LinearLayout>
+
+            <!-- 8. Voice model -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔊 ভয়েস মডেল"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/downloadModelButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Download Hindi offline voice model" />
+
+                <TextView
+                    android:id="@+id/banglaModelStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="বাংলা অফলাইন মডেল: ডাউনলোড হয়নি"
                     android:textSize="13sp" />
 
                 <Button
-                    android:id="@+id/offlinePackHintClose"
+                    android:id="@+id/banglaModelButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="বাংলা অফলাইন মডেল ডাউনলোড করো" />
+
+                <!-- v51: Hindi offline pack ki salaah — net
+                     kamzor ho to online wala kaan baar-baar
+                     fail hota hai; pack ho to wahi kaan bina
+                     net ke bhi sunega. Line tab tak dikhti hai
+                     jab tak offline kaan asal me safal na ho
+                     ya malik use band na kar de. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/offlinePackHintText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="💡 Google অ্যাপ → Settings → Voice → Offline speech থেকে हिन्दी প্যাক ডাউনলোড করলে নেট ছাড়াও ভালো শুনবে"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/offlinePackHintClose"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="✕ বন্ধ করুন" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 9. Setting -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="✕ বন্ধ করুন" />
+                    android:text="⚙️ সেটিং"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/mobileSettingsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="📱 Mobile (মোবাইল) — Background Setup" />
+
+                <TextView
+                    android:id="@+id/listenLangLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="শোনার ভাষা: বাংলা"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/listenLangButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)" />
+
+                <!-- v51: "offline kaan pehle" wala vaikalpik
+                     badlav — chalu ho to command pehle offline
+                     kaan (Vosk/Zipformer) se suna jayega:
+                     bip kam, par sunna thoda kamzor. Default
+                     band; band ho to sab bilkul pehle jaisa. -->
+                <Switch
+                    android:id="@+id/offlineEarsFirstSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="অফলাইন কান আগে (বিপ কম, শোনা একটু কম)"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/updateCheckButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="UPDATE CHECK KARO" />
             </LinearLayout>
+
+            <!-- 10. Bistarit report (pehle wali saari
+                 report linein — yahan sirf sajayi gayi
+                 hain, koi line hatayi nahi gayi)। -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/card_bg"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📋 বিস্তারিত রিপোর্ট"
+                    android:textColor="#1E40AF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/panelScanText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Panel scan: abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/youtubeTapText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="YouTube tap (aakhiri): abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/agentRunText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Agent chaal (aakhiri): abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/screenRunText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Screen chaal (aakhiri): abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/screenAuditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Screen audit (aakhiri): abhi tak koi record nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/banglaAsrText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Bangla ASR (aakhiri): abhi tak koi koshish nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/quotaText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Quota hisaab (aaj): total 0 | main 0 | lite 0"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/personaText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Persona (aakhiri): abhi tak koi session nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/learnedText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="শেখা কাজ (mot): 0"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/taughtText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="শেখানো কমান্ড (mot): 0"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/rulesText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="মনে রাখা নিয়ম (mot): 0"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/backgroundHeardText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Background (aakhiri suna): abhi tak kuch nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/foregroundHeardText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Saamne (aakhiri suna): abhi tak kuch nahi"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/hearPathText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="শোনার পথ (aakhiri): abhi tak koi turn nahi"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
         </LinearLayout>
 
-        <!-- 9. Setting -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
+    </ScrollView>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="⚙️ সেটিং"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/mobileSettingsButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="📱 Mobile (মোবাইল) — Background Setup" />
-
-            <TextView
-                android:id="@+id/listenLangLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="শোনার ভাষা: বাংলা"
-                android:textSize="13sp" />
-
-            <Button
-                android:id="@+id/listenLangButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)" />
-
-            <!-- v51: "offline kaan pehle" wala vaikalpik
-                 badlav — chalu ho to command pehle offline
-                 kaan (Vosk/Zipformer) se suna jayega:
-                 bip kam, par sunna thoda kamzor. Default
-                 band; band ho to sab bilkul pehle jaisa. -->
-            <Switch
-                android:id="@+id/offlineEarsFirstSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="অফলাইন কান আগে (বিপ কম, শোনা একটু কম)"
-                android:textSize="14sp" />
-
-            <Button
-                android:id="@+id/updateCheckButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="UPDATE CHECK KARO" />
-        </LinearLayout>
-
-        <!-- 10. Bistarit report (pehle wali saari
-             report linein — yahan sirf sajayi gayi
-             hain, koi line hatayi nahi gayi)। -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="📋 বিস্তারিত রিপোর্ট"
-                android:textColor="#1E40AF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/panelScanText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Panel scan: abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/youtubeTapText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="YouTube tap (aakhiri): abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/agentRunText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Agent chaal (aakhiri): abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/screenRunText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Screen chaal (aakhiri): abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/screenAuditText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Screen audit (aakhiri): abhi tak koi record nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/banglaAsrText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Bangla ASR (aakhiri): abhi tak koi koshish nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/quotaText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Quota hisaab (aaj): total 0 | main 0 | lite 0"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/personaText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Persona (aakhiri): abhi tak koi session nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/learnedText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="শেখা কাজ (mot): 0"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/taughtText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="শেখানো কমান্ড (mot): 0"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/rulesText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="মনে রাখা নিয়ম (mot): 0"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/backgroundHeardText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Background (aakhiri suna): abhi tak kuch nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/foregroundHeardText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Saamne (aakhiri suna): abhi tak kuch nahi"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/hearPathText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="শোনার পথ (aakhiri): abhi tak koi turn nahi"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-    </LinearLayout>
-
-</ScrollView>
+</RelativeLayout>

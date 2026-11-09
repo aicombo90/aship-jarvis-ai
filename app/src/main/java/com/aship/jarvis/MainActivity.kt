@@ -23,6 +23,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -38,6 +39,7 @@ import com.aship.jarvis.ai.DataButtonVision
 import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.ComboRules
 import com.aship.jarvis.ai.LearnedRoutines
+import com.aship.jarvis.ai.MayaMemory
 import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.ProviderKeys
 import com.aship.jarvis.ai.ReplyGuard
@@ -45,6 +47,7 @@ import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.QuotaManager
 import com.aship.jarvis.ai.TaughtCommands
+import com.aship.jarvis.ai.WeatherFetcher
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.actions.PhoneActions
@@ -74,6 +77,7 @@ import com.aship.jarvis.update.UpdateChecker
 import com.aship.jarvis.update.UpdateDownloader
 import com.aship.jarvis.prefs.JarvisMode
 import com.aship.jarvis.service.JarvisWakeService
+import com.aship.jarvis.service.OrbView
 import com.aship.jarvis.speaker.TtsSpeaker
 import com.aship.jarvis.voice.BanglaModelManager
 import com.aship.jarvis.voice.CascadeOrder
@@ -85,6 +89,7 @@ import com.aship.jarvis.voice.SpeechEngineFactory
 import com.aship.jarvis.voice.SpeechEngineListener
 import com.aship.jarvis.voice.SystemSpeechEngine
 import com.aship.jarvis.voice.VoskSpeechEngine
+import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -125,6 +130,21 @@ class MainActivity : Activity() {
     private lateinit var micButton: Button
     private lateinit var commandInput: EditText
     private lateinit var modeGroup: RadioGroup
+
+    // v77: naya home — orb hero, greeting, weather card,
+    // feature cards, bottom nav ke naye view।
+    private lateinit var homeOrbView: OrbView
+    private lateinit var micStatusPill: TextView
+    private lateinit var greetingText: TextView
+    private lateinit var weatherTempText: TextView
+    private lateinit var weatherConditionText: TextView
+    private lateinit var weatherPlaceText: TextView
+    private lateinit var weatherIconText: TextView
+    private lateinit var weatherFeelsText: TextView
+    private lateinit var weatherHighLowText: TextView
+    private lateinit var weatherHumidityText: TextView
+    private lateinit var languageCardSubText: TextView
+    private lateinit var homeScrollView: ScrollView
 
     // v34: background wake-word ke bandobosto (start/stop,
     // battery, accessibility, overlay) ab "Mobile" hub ke
@@ -396,6 +416,27 @@ class MainActivity : Activity() {
         commandInput = findViewById(R.id.commandInput)
         modeGroup = findViewById(R.id.modeGroup)
 
+        // v77: naya home — orb hero, greeting, weather,
+        // feature cards, bottom nav।
+        homeOrbView = findViewById(R.id.homeOrbView)
+        micStatusPill = findViewById(R.id.micStatusPill)
+        greetingText = findViewById(R.id.greetingText)
+        weatherTempText = findViewById(R.id.weatherTempText)
+        weatherConditionText = findViewById(R.id.weatherConditionText)
+        weatherPlaceText = findViewById(R.id.weatherPlaceText)
+        weatherIconText = findViewById(R.id.weatherIconText)
+        weatherFeelsText = findViewById(R.id.weatherFeelsText)
+        weatherHighLowText = findViewById(R.id.weatherHighLowText)
+        weatherHumidityText = findViewById(R.id.weatherHumidityText)
+        languageCardSubText = findViewById(R.id.languageCardSubText)
+        homeScrollView = findViewById(R.id.homeScrollView)
+        setupHomeUi()
+        refreshGreeting()
+        refreshMicPill()
+        refreshLanguageCard()
+        paintCachedWeather()
+        refreshWeather()
+
         setupModeSelector()
         createEngine()
         updateStatus()
@@ -491,13 +532,9 @@ class MainActivity : Activity() {
         listenLangLabel = findViewById(R.id.listenLangLabel)
         listenLangButton = findViewById(R.id.listenLangButton)
         listenLangButton.setOnClickListener {
-            // v33: shune wali bhasha ghumao — Bangla -> Hindi -> English.
-            prefs.listenLanguage = when (prefs.listenLanguage) {
-                "bn-IN" -> "hi-IN"
-                "hi-IN" -> "en-IN"
-                else -> "bn-IN"
-            }
-            refreshListenLangButton()
+            // v33: shune wali bhasha ghumao — v77 se
+            // Language card bhi wahi ek kaam karta hai।
+            cycleListenLanguage()
         }
         findViewById<Button>(R.id.updateCheckButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -576,6 +613,13 @@ class MainActivity : Activity() {
         activityInForeground = true
         refreshDiagLines()
         refreshApiKeysButton()
+        // v77: home — greeting + language card taaza, orb
+        // ki harkat shuru, mausam taaza (cache taaza ho to
+        // net chhoota hi nahi)।
+        refreshGreeting()
+        refreshLanguageCard()
+        if (::homeOrbView.isInitialized) homeOrbView.startAnimations()
+        refreshWeather()
         // v62: API Keys screen se lautkar Gemini key badli ho to
         // Maya wali status line bhi turant taza ho।
         refreshGeminiKeyUi()
@@ -589,6 +633,9 @@ class MainActivity : Activity() {
         // v37: screen peeche gayi — khud sunna shuru nahi hoga.
         activityInForeground = false
         mainHandler.removeCallbacks(wakeRefreshRunnable)
+        // v77: home orb ki harkat roko (wake service wala
+        // overlay orb alag hai — woh apna khud sambhalta hai)।
+        if (::homeOrbView.isInitialized) homeOrbView.stopAnimations()
         // Screen peeche ja rahi hai: mic wake service ka tha, to
         // wapas kar do — user dusri app me jaakar 'Jarvis' bolega
         // to wake sunna wahan chalu hona chahiye.
@@ -656,6 +703,185 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
+    // v77: naya home — top bar, feature cards, bottom nav
+    // ------------------------------------------------------------------
+
+    /**
+     * Har button pehle se maujood kaam ko hi kholta hai —
+     * koi naya raasta nahi, sirf naye darwaze:
+     * - Chat (upar + nav): type box par focus + keyboard।
+     * - Settings (gear + nav): API Keys screen (wahi jo
+     *   "🔑 API Keys" button kholta hai)।
+     * - Screen card: screen-agent ke liye bolna shuru
+     *   (voice wala screen_task hi uska raasta hai)।
+     * - Memories card: MayaMemory ki bandhi baatein
+     *   dialog me dikhao।
+     * - Language card: shune wali bhasha ghumao (wahi
+     *   kaam jo "শোনার ভাষা" button karta hai)।
+     * - Home: upar scroll; Updates: update check (wahi
+     *   jo "UPDATE CHECK KARO" karta hai); beech mic:
+     *   TAP TO SPEAK (wahi jo micButton karta hai)।
+     */
+    private fun setupHomeUi() {
+        findViewById<TextView>(R.id.topChatButton).setOnClickListener { focusChat() }
+        findViewById<TextView>(R.id.topSettingsButton).setOnClickListener { openApiKeys() }
+        findViewById<LinearLayout>(R.id.screenCard).setOnClickListener { startScreenVoice() }
+        findViewById<LinearLayout>(R.id.memoriesCard).setOnClickListener { showMemoriesDialog() }
+        findViewById<LinearLayout>(R.id.languageCard).setOnClickListener { cycleListenLanguage() }
+        findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
+            homeScrollView.smoothScrollTo(0, 0)
+        }
+        findViewById<TextView>(R.id.navChatButton).setOnClickListener { focusChat() }
+        findViewById<TextView>(R.id.navMicButton).setOnClickListener { toggleListening() }
+        findViewById<TextView>(R.id.navSettingsButton).setOnClickListener { openApiKeys() }
+        findViewById<TextView>(R.id.navUpdatesButton).setOnClickListener {
+            checkForUpdate(manual = true)
+        }
+    }
+
+    private fun openApiKeys() {
+        startActivity(Intent(this, ApiKeysActivity::class.java))
+    }
+
+    /** Chat = type box par focus + keyboard kholo। */
+    private fun focusChat() {
+        commandInput.requestFocus()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(commandInput, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    /**
+     * Screen card — screen-agent ke liye bolna shuru।
+     * Screen-agent ka kaam voice hukm se hi hota hai
+     * ([runDirectScreenTask]), isliye card dabate hi
+     * mic khul jata hai aur ishara dikhta hai — jaise
+     * "ChatGPT খুলে লেখাটা পাঠিয়ে দাও"।
+     */
+    private fun startScreenVoice() {
+        responseText.text =
+            "Maya: স্ক্রিনে কী করাতে চাও বলো — যেমন ChatGPT খুলে লেখাটা পাঠিয়ে দাও।"
+        if (!listening) toggleListening()
+    }
+
+    /**
+     * Memories card — MayaMemory ki bandhi baatein (v31
+     * godam: "মনে রাখো" se bandhi) ek scroll wale
+     * dialog me dikhao। Khaali ho to imaandaar line।
+     */
+    private fun showMemoriesDialog() {
+        if (isFinishing || isDestroyed) return
+        val facts = MayaMemory.readFacts(this)
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val textView = TextView(this).apply {
+            text = if (facts.isEmpty()) {
+                "এখনো কিছু মনে রাখা হয়নি — 'মনে রাখো' বলে শেখাও, " +
+                    "যেমন 'মনে রাখো, আমার পছন্দের রং নীল'।"
+            } else {
+                facts.mapIndexed { i, fact -> "${i + 1}. $fact" }
+                    .joinToString("\n\n")
+            }
+            textSize = 15f
+            setPadding(padding, padding / 2, padding, padding / 2)
+        }
+        val scrollView = ScrollView(this).apply { addView(textView) }
+        AlertDialog.Builder(this)
+            .setTitle("🧠 মনে রাখা কথা (${facts.size})")
+            .setView(scrollView)
+            .setPositiveButton("ঠিক আছে", null)
+            .show()
+    }
+
+    /**
+     * Language card + "শোনার ভাষা" button dono wahi ek
+     * kaam — Bangla -> Hindi -> English ghumao।
+     */
+    private fun cycleListenLanguage() {
+        prefs.listenLanguage = when (prefs.listenLanguage) {
+            "bn-IN" -> "hi-IN"
+            "hi-IN" -> "en-IN"
+            else -> "bn-IN"
+        }
+        refreshListenLangButton()
+        refreshLanguageCard()
+        Toast.makeText(
+            this,
+            "শোনার ভাষা: ${listenLanguageName()}",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun listenLanguageName(): String {
+        return when (prefs.listenLanguage) {
+            "hi-IN" -> "हिन्दी"
+            "en-IN" -> "English"
+            else -> "বাংলা"
+        }
+    }
+
+    private fun refreshLanguageCard() {
+        if (!::languageCardSubText.isInitialized) return
+        languageCardSubText.text = listenLanguageName()
+    }
+
+    /** Samay wali Bangla shubhkaamna — "বস" keh kar, jaise Maya kehti hai। */
+    private fun refreshGreeting() {
+        if (!::greetingText.isInitialized) return
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val greet = when (hour) {
+            in 5..11 -> "শুভ সকাল"
+            in 12..15 -> "শুভ দুপুর"
+            in 16..17 -> "শুভ বিকাল"
+            in 18..21 -> "শুভ সন্ধ্যা"
+            else -> "শুভ রাত্রি"
+        }
+        greetingText.text = "$greet, বস"
+    }
+
+    /** Hero wali mic pill — sun raha ho ya band। */
+    private fun refreshMicPill() {
+        if (!::micStatusPill.isInitialized) return
+        micStatusPill.text = if (listening) {
+            "🎤 শুনছি — বলো, বস"
+        } else {
+            "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+        }
+    }
+
+    /** Cache wala mausam turant dikhao (net ka intezaar nahi)। */
+    private fun paintCachedWeather() {
+        val cached = WeatherFetcher.cached(this) ?: return
+        paintWeather(cached)
+    }
+
+    private fun paintWeather(w: WeatherFetcher.Weather) {
+        if (!::weatherTempText.isInitialized) return
+        weatherTempText.text = "${w.tempC}°"
+        weatherConditionText.text = WeatherFetcher.conditionBangla(w.code)
+        weatherIconText.text = WeatherFetcher.iconFor(w.code)
+        weatherFeelsText.text = "অনুভূত: ${w.feelsC}°"
+        weatherHighLowText.text = "সর্বোচ্চ ${w.highC}° · সর্বনিম্ন ${w.lowC}°"
+        weatherHumidityText.text = "আর্দ্রতা: ${w.humidity}%"
+    }
+
+    /**
+     * Taaza mausam lao — 3 ghante tak taaza cache ho to
+     * net chhoo bhi nahi (malik ka data bachta hai);
+     * warna fetch apne thread par, jawab mainHandler
+     * se screen par। Fail ho to card waisa hi rehta
+     * hai (cache ya "—") — kabhi jhooth nahi, kabhi
+     * crash nahi।
+     */
+    private fun refreshWeather() {
+        if (WeatherFetcher.cached(this) != null) return
+        WeatherFetcher.fetch(this) { weather ->
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                if (weather != null) paintWeather(weather)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Speech engine plumbing
     // ------------------------------------------------------------------
 
@@ -713,6 +939,8 @@ class MainActivity : Activity() {
             } else {
                 "🎤 Tap to speak"
             }
+            // v77: hero wali mic pill bhi wahi haalat dikhaye।
+            refreshMicPill()
         }
 
         override fun onPartialResult(text: String) {
@@ -2813,6 +3041,14 @@ class MainActivity : Activity() {
     private val wakeRefreshRunnable = object : Runnable {
         override fun run() {
             refreshDiagLines()
+            // v77: home orb — Maya bol rahi ho to tez bahav
+            // (SPEAKING), warna sunne wala (LISTENING)।
+            if (::homeOrbView.isInitialized) {
+                homeOrbView.setMode(
+                    if (speaker.isSpeakingNow) OrbView.Mode.SPEAKING
+                    else OrbView.Mode.LISTENING
+                )
+            }
             mainHandler.postDelayed(this, WAKE_REFRESH_MS)
         }
     }
