@@ -47,6 +47,7 @@ import com.aship.jarvis.ai.QuotaManager
 import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
+import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandHistory
@@ -64,6 +65,7 @@ import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
+import com.aship.jarvis.commands.ShowMeIntent
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.spokenLang
@@ -2085,6 +2087,20 @@ class MainActivity : Activity() {
             runDirectPasteSendTask(commandText, questionSendTask, vocativeLang)
             return
         }
+        // v76: DEKHAO — "শাড়ি দেখতে চাই" / "কোরিয়ান শার্ট
+        // দেখাও" (Google Images kholkar dikhana), "পছন্দ
+        // হচ্ছে না" (dobara dhoondhna), "দাম কত / ডিটেলস
+        // বলো" (tafseel bolna) — pakka deterministic raasta,
+        // baatchit wala mastishk is par aata hi nahi
+        // (ShowMeIntent dekho)। Agent se pehle ye pakki
+        // jaanch, bilkul UrlIntent / PasteSendIntent jaisi।
+        val showKind = ShowMeIntent.classify(
+            commandText, ShowMeIntent.hasLastShown(this)
+        )
+        if (showKind != null) {
+            runDirectShowMe(commandText, showKind, vocativeLang)
+            return
+        }
         // v25: online brain uplabdh ho (mode Offline na ho,
         // key set ho, net chalu ho) to pehle AGENT — app ke
         // andar EK hi mastishk (user ka pakka design):
@@ -2512,6 +2528,135 @@ class MainActivity : Activity() {
                 speaker.speak(line)
             }
         }
+    }
+
+    /**
+     * v76: DEKHAO wala kaam ([ShowMeIntent]) — saamne
+     * wali screen wala raasta:
+     *  - SHOW: vishay nikaalo, online ho to mastishk se
+     *    khoj-shabd behtar karwao (na mile to kachcha
+     *    vishay hi), phir Google Images kholo;
+     *  - REFINE: aakhiri vishay par agla khoj-roop kholo;
+     *  - DETAILS: aakhiri vishay par online mastishk se
+     *    tafseel bolkar sunao (offline ho to imaandaar
+     *    manaahi)।
+     * Mastishk wale jawab (GeminiBrain.chat) apne
+     * executor thread par aate hain — boli / screen
+     * hamesha mainHandler se। Browser seedha
+     * [PhoneActions.openUrl] se khulta hai (saamne
+     * wali screen — OverlayLauncher sirf background
+     * raaste ke liye hai)।
+     */
+    private fun runDirectShowMe(
+        text: String,
+        kind: ShowMeIntent.Kind,
+        vocativeLang: PlayIntent.SpokenLang?
+    ) {
+        val lang = vocativeLang ?: PlayIntent.requestLanguage(text)
+        when (kind) {
+            ShowMeIntent.Kind.REFINE -> {
+                val last = ShowMeIntent.loadLastShown(this)
+                if (last == null) {
+                    val line = ShowMeIntent.noTopicLine(kind, lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                val (topic, variant) = last
+                val nextVariant = (variant + 1) % ShowMeIntent.variantCount
+                ShowMeIntent.saveLastShown(this, topic, nextVariant)
+                openShowImages(
+                    ShowMeIntent.buildVariantQuery(topic, nextVariant),
+                    topic, kind, lang
+                )
+            }
+            ShowMeIntent.Kind.DETAILS -> {
+                val last = ShowMeIntent.loadLastShown(this)
+                if (last == null) {
+                    val line = ShowMeIntent.noTopicLine(kind, lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                val (topic) = last
+                if (!geminiBrainAllowed()) {
+                    val line = ShowMeIntent.offlineDetailsLine(lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                responseText.text = "Maya: ${ShowMeIntent.thinkingLine(lang)}"
+                GeminiBrain.chat(
+                    this, emptyList(),
+                    ShowMeIntent.detailsPrompt(topic, lang)
+                ) { reply ->
+                    val clean = reply
+                        ?.let { ShowMeIntent.cleanDetailsReply(it) }
+                        ?.takeIf { it.isNotEmpty() }
+                    val line = clean ?: ShowMeIntent.offlineDetailsLine(lang)
+                    mainHandler.post {
+                        if (isFinishing || isDestroyed) return@post
+                        politeFailureSpokenThisTurn = false
+                        responseText.text = "Maya: $line"
+                        speaker.speak(line)
+                    }
+                }
+            }
+            ShowMeIntent.Kind.SHOW -> {
+                val item = ShowMeIntent.extractShowItem(text)
+                if (item == null) {
+                    val line = ShowMeIntent.askWhatLine(lang)
+                    politeFailureSpokenThisTurn = false
+                    responseText.text = "Maya: $line"
+                    speaker.speak(line)
+                    return
+                }
+                ShowMeIntent.saveLastShown(this, item, 0)
+                if (geminiBrainAllowed()) {
+                    responseText.text = "Maya: ${ShowMeIntent.thinkingLine(lang)}"
+                    GeminiBrain.chat(
+                        this, emptyList(),
+                        ShowMeIntent.refineQueryPrompt(item)
+                    ) { refined ->
+                        val query = ShowMeIntent.sanitizeRefinedQuery(refined)
+                            ?: item
+                        mainHandler.post {
+                            if (isFinishing || isDestroyed) return@post
+                            openShowImages(query, item, kind, lang)
+                        }
+                    }
+                } else {
+                    openShowImages(item, item, kind, lang)
+                }
+            }
+        }
+    }
+
+    /** Google Images kholo + hamesha sachha jawab bolo. */
+    private fun openShowImages(
+        query: String,
+        topic: String,
+        kind: ShowMeIntent.Kind,
+        lang: PlayIntent.SpokenLang
+    ) {
+        val url = ShowMeIntent.imagesUrl(query)
+        val ok = try {
+            PhoneActions.openUrl(this, url)
+        } catch (t: Throwable) {
+            false
+        }
+        ShowMeIntent.saveRouteDiag(this, kind, ok)
+        val line = if (ok) {
+            ShowMeIntent.showingLine(topic, lang)
+        } else {
+            ShowMeIntent.openFailedLine(lang)
+        }
+        politeFailureSpokenThisTurn = false
+        responseText.text = "Maya: $line"
+        speaker.speak(line)
     }
 
     /**

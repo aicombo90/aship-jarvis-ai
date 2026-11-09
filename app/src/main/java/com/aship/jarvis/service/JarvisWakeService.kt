@@ -41,6 +41,8 @@ import com.aship.jarvis.ai.TaughtCommands
 import com.aship.jarvis.ai.UserProfile
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
+import com.aship.jarvis.actions.LaunchOutcome
+import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
@@ -52,6 +54,7 @@ import com.aship.jarvis.commands.PlayIntent
 import com.aship.jarvis.commands.RuleCommands
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
+import com.aship.jarvis.commands.ShowMeIntent
 import com.aship.jarvis.commands.TeachCommands
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.spokenLang
@@ -3263,6 +3266,21 @@ class JarvisWakeService : Service() {
             runDirectPasteSendTask(text, questionSendTask)
             return
         }
+        // v76: DEKHAO — "শাড়ি দেখতে চাই" / "কোরিয়ান শার্ট
+        // দেখাও" (Google Images kholkar dikhana), "পছন্দ
+        // হচ্ছে না" (dobara dhoondhna), "দাম কত / ডিটেলস
+        // বলো" (tafseel bolna) — pakka deterministic raasta,
+        // baatchit wala mastishk is par aata hi nahi
+        // (ShowMeIntent dekho)। Ye bhi screen-kaam hai —
+        // taana session yahin se shuru/aage।
+        val showKind = ShowMeIntent.classify(
+            text, ShowMeIntent.hasLastShown(applicationContext)
+        )
+        if (showKind != null) {
+            enterContinuousSession()
+            runDirectShowMe(text, showKind)
+            return
+        }
         // v25: online brain uplabdh ho to sabse pehle AGENT —
         // app ke andar EK hi mastishk (user ka pakka design):
         // Gemini poori baat samajhta hai, online kadam khud
@@ -3616,6 +3634,140 @@ class JarvisWakeService : Service() {
                 armReplyFallback(line)
                 orbOverlay.setReply(line)
             }
+        }.start()
+    }
+
+    /**
+     * v76: DEKHAO wala kaam ([ShowMeIntent]) — background
+     * wala raasta (runDirectYouTubePlay wala hi bandobast):
+     *  - SHOW: vishay nikaalo, online ho to mastishk se
+     *    khoj-shabd behtar karwao (na mile to kachcha
+     *    vishay hi), phir Google Images kholo;
+     *  - REFINE: aakhiri vishay par agla khoj-roop kholo;
+     *  - DETAILS: aakhiri vishay par online mastishk se
+     *    tafseel bolkar sunao (offline ho to imaandaar
+     *    manaahi)।
+     * Browser background se [PhoneActions.openUrlFromBackground]
+     * se khulta hai (OverlayLauncher wala pul — Android 10+
+     * ki background-launch rok iske bina chup-chaap khulta
+     * hi nahi)। Boli runDirectYouTubePlay jaisi hi:
+     * executor par, state REPLY me, session ke sandarbh
+     * ke saath। Mastishk wale jawab (GeminiBrain.chat)
+     * apne executor thread par aate hain — boli hamesha
+     * is service ke executor se।
+     */
+    private fun runDirectShowMe(text: String, kind: ShowMeIntent.Kind) {
+        val lang = personaSpokenLang()
+        when (kind) {
+            ShowMeIntent.Kind.REFINE -> {
+                val last = ShowMeIntent.loadLastShown(applicationContext)
+                if (last == null) {
+                    speakShowLine(ShowMeIntent.noTopicLine(kind, lang), text)
+                    return
+                }
+                val (topic, variant) = last
+                val nextVariant = (variant + 1) % ShowMeIntent.variantCount
+                ShowMeIntent.saveLastShown(applicationContext, topic, nextVariant)
+                openShowImagesBackground(
+                    ShowMeIntent.buildVariantQuery(topic, nextVariant),
+                    topic, kind, lang, text
+                )
+            }
+            ShowMeIntent.Kind.DETAILS -> {
+                val last = ShowMeIntent.loadLastShown(applicationContext)
+                if (last == null) {
+                    speakShowLine(ShowMeIntent.noTopicLine(kind, lang), text)
+                    return
+                }
+                val (topic) = last
+                if (!geminiBrainAllowed()) {
+                    speakShowLine(ShowMeIntent.offlineDetailsLine(lang), text)
+                    return
+                }
+                setStatus("Details bol rahi hoon...")
+                updateNotification("Details bol rahi hoon...")
+                GeminiBrain.chat(
+                    applicationContext, emptyList(),
+                    ShowMeIntent.detailsPrompt(topic, lang)
+                ) { reply ->
+                    val clean = reply
+                        ?.let { ShowMeIntent.cleanDetailsReply(it) }
+                        ?.takeIf { it.isNotEmpty() }
+                    val line = clean ?: ShowMeIntent.offlineDetailsLine(lang)
+                    speakShowLine(line, text)
+                }
+            }
+            ShowMeIntent.Kind.SHOW -> {
+                val item = ShowMeIntent.extractShowItem(text)
+                if (item == null) {
+                    speakShowLine(ShowMeIntent.askWhatLine(lang), text)
+                    return
+                }
+                ShowMeIntent.saveLastShown(applicationContext, item, 0)
+                if (geminiBrainAllowed()) {
+                    setStatus("Soch rahi hoon — achhi tasveerein dhoondh rahi hoon...")
+                    updateNotification("Soch rahi hoon...")
+                    GeminiBrain.chat(
+                        applicationContext, emptyList(),
+                        ShowMeIntent.refineQueryPrompt(item)
+                    ) { refined ->
+                        val query = ShowMeIntent.sanitizeRefinedQuery(refined)
+                            ?: item
+                        openShowImagesBackground(
+                            query, item, kind, lang, text
+                        )
+                    }
+                } else {
+                    openShowImagesBackground(item, item, kind, lang, text)
+                }
+            }
+        }
+    }
+
+    /** v76: show-me wali boli — runDirectYouTubePlay wala hi bandobast. */
+    private fun speakShowLine(line: String, userText: String) {
+        executor.execute {
+            if (destroyed || state != State.REPLY) return@execute
+            setStatus("Seedha jawab mila — bol rahi hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            pendingEndReason = SESSION_END_COMPLETED
+            noteSessionOutcome(userText, line)
+            lightScreenOnWake()
+            speaker.speak(line)
+            armReplyFallback(line)
+            orbOverlay.setReply(line)
+        }
+    }
+
+    /** v76: Google Images background se kholo + hamesha sachha jawab bolo. */
+    private fun openShowImagesBackground(
+        query: String,
+        topic: String,
+        kind: ShowMeIntent.Kind,
+        lang: PlayIntent.SpokenLang,
+        userText: String
+    ) {
+        setStatus("Tasveerein khol rahi hoon...")
+        updateNotification("Tasveerein khol rahi hoon...")
+        Thread {
+            val outcome = try {
+                PhoneActions.openUrlFromBackground(
+                    applicationContext, ShowMeIntent.imagesUrl(query)
+                )
+            } catch (t: Throwable) {
+                LaunchOutcome.FAILED
+            }
+            val ok = outcome == LaunchOutcome.LAUNCHED
+            ShowMeIntent.saveRouteDiag(applicationContext, kind, ok)
+            val line = when (outcome) {
+                LaunchOutcome.LAUNCHED ->
+                    ShowMeIntent.showingLine(topic, lang)
+                LaunchOutcome.LOCKED -> ShowMeIntent.lockedLine(lang)
+                LaunchOutcome.PERMISSION_NEEDED ->
+                    ShowMeIntent.permissionLine(lang)
+                else -> ShowMeIntent.openFailedLine(lang)
+            }
+            speakShowLine(line, userText)
         }.start()
     }
 
