@@ -202,6 +202,27 @@
                 android:resource="@xml/accessibility_config" />
         </service>
 
+        <!-- v98: notification se jawab — message notification
+             padhkar awaaz se jawab bhejne ke liye
+             NotificationListenerService। User Settings >
+             Notifications > Notification access se khud ON
+             karta hai; bina uske service band rehti hai aur
+             Maya saaf mana kar deti hai। Khud se kuch padhkar
+             NAHI sunati, khud se jawab NAHI bhejti — sirf
+             user ke bole hukm par। BIND_NOTIFICATION_LISTENER_SERVICE
+             permission ki wajah se sirf Android system hi ise
+             bandh sakta hai (v17 wali accessibility service
+             jaisa hi niyam)। -->
+        <service
+            android:name=".service.JarvisNotificationListener"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- v59: voice reminders — AlarmManager is receiver ko
              jagata hai; notification + awaaz se yaad dilata hai. -->
         <receiver

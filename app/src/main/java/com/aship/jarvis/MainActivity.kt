@@ -66,6 +66,7 @@ import com.aship.jarvis.commands.ImageIntent
 import com.aship.jarvis.commands.LanguageCommands
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.MayaLanguages
+import com.aship.jarvis.commands.NotificationCommands
 import com.aship.jarvis.commands.OfflineMode
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
@@ -659,6 +660,8 @@ class MainActivity : Activity() {
         // net chhoota hi nahi)।
         refreshGreeting()
         refreshLanguageCard()
+        // v98: Messages card ki sthiti taza — anumati hai ya nahi।
+        refreshNotificationCard()
         // v82: orb ki power haalat taaza — service chal
         // rahi ho to chamakta/ghoomta, band ho to dhunda।
         refreshOrbPowerState()
@@ -782,6 +785,10 @@ class MainActivity : Activity() {
         findViewById<LinearLayout>(R.id.screenCard).setOnClickListener { startScreenVoice() }
         findViewById<LinearLayout>(R.id.memoriesCard).setOnClickListener { showMemoriesDialog() }
         findViewById<LinearLayout>(R.id.languageCard).setOnClickListener { showLanguagePickerDialog() }
+        // v98: Messages card — notification-access wala dialog।
+        // findViewById null de sakta hai (v83 wala sabak) —
+        // isliye surakshit ?. (card na mile to chupchaap chhodo)।
+        findViewById<LinearLayout>(R.id.notificationCard)?.setOnClickListener { showNotificationAccessDialog() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
@@ -973,6 +980,53 @@ class MainActivity : Activity() {
     private fun refreshLanguageCard() {
         if (!::languageCardSubText.isInitialized) return
         languageCardSubText.text = listenLanguageName()
+    }
+
+    /**
+     * v98: Messages card ki sthiti taza karo — notification
+     * access mila hai ya nahi। Naya view hai, isliye
+     * lateinit nahi — har baar surakshit dhoondho (v83
+     * wala sabak: id wala lookup null de sakta hai)।
+     */
+    private fun refreshNotificationCard() {
+        val sub = findViewById<TextView>(R.id.notificationCardSubText) ?: return
+        sub.text = if (NotificationCommands.isAccessGranted(this)) {
+            "অনুমতি দেওয়া আছে"
+        } else {
+            "অনুমতি দিন — ট্যাপ করুন"
+        }
+    }
+
+    /**
+     * v98: notification-access kya hai + anumati wala
+     * dialog — Maya kya karegi (sirf bolne par padhegi /
+     * jawab bhejegi) aur kya kabhi nahi karegi (khud se
+     * kuch nahi) saaf likha hai।
+     */
+    private fun showNotificationAccessDialog() {
+        val granted = NotificationCommands.isAccessGranted(this)
+        val message = if (granted) {
+            "মায়া আপনার মেসেজের নোটিফিকেশন পড়তে পারে — শুধু তখনই, যখন আপনি বলবেন। নিজে থেকে কিছু পড়ে শোনাবে না, আর আপনার বলা ছাড়া কাউকে উত্তর পাঠাবে না।\n\nঅনুমতি বন্ধ করতে চাইলে সেটিংস খুলুন।"
+        } else {
+            "মায়া আপনার মেসেজের নোটিফিকেশন পড়ে উত্তর দিতে পারবে — শুধু তখনই, যখন আপনি বলবেন। নিজে থেকে কিছু পড়ে শোনাবে না, আর আপনার বলা ছাড়া কাউকে উত্তর পাঠাবে না।\n\nঅনুমতি দিতে সেটিংস খুলে এই অ্যাপের পাশে টিক দিন।"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("মেসেজের উত্তর — নোটিফিকেশন অনুমতি")
+            .setMessage(message)
+            .setPositiveButton(if (granted) "সেটিংস খুলুন" else "অনুমতি দিন") { _, _ ->
+                openNotificationAccessSettings()
+            }
+            .setNegativeButton(if (granted) "ঠিক আছে" else "পরে", null)
+            .show()
+    }
+
+    /** v98: system wala notification-access screen kholo। */
+    private fun openNotificationAccessSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } catch (t: Throwable) {
+            Toast.makeText(this, "সেটিংস খুলতে পারলাম না।", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** Samay wali Bangla shubhkaamna — "বস" keh kar, jaise Maya kehti hai। */
@@ -2781,6 +2835,15 @@ class MainActivity : Activity() {
             runDirectFavSite(commandText)
             return
         }
+        // v98: NOTIFICATION SE UTTAR — agent se pehle pakke
+        // raaste se। Reply bhejna tez IPC hai, par niyam wahi
+        // — background executor (runDirectScreenEyes wala hi
+        // raasta), natija mainHandler se wapas aakar bola/
+        // dikhaya jata hai।
+        if (commandEngine.isNotificationCommand(commandText)) {
+            runDirectNotification(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -3890,6 +3953,29 @@ class MainActivity : Activity() {
                 commandEngine.runFavSiteCommand(text)
             } catch (t: Throwable) {
                 CommandResult("সাইটটা খুলতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v98: bina mastishk ke seedha notification wala kaam —
+     * runDirectFavSite wala hi raasta: koshish background
+     * executor par, natija mainHandler se wapas aakar
+     * bola/dikhaya jata hai।
+     */
+    private fun runDirectNotification(text: String) {
+        showResponse("Maya: দেখছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runNotificationCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("মেসেজের উত্তর দিতে পারলাম না।", true)
             }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post

@@ -70,7 +70,18 @@ class BootReceiver : BroadcastReceiver() {
             val all = ReminderCommands.loadAll(ctx)
             if (all.isEmpty()) return
             val now = System.currentTimeMillis()
-            val future = all.filter { it.atMillis > now }
+            // v98: repeat wali beet chuki yaad aage badhao
+            // (series na toote — agle din / agle hafte wahi
+            // samay); ek baar wali beet chuki yaad hatao।
+            val future = all.mapNotNull { reminder ->
+                if (reminder.atMillis > now) {
+                    reminder
+                } else if (reminder.repeatKind != "NONE") {
+                    ReminderCommands.rollForwardToFuture(reminder, now)
+                } else {
+                    null
+                }
+            }
             for (reminder in future) {
                 try {
                     ReminderCommands.schedule(ctx, reminder)
@@ -78,9 +89,10 @@ class BootReceiver : BroadcastReceiver() {
                     // Ek alarm na lage to baaki phir bhi lagenge।
                 }
             }
-            if (future.size < all.size) {
-                // Beet chuki yaadein hata do — list saaf rahe,
-                // dobara boot par phir koshish na ho।
+            if (future.size < all.size || future != all) {
+                // Beet chuki yaadein hata do / repeat wali
+                // aage badha do — list saaf rahe, dobara boot
+                // par phir koshish na ho।
                 try {
                     ReminderCommands.saveAll(ctx, future)
                 } catch (t: Throwable) {

@@ -3376,6 +3376,16 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, favResult)
             return
         }
+        // v98: NOTIFICATION SE UTTAR — agent se pehle pakke
+        // raaste se। Reply bhejna tez IPC hai (RemoteInput),
+        // par niyam wahi — isi executor thread par, main
+        // thread par nahi। Padhna / jawab / anumati — teeno
+        // yahin; anumati na ho to sach bolkar Settings kholo।
+        if (commandEngine.isNotificationCommand(text)) {
+            val notifResult = commandEngine.runNotificationCommand(text)
+            finishCommandResult(text, notifResult)
+            return
+        }
         // v38: pakka scroll hukm bhi agent se pehle pakke
         // offline raaste se — "স্ক্রল ডাউন করো" bolte hi
         // Accessibility swipe karegi, mastishk ke chakkar

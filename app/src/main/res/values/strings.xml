@@ -8,4 +8,11 @@
          kya karti hai aur kya NAHI karti. -->
     <string name="accessibility_service_label">ASHIP JARVIS AI — Mobile Data</string>
     <string name="accessibility_service_description">मोबाइल डेटा ऑन/ऑफ़ करने के लिए। "मोबाइल डेटा ऑन करो" बोलने पर Jarvis क्विक सेटिंग्स खोलकर डेटा वाला टाइल दबाता है — बस इतना ही। यह सेवा आपकी स्क्रीन नहीं पढ़ती, कोई टैप या स्क्रॉल अपने आप नहीं करती, और कोई जानकारी कहीं नहीं भेजती।</string>
+
+    <!-- v98: Notification listener — sirf message notification
+         padhne / jawab bhejne ke liye (jab user bolkar kahe)।
+         Ye naam Android ki Notification access settings me
+         dikhta hai, isliye saaf shabdon me likha hai ki
+         service kya karti hai। -->
+    <string name="notification_listener_label">ASHIP JARVIS AI — Messages</string>
 </resources>

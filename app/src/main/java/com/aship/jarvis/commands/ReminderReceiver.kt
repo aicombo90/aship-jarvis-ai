@@ -49,7 +49,23 @@ class ReminderReceiver : BroadcastReceiver() {
             }
             // Entry ab bhi hai kya — batiil ho chuki ho to
             // bajna nahi chahiye (dohri suraksha)।
-            if (id != -1L && ReminderCommands.removeById(context, id) == null) {
+            // v98: repeat wali yaad — bajne par agli baari
+            // lagao (entry rakho, series chalti rahe); ek
+            // baar wali purani tarah mit jati hai।
+            val entry = if (id != -1L) ReminderCommands.findById(context, id) else null
+            if (id != -1L && entry == null) {
+                finishOnce()
+                return
+            }
+            if (entry != null && entry.repeatKind != "NONE") {
+                val next = ReminderCommands.rollForwardToFuture(
+                    entry.copy(atMillis = ReminderCommands.nextOccurrence(entry))
+                )
+                val all = ReminderCommands.loadAll(context)
+                    .map { if (it.id == id) next else it }
+                ReminderCommands.saveAll(context, all)
+                ReminderCommands.schedule(context, next)
+            } else if (id != -1L && ReminderCommands.removeById(context, id) == null) {
                 finishOnce()
                 return
             }

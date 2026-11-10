@@ -3618,6 +3618,249 @@ class CommandEngine(
         PlayIntent.SpokenLang.ENGLISH -> "Your favourite sites: " + names.joinToString(", ") + "."
     }
 
+    // -- v98: NOTIFICATION SE UTTAR --
+
+    /** v98: notification wala hukm hai kya (padho / jawab / anumati) — sasta match, koi IO nahi। */
+    fun isNotificationCommand(rawText: String): Boolean {
+        if (matchesAny(rawText, notifAccessMarkers)) return true
+        if (matchesAny(rawText, notifReplyMarkers)) return true
+        return matchesAny(rawText, notifReadMarkers)
+    }
+
+    /** v98: MainActivity / wake service wala raasta — jawab bhejna tez IPC hai, phir bhi background thread se। */
+    fun runNotificationCommand(rawText: String): CommandResult {
+        return notificationCommand(rawText)
+            ?: CommandResult(notifWhatReply(PlayIntent.requestLanguage(rawText)), true)
+    }
+
+    /**
+     * v98: notification wala hukm — padho / jawab / anumati।
+     * Na ho to null — bulane wala apna aam raasta aage badhaye।
+     */
+    fun notificationCommand(rawText: String): CommandResult? {
+        if (!isNotificationCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (matchesAny(rawText, notifAccessMarkers)) {
+            return notificationAccessCommand(lang)
+        }
+        if (matchesAny(rawText, notifReplyMarkers)) {
+            return notificationReplyCommand(rawText, lang)
+        }
+        return notificationReadCommand(lang)
+    }
+
+    /** v98: notification-access wala hukm — anumati hai to batao, na ho to Settings kholo। */
+    private fun notificationAccessCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        if (NotificationCommands.isAccessGranted(context)) {
+            return CommandResult(notifAlreadyGrantedReply(lang), true)
+        }
+        val opened = NotificationCommands.openAccessSettings(context, fromBackgroundService)
+        return CommandResult(
+            if (opened) notifAccessOpenedReply(lang) else notifAccessOpenFailReply(lang),
+            true
+        )
+    }
+
+    /** v98: naye message padhkar sunao — anumati na ho to sach bolkar Settings kholo। */
+    private fun notificationReadCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        if (!NotificationCommands.isAccessGranted(context)) {
+            NotificationCommands.openAccessSettings(context, fromBackgroundService)
+            return CommandResult(notifNeedAccessReply(lang), true)
+        }
+        val unread = NotificationStore.listUnread(context)
+        if (unread.isEmpty()) {
+            return CommandResult(notifNoMessagesReply(lang), true)
+        }
+        val latest = unread.first()
+        NotificationStore.setLastReadKey(context, latest.key)
+        val shown = unread.take(3)
+        val lines = shown.joinToString(" ") { "${it.sender}: ${it.text}" }
+        return CommandResult(notifReadReply(lang, shown.size, unread.size, lines), true)
+    }
+
+    /** v98: message ka jawab bhejo — naam ho to usi ko, warna abhi padhe hue / taaze wale ko। */
+    private fun notificationReplyCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        if (!NotificationCommands.isAccessGranted(context)) {
+            NotificationCommands.openAccessSettings(context, fromBackgroundService)
+            return CommandResult(notifNeedAccessReply(lang), true)
+        }
+        val afterVerb = NotificationCommands.extractReplyText(rawText)
+        val (target, replyText) = splitReplyTargetAndText(afterVerb)
+        if (target == null) {
+            return CommandResult(notifNoTargetReply(lang), true)
+        }
+        if (replyText.isEmpty()) {
+            return CommandResult(notifNeedReplyTextReply(lang, target.sender), true)
+        }
+        return when (NotificationCommands.sendReply(context, target, replyText)) {
+            NotificationCommands.ReplyOutcome.SENT ->
+                CommandResult(notifRepliedReply(lang, target.sender), true)
+            NotificationCommands.ReplyOutcome.NO_LIVE -> {
+                val opened = NotificationCommands.openMessageApp(context, target, fromBackgroundService)
+                CommandResult(notifGoneReply(lang, target.sender, opened), true)
+            }
+            NotificationCommands.ReplyOutcome.NO_ACTION -> {
+                val opened = NotificationCommands.openMessageApp(context, target, fromBackgroundService)
+                CommandResult(notifNoReplyButtonReply(lang, target.sender, opened), true)
+            }
+            NotificationCommands.ReplyOutcome.FAILED ->
+                CommandResult(notifReplyFailedReply(lang, target.sender), true)
+        }
+    }
+
+    /**
+     * v98: jawab ka nishana + jawab wala text — "রাহুলকে
+     * হ্যাঁ আসছি" me pehla token naam ho sakta hai; naam
+     * na mile to abhi padha hua (lastReadKey), phir taaza
+     * wala। Naam godam wale bhejne walon se milakar dekho।
+     */
+    private fun splitReplyTargetAndText(afterVerb: String?): Pair<NotificationStore.StoredMessage?, String> {
+        if (afterVerb == null) return null to ""
+        val tokens = afterVerb.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return null to ""
+        val unread = NotificationStore.listUnread(context)
+        // Pehla token naam ho to (naam / naam+কে)।
+        val first = tokens[0].trim(',', '.', '।', '!', '?', '"', '\'')
+        val nameGuess = first.removeSuffix("কে").removeSuffix("को")
+        if (nameGuess.length >= 2) {
+            val byName = unread.firstOrNull { msg ->
+                val sender = msg.sender.lowercase(Locale.ROOT)
+                val firstWord = sender.split(Regex("""\s+""")).firstOrNull().orEmpty()
+                sender.contains(nameGuess.lowercase(Locale.ROOT)) ||
+                    nameGuess.lowercase(Locale.ROOT).contains(firstWord)
+            } ?: NotificationStore.findBySender(context, nameGuess)
+            if (byName != null) {
+                return byName to tokens.drop(1).joinToString(" ")
+                    .trim().trim(',', '.', '।', '!', '?', '"', '\'')
+            }
+        }
+        val target = NotificationStore.lastReadKey(context)
+            ?.let { NotificationStore.findByKey(context, it) }
+            ?: unread.firstOrNull()
+        return target to afterVerb.trim()
+    }
+
+    // -- v98: notification wale marker (teeno bhasha) --
+
+    private val notifReadMarkers = listOf(
+        "কে মেসেজ করেছে", "কে মেসেজ করল", "কেউ মেসেজ করেছে",
+        "নতুন মেসেজ", "মেসেজ পড়ো", "মেসেজ দেখাও", "মেসেজ আছে",
+        "মেসেজ শোনাও", "মেসেজগুলো পড়ো",
+        "किसने मैसेज किया", "नया मैसेज", "मैसेज पढ़ो", "मैसेज दिखाओ",
+        "who messaged", "new messages", "read messages", "read my messages",
+        "any new messages", "check messages"
+    )
+
+    private val notifReplyMarkers = listOf(
+        "উত্তর দাও", "জবাব দাও", "উত্তর পাঠাও", "জবাব পাঠাও",
+        "উত্তর লিখে দাও", "উত্তর দে", "জবাব দে",
+        "उत्तर दो", "जवाब दो", "उत्तर भेजो", "जवाब भेजो",
+        "reply", "reply karo", "send a reply"
+    )
+
+    private val notifAccessMarkers = listOf(
+        "নোটিফিকেশন অনুমতি", "মেসেজের অনুমতি", "নোটিফিকেশন চালু",
+        "notification permission", "notification access",
+        "allow notifications", "notification anumati"
+    )
+
+    // -- v98: notification wale jawab (hukm ki bhasha me) --
+
+    private fun toBnDigits(s: String): String = s.map { ch ->
+        when (ch) {
+            '0' -> '০'; '1' -> '১'; '2' -> '২'; '3' -> '৩'; '4' -> '৪'
+            '5' -> '৫'; '6' -> '৬'; '7' -> '৭'; '8' -> '৮'; '9' -> '৯'
+            else -> ch
+        }
+    }.joinToString("")
+
+    private fun notifWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "মেসেজ পড়তে বলো, নাকি উত্তর দিতে বলো — যেমন 'নতুন মেসেজ পড়ো' বা 'উত্তর দাও হ্যাঁ আসছি'।"
+        PlayIntent.SpokenLang.HINDI -> "मैसेज पढ़ने को बोलो या जवाब देने को — जैसे 'नया मैसेज पढ़ो' या 'जवाब दो हाँ आ रहा हूँ'।"
+        PlayIntent.SpokenLang.ENGLISH -> "Ask me to read messages or reply — like 'read new messages' or 'reply yes, coming'."
+    }
+
+    private fun notifNeedAccessReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "মেসেজ পড়তে নোটিফিকেশন অনুমতি লাগবে — সেটিংস খুলে দিয়েছি, ওখানে এই অ্যাপের পাশে টিক দিন।"
+        PlayIntent.SpokenLang.HINDI -> "मैसेज पढ़ने के लिए notification की अनुमति चाहिए — Settings खोल दिया है, वहाँ इस ऐप के आगे टिक लगाओ।"
+        PlayIntent.SpokenLang.ENGLISH -> "I need notification access to read messages — I've opened Settings, tick this app there."
+    }
+
+    private fun notifAlreadyGrantedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "নোটিফিকেশন অনুমতি দেওয়া আছে — মেসেজ পড়তে আর উত্তর দিতে পারবো।"
+        PlayIntent.SpokenLang.HINDI -> "Notification की अनुमति मिली हुई है — मैसेज पढ़ और जवाब दे सकती हूँ।"
+        PlayIntent.SpokenLang.ENGLISH -> "Notification access is already granted — I can read messages and reply."
+    }
+
+    private fun notifAccessOpenedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "সেটিংস খুলে দিয়েছি — Notification access-এ গিয়ে এই অ্যাপের পাশে টিক দিন।"
+        PlayIntent.SpokenLang.HINDI -> "Settings खोल दिया है — Notification access में जाकर इस ऐप के आगे टिक लगाओ।"
+        PlayIntent.SpokenLang.ENGLISH -> "I've opened Settings — go to Notification access and tick this app."
+    }
+
+    private fun notifAccessOpenFailReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "সেটিংস খুলতে পারলাম না — নিজে গিয়ে Settings > Notifications > Notification access থেকে এই অ্যাপ চালু করো।"
+        PlayIntent.SpokenLang.HINDI -> "Settings नहीं खुल पाया — खुद जाकर Settings > Notifications > Notification access से इस ऐप को चालू करो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't open Settings — go to Settings > Notifications > Notification access and enable this app yourself."
+    }
+
+    private fun notifNoMessagesReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কোনো নতুন মেসেজ নেই।"
+        PlayIntent.SpokenLang.HINDI -> "कोई नया मैसेज नहीं है।"
+        PlayIntent.SpokenLang.ENGLISH -> "No new messages."
+    }
+
+    private fun notifReadReply(lang: PlayIntent.SpokenLang, shown: Int, total: Int, lines: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> {
+            val more = if (total > shown) " আরো ${toBnDigits((total - shown).toString())}টা আছে।" else ""
+            "নতুন মেসেজ: $lines$more"
+        }
+        PlayIntent.SpokenLang.HINDI -> {
+            val more = if (total > shown) " और ${total - shown} हैं।" else ""
+            "नए मैसेज: $lines$more"
+        }
+        PlayIntent.SpokenLang.ENGLISH -> {
+            val more = if (total > shown) " And ${total - shown} more." else ""
+            "New messages: $lines$more"
+        }
+    }
+
+    private fun notifNoTargetReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "উত্তর দেওয়ার মতো কোনো মেসেজ নেই — আগে 'নতুন মেসেজ পড়ো' বলে দেখো।"
+        PlayIntent.SpokenLang.HINDI -> "जवाब देने लायक कोई मैसेज नहीं है — पहले 'नया मैसेज पढ़ो' बोलकर देखो।"
+        PlayIntent.SpokenLang.ENGLISH -> "There's no message to reply to — ask me to 'read new messages' first."
+    }
+
+    private fun notifNeedReplyTextReply(lang: PlayIntent.SpokenLang, sender: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$sender-কে কী উত্তর দেবো? উত্তরটা বলো — যেমন 'উত্তর দাও হ্যাঁ আসছি'।"
+        PlayIntent.SpokenLang.HINDI -> "$sender को क्या जवाब दूँ? जवाब बताओ — जैसे 'जवाब दो हाँ आ रहा हूँ'।"
+        PlayIntent.SpokenLang.ENGLISH -> "What should I reply to $sender? Tell me the reply — like 'reply yes, coming'."
+    }
+
+    private fun notifRepliedReply(lang: PlayIntent.SpokenLang, sender: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$sender-কে উত্তর পাঠিয়ে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "$sender को जवाब भेज दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Replied to $sender."
+    }
+
+    private fun notifGoneReply(lang: PlayIntent.SpokenLang, sender: String, opened: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ওই মেসেজটা আর নোটিফিকেশনে নেই, তাই উত্তর পাঠাতে পারলাম না।" + if (opened) " অ্যাপটা খুলে দিয়েছি — ওখান থেকে উত্তর দাও।" else " অ্যাপটা খুলে উত্তর দাও।"
+        PlayIntent.SpokenLang.HINDI -> "वह मैसेज अब notification में नहीं है, इसलिए जवाब नहीं भेज पाई।" + if (opened) " ऐप खोल दिया है — वहाँ से जवाब दो।" else " ऐप खोलकर जवाब दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "That message is no longer in notifications, so I couldn't reply." + if (opened) " I've opened the app — reply from there." else " Open the app and reply from there."
+    }
+
+    private fun notifNoReplyButtonReply(lang: PlayIntent.SpokenLang, sender: String, opened: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$sender-এর মেসেজে নোটিফিকেশন থেকে উত্তরের বোতাম নেই।" + if (opened) " অ্যাপটা খুলে দিয়েছি — ওখান থেকে উত্তর দাও।" else " অ্যাপটা খুলে উত্তর দাও।"
+        PlayIntent.SpokenLang.HINDI -> "$sender के मैसेज में notification से जवाब का बटन नहीं है।" + if (opened) " ऐप खोल दिया है — वहाँ से जवाब दो।" else " ऐप खोलकर जवाब दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "There's no reply button on $sender's message notification." + if (opened) " I've opened the app — reply from there." else " Open the app and reply from there."
+    }
+
+    private fun notifReplyFailedReply(lang: PlayIntent.SpokenLang, sender: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$sender-কে উত্তর পাঠাতে পারলাম না — একবার আবার চেষ্টা করো।"
+        PlayIntent.SpokenLang.HINDI -> "$sender को जवाब नहीं भेज पाई — एक बार फिर कोशिश करो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't send the reply to $sender — please try once more."
+    }
+
     /**
      * v40: ye suna hua hukm seedha SCREENSHOT lene wala
      * hai kya — "স্ক্রিনশট নাও/তোলো/নে", "स्क्रीनशॉट लो",
