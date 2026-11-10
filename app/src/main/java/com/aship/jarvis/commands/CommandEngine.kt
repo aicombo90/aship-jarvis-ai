@@ -2988,11 +2988,11 @@ class CommandEngine(
 
     /** v96: Bluetooth Settings panel kholo (tile na mile to imaandaar fallback)। */
     private fun openBluetoothPanel() {
-        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            Settings.Panel.ACTION_BLUETOOTH
-        } else {
-            Settings.ACTION_BLUETOOTH_SETTINGS
-        }
+        // v96 fix: Settings.Panel me ACTION_BLUETOOTH hota hi nahi
+        // (sirf ACTION_WIFI / ACTION_INTERNET_CONNECTIVITY /
+        // ACTION_NFC / ACTION_VOLUME hain) — isliye hamesha
+        // ACTION_BLUETOOTH_SETTINGS (yehi CI v96 me fail hua tha)।
+        val action = Settings.ACTION_BLUETOOTH_SETTINGS
         if (fromBackgroundService) {
             PhoneActions.openPanelFromBackground(context, action)
         } else {
