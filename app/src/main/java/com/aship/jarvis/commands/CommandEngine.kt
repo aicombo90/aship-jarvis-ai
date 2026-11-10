@@ -9,6 +9,7 @@ import android.provider.Settings
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.ai.DialectMap
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.ScreenEyes
 import com.aship.jarvis.ai.ScreenSafety
@@ -123,6 +124,20 @@ class CommandEngine(
             val third = dispatch(stripFillers(normalize(repaired)))
             if (third.handled) return third
         }
+
+        // v97: BANGLA LEHJA — swar/ant wale halke
+        // farq (খুলো/খোলো, চালা/চালাও, বন্দ/বন্ধ)
+        // bhi pakke roop me badlo aur dispatch
+        // dobara aazmao। (Hindi skeleton wala hi
+        // niyam — sirf jaane-pehchane pakke shabd
+        // badalte hain, natija dispatch ke pakke
+        // niyamon se hi guzarta hai।)
+        val banglaRepaired = canonicaliseBanglaBySkeleton(rawText)
+        if (banglaRepaired != null) {
+            val fourth = dispatch(stripFillers(normalize(banglaRepaired)))
+            if (fourth.handled) return fourth
+        }
+
         return first
     }
 
@@ -183,6 +198,49 @@ class CommandEngine(
                 token
             } else {
                 val canonical = skeletonCanon[hindiSkeleton(clean)]
+                if (canonical != null && canonical != clean) {
+                    changed = true
+                    canonical
+                } else {
+                    token
+                }
+            }
+        }
+        return if (changed) out.joinToString(" ") else null
+    }
+
+    /** v97: Bangla skeleton wala shabd-naksha (skeleton -> pakka roop)। */
+    private val skeletonBnCanon: Map<String, String> by lazy {
+        val map = HashMap<String, String>()
+        for ((surface, canonical) in SKELETON_BN_CANON_PAIRS) {
+            map[DialectMap.banglaSkeleton(surface)] = canonical
+        }
+        map
+    }
+
+    /**
+     * v97: suna hua vakya shabd-dar-shabd
+     * BANGLA skeleton-milan se sudhaaro —
+     * lehja wale swar/ant farq (খুলো/খোলো,
+     * চালা/চালাও, বন্দ/বন্ধ, লাইত/লাইট,
+     * ডাটা/ডেটা, গানা/গান) pakke roop me
+     * badlo; baaki shabd jaise hain waise
+     * rahen। Kuch badle hi na to null।
+     * (Hindi skeleton wala hi niyam — sirf
+     * jaane-pehchane pakke shabd badalte
+     * hain, natija dispatch ke pakke niyamon
+     * se hi guzarta hai।)
+     */
+    fun canonicaliseBanglaBySkeleton(rawText: String): String? {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return null
+        var changed = false
+        val out = raw.split(Regex("""\s+""")).map { token ->
+            val clean = token.trim(',', '.', '।', '!', '?', '"', '\'')
+            if (clean.length < 2) {
+                token
+            } else {
+                val canonical = skeletonBnCanon[DialectMap.banglaSkeleton(clean)]
                 if (canonical != null && canonical != clean) {
                     changed = true
                     canonical
@@ -4340,6 +4398,48 @@ class CommandEngine(
             "টেলিগ্রাম" to "টেলিগ্রাম",
             "ফেসবুক" to "ফেসবুক",
             "ক্যামেরা" to "ক্যামেরা", "ক্রোম" to "ক্রোম"
+        )
+
+        /**
+         * v97: BANGLA SKELETON — lehja wale halke
+         * farq (swar/ant) se pakke command-shabd
+         * tak। Har jodi me pehla shabd suna hua
+         * roop, doosra pakka roop hai; pehchan
+         * [DialectMap.banglaSkeleton] se hoti hai
+         * (isliye skeleton alag ho jane wale roop
+         * bhi yahan chahiye, jaise খুলো/খোলো)।
+         * Skeleton ek ho jane wale roop do baar
+         * nahi likhe (jaise "খুল" ka skeleton
+         * "খোলো" wala hi hai — dohra na ho)।
+         * Sirf aam hukmon ke shabd — har shabd
+         * sudhaarna iska kaam nahi।
+         */
+        val SKELETON_BN_CANON_PAIRS = listOf(
+            // Torch / light
+            "টর্চ" to "টর্চ", "লাইট" to "লাইট",
+            "লাইত" to "লাইট",
+            // On / off / kriya shabd
+            "বন্ধ" to "বন্ধ", "বন্দ" to "বন্ধ",
+            "খোলো" to "খোলো", "খুলো" to "খোলো",
+            "খুলে" to "খোলো",
+            "চালাও" to "চালাও", "চালা" to "চালাও",
+            "চালু" to "চালাও",
+            "জ্বালাও" to "জ্বালাও", "জ্বালা" to "জ্বালাও",
+            "জ্বালো" to "জ্বালাও",
+            // Mobile data
+            "মোবাইল" to "মোবাইল", "ডেটা" to "ডেটা",
+            "ডাটা" to "ডেটা",
+            // Scroll / gaana / aam kriya
+            "স্ক্রল" to "স্ক্রল", "স্ক্রোল" to "স্ক্রল",
+            "গান" to "গান", "গানা" to "গান",
+            "করো" to "করো", "কর" to "করো",
+            "দাও" to "দাও", "দে" to "দাও",
+            "বলো" to "বলো", "বল" to "বলো",
+            "থামো" to "থামো", "থামা" to "থামো",
+            "থামাও" to "থামো",
+            "খোঁজো" to "খোঁজো", "খুঁজো" to "খোঁজো",
+            "বাজাও" to "বাজাও", "বাজা" to "বাজাও",
+            "দেখাও" to "দেখাও", "দেখা" to "দেখাও"
         )
 
         /** v50: akele "লাইট" wale hukm ke light-shabd। */

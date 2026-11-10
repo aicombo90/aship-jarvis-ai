@@ -59,12 +59,14 @@ import com.aship.jarvis.commands.CommandHistory
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.ContactCallCommands
 import com.aship.jarvis.commands.DataButtonLearner
+import com.aship.jarvis.commands.DialectCommands
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.ImageIntent
 import com.aship.jarvis.commands.LanguageCommands
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.MayaLanguages
+import com.aship.jarvis.commands.OfflineMode
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
@@ -667,6 +669,8 @@ class MainActivity : Activity() {
         // v62: API Keys screen se lautkar Gemini key badli ho to
         // Maya wali status line bhi turant taza ho।
         refreshGeminiKeyUi()
+        // v97: OFFLINE MODE indicator bhi turant taza ho।
+        refreshOfflineIndicator()
         refreshHistoryUi()
         // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
@@ -2447,7 +2451,13 @@ class MainActivity : Activity() {
         // Bangla; neeche askAgentBrain tak yahi jata
         // hai). Naam na mile to sab bilkul pehle jaisa.
         val vocative = PersonaVocative.stripVocative(text)
-        val commandText = vocative?.second ?: text
+        val rawCommandText = vocative?.second ?: text
+        // v97: DIALECT anuvaad — shikha hua bol-chaal
+        // wala roop mile to uska asal hukm। (History
+        // / "Aapne kaha" me kachha text hi rehta hai —
+        // wahi suna tha, wahi dikhega।)
+        val commandText =
+            DialectCommands.translateOrNull(this, rawCommandText) ?: rawCommandText
         val vocativeLang = vocative?.first?.spokenLang()
         // v51 (item 5): shaksiyat bandhi ho to yaad
         // rakho — agli baar saamne wala sunna usi
@@ -2545,6 +2555,28 @@ class MainActivity : Activity() {
         // [LearnCommands] ke bandhe niyam se)।
         // Bhasha: naam-pukar wali shaksiyat ki,
         // warna hukm ki apni।
+        // v97: DIALECT — bol-chaal sikhana
+        // ("'X' শুনলে 'Y' বুঝবে" / "'X' বললে
+        // 'Y' বুঝবে"), sudhaar ("না, আমি বলেছি
+        // 'X'"), suchi/bhulna। TeachCommands se
+        // PEHLE chalta hai — "বুঝবে" wala roop
+        // sirf iska hai। Pichli suni baat pehle
+        // history se, warna "Mic ne aakhri suna"
+        // wali field se (wake service wahi
+        // [prefs.lastHeardText] likhta hai)।
+        DialectCommands.tryHandleAdmin(
+            this,
+            commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText),
+            CommandHistory.list(this).dropLast(1).lastOrNull()
+                ?: prefs.lastHeardText.takeIf { it.isNotBlank() }
+        )?.let { dialectLine ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Maya: $dialectLine")
+            speaker.speak(dialectLine)
+            return
+        }
+
         // v50: SIKHANE WALE NAYE HUKM (wake service
         // wala hi ek object, [TeachCommands]) —
         // naam bandhna ("আমার নাম …") aur
@@ -2970,6 +3002,18 @@ class MainActivity : Activity() {
             speaker.speak(line)
             return
         }
+        // v97: OFFLINE MODE — mastishk uplabdh hi
+        // nahi tha (Offline mode / key nahi / net
+        // nahi) aur offline engine bhi na jod paya
+        // to imaandaar wajah bolo — aam "বুঝতে
+        // পারিনি" wala fallback yahan nahi।
+        OfflineMode.reason(this)?.let { reason ->
+            val line = OfflineMode.reply(reason, PlayIntent.requestLanguage(text))
+            politeFailureSpokenThisTurn = true
+            showResponse("Maya: $line")
+            speaker.speak(line)
+            return
+        }
         // v35: offline / bina key ki vinamr haar — par ek turn
         // me awaaz se zyada se zyada EK baar; dobara ho to
         // sirf screen par dikhega. Saath me shune wali bhasha
@@ -3004,6 +3048,27 @@ class MainActivity : Activity() {
             geminiKeyStatusText.text = "Key: nahi hai — API Keys se Gemini key daalo"
         }
         refreshGeminiDiag()
+    }
+
+    /**
+     * v97: OFFLINE MODE indicator — online/offline
+     * ek nazar me (hero box me mic pill ke neeche
+     * chhoti line)। Tag se milta hai (v89 wala hi
+     * niyam — findViewById wala null-defect yahan
+     * nahi); na mile to chup (crash nahi)। onResume
+     * + har 2 s wale refresh se taza hota hai।
+     * (OfflineMode.reason wahi wajah dekhta hai
+     * jo mastishk ke liye bhi lagu hai — mode /
+     * key nahi / net nahi।)
+     */
+    private fun refreshOfflineIndicator() {
+        val badge = window.decorView.findViewWithTag<TextView>("offlineBadge") ?: return
+        val offline = OfflineMode.isOffline(this)
+        badge.text = if (offline) "● অফলাইন" else "● অনলাইন"
+        badge.setTextColor(
+            if (offline) android.graphics.Color.rgb(252, 165, 165)
+            else android.graphics.Color.rgb(134, 239, 172)
+        )
     }
 
     /**
@@ -3963,6 +4028,8 @@ class MainActivity : Activity() {
             // taaza — service chalu/band hote hi orb/pill
             // sach bole (asli haalat se, andaze se nahi)।
             refreshOrbPowerState()
+            // v97: OFFLINE MODE indicator bhi har 2 s taaza।
+            refreshOfflineIndicator()
             mainHandler.postDelayed(this, WAKE_REFRESH_MS)
         }
     }

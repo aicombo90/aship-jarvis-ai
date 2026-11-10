@@ -201,6 +201,21 @@
                     android:textColor="#E8EBFA"
                     android:textSize="13sp" />
 
+                <!-- v97: OFFLINE MODE indicator — online/offline ek
+                     nazar me (mic pill ke neeche chhoti line)।
+                     Tag se milta hai (v89 wala hi niyam);
+                     na mile to chup (crash nahi)। -->
+                <TextView
+                    android:id="@+id/offlineBadge"
+                    android:tag="offlineBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="6dp"
+                    android:text="● অনলাইন"
+                    android:textColor="#86EFAC"
+                    android:textSize="12sp" />
+
                 <TextView
                     android:id="@+id/speakHintText"
                     android:layout_width="wrap_content"

@@ -48,11 +48,13 @@ import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
+import com.aship.jarvis.commands.DialectCommands
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.ImageIntent
 import com.aship.jarvis.commands.LanguageCommands
 import com.aship.jarvis.commands.LearnCommands
 import com.aship.jarvis.commands.MayaLanguages
+import com.aship.jarvis.commands.OfflineMode
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
@@ -602,6 +604,16 @@ class JarvisWakeService : Service() {
 
     @Volatile
     private var lastBrainTools: AgentTools? = null
+
+    /**
+     * v97: DIALECT sudhaar ("না, আমি বলেছি 'X'")
+     * ke liye pichli baar suni hui aakhri baat —
+     * [rememberCommandFinal] me har naye hukm se
+     * pehle purani baat yahan utaar li jati hai।
+     * Sirf pukaar-naam (মায়া/তারা) ho to sudhaar
+     * wala haath use nahi manta (DialectCommands)।
+     */
+    private var previousCommandFinalText: String? = null
 
     // v21 Phase 3: Gemini baatchit ki yaad — is wake chain ke
     // andar wale aakhiri 10 user/model turn (jodi = 2 entry).
@@ -2453,7 +2465,7 @@ class JarvisWakeService : Service() {
         saveBackgroundHeardDiag(fromSystem = true, text = text)
         stopSystemCommandSession()
         commandKind = CommandKind.NONE
-        onCommandHeard(text)
+        onCommandHeard(dialectTranslated(text))
     }
 
     /**
@@ -2828,7 +2840,7 @@ class JarvisWakeService : Service() {
                 rememberCommandFinal(outcome.text)
                 saveBackgroundHeardDiagTag("zipformer", outcome.text)
                 commandKind = CommandKind.NONE
-                onCommandHeard(outcome.text)
+                onCommandHeard(dialectTranslated(outcome.text))
             }
             BanglaZipformer.Outcome.Empty -> {
                 saveBanglaAsrDiag("zipformer EMPTY")
@@ -2948,7 +2960,7 @@ class JarvisWakeService : Service() {
             // report me kaan ka naam "vosk" bandhega.
             currentTurnViaSystem = false
             saveBackgroundHeardDiag(fromSystem = false, text = text)
-            executor.execute { onCommandHeard(text) }
+            executor.execute { onCommandHeard(dialectTranslated(text)) }
         }
     }
 
@@ -3061,6 +3073,26 @@ class JarvisWakeService : Service() {
             endSessionDone()
             return
         }
+        // v97: DIALECT — bol-chaal sikhana
+        // ("'X' শুনলে 'Y' বুঝবে" / "'X' বললে
+        // 'Y' বুঝবে"), sudhaar ("না, আমি বলেছি
+        // 'X'"), suchi/bhulna। TeachCommands se
+        // PEHLE chalta hai — "বুঝবে" wala roop
+        // sirf iska hai, "বললে" wala TeachCommands
+        // ka (bina "বুঝবে" ke)। Pichli suni baat
+        // [previousCommandFinalText] se aati hai।
+        DialectCommands.tryHandleAdmin(
+            applicationContext, text, personaSpokenLang(), previousCommandFinalText
+        )?.let { dialectLine ->
+            setStatus("Dialect wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(dialectLine)
+            armReplyFallback(dialectLine)
+            orbOverlay.setReply(dialectLine)
+            return
+        }
+
         // v50: SIKHANE WALE NAYE HUKM — naam
         // bandhna ("আমার নাম …") aur shabd-kaam
         // sikhana ("'লাইট' বললে টর্চ জ্বালাবে")।
@@ -3530,6 +3562,22 @@ class JarvisWakeService : Service() {
             return
         }
         val rawResult = commandEngine.handle(text)
+        if (!rawResult.handled) {
+            // v97: OFFLINE MODE — mastishk uplabdh
+            // hi nahi tha (Offline mode / key nahi /
+            // net nahi) aur offline engine bhi na jod
+            // paya to imaandaar wajah bolo — "বুঝতে
+            // পারিনি" wala retry/veda yahan nahi।
+            OfflineMode.reason(applicationContext)?.let { reason ->
+                finishCommandResult(
+                    text,
+                    CommandResult(
+                        OfflineMode.reply(reason, personaSpokenLang()), true
+                    )
+                )
+                return
+            }
+        }
         finishCommandResult(text, rawResult)
     }
 
@@ -4693,7 +4741,7 @@ class JarvisWakeService : Service() {
                         // nahi khaata; partial asafal nikle to
                         // onCommandHeard ke andar retry ab bhi milega.
                         rememberCommandFinal(lastPartial)
-                        onCommandHeard(lastPartial)
+                        onCommandHeard(dialectTranslated(lastPartial))
                     } else {
                         // v12: khaali gaya session bhi pehle ek
                         // retry payega, phir hi wapas wake par.
@@ -5099,8 +5147,23 @@ class JarvisWakeService : Service() {
     private fun rememberCommandFinal(text: String) {
         val clean = text.trim().replace('\n', ' ')
         if (clean.isEmpty()) return
+        // v97: DIALECT sudhaar ke liye pichli baat
+        // bacha lo — nayi baat likhne se pehle।
+        previousCommandFinalText = prefs.lastHeardText.takeIf { it.isNotBlank() }
         prefs.lastHeardText = clean
         prefs.lastHeardAtMs = System.currentTimeMillis()
+    }
+
+    /**
+     * v97: DIALECT anuvaad — suni hui baat kisi
+     * bandhe bol-chaal roop se mile to uska asal
+     * hukm; warna baat jaise ki taise। [DialectMap]
+     * wali jhaank [DialectCommands] ki surakshit
+     * khidki se hoti hai — kuch galat ho to null
+     * hi milega, asal raasta kabhi nahi rukega।
+     */
+    private fun dialectTranslated(text: String): String {
+        return DialectCommands.translateOrNull(applicationContext, text) ?: text
     }
 
     private fun containsWakeWord(text: String): Boolean {
