@@ -33,6 +33,14 @@ class AppPrefs(context: Context) {
      * "en-IN". App screen par button se badla jata hai.
      * Background wake sunna Vosk (Hindi model) par hi rehta
      * hai — Bangla ka offline model hai hi nahi.
+     * v93: pasand ab MayaLanguages ki poori suchi me se hai
+     * (19 bhashaen — Urdu, Tamil, Telugu, Marathi, Gujarati,
+     * Punjabi, Malayalam, Kannada, Odia, Assamese, Spanish,
+     * French, Arabic, Indonesian, Portuguese, Russian) —
+     * wahi ek key ([KEY_LISTEN_LANGUAGE]) me bandhti hai,
+     * isliye purani pasand bhi bani rehti hai; sunna/TTS/
+     * Gemini teeno isi tag se chalte hain, koi model
+     * download nahi hota।
      */
     var listenLanguage: String
         get() = prefs.getString(KEY_LISTEN_LANGUAGE, "bn-IN") ?: "bn-IN"

@@ -16,6 +16,13 @@ import com.aship.jarvis.commands.Persona
  * pehle); shaksiyat abhi tak bandhi hi na ho to purana
  * bartao (saved pasand pehle).
  *
+ * v93: chuni hui bhasha Hindi/Bangla ho to wahi kram
+ * (shaksiyat pehle — v51 ka fix bilkul pehle jaisa);
+ * chuni hui bhasha koi AUR ho (Tamil, English,
+ * Spanish...) to CHUNI HUI pehle — warna us bhasha
+ * ki boli pehle kaan par hi galat bhasha me pakdi
+ * jati aur kataar kabhi wahan tak pahunchti hi nahi।
+ *
  * Shudh Kotlin — JVM test ke liye.
  */
 object CascadeOrder {
@@ -26,8 +33,13 @@ object CascadeOrder {
             Persona.TARA -> "bn-IN"
             null -> null
         }
-        return listOfNotNull(personaLanguage, savedLanguage, "bn-IN", "hi-IN")
-            .distinct()
+        return if (com.aship.jarvis.commands.MayaLanguages.isPersonaLanguage(savedLanguage)) {
+            listOfNotNull(personaLanguage, savedLanguage, "bn-IN", "hi-IN", "en-IN")
+                .distinct()
+        } else {
+            listOfNotNull(savedLanguage, personaLanguage, "bn-IN", "hi-IN", "en-IN")
+                .distinct()
+        }
     }
 
     /** Engine bante hi lagne wali pehli bhasha (kataar ka sir). */

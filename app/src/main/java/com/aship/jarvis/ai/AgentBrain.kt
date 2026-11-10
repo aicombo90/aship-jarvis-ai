@@ -123,6 +123,7 @@ object AgentBrain {
         toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
         replyLanguage: PlayIntent.SpokenLang? = null,
         sessionContext: String? = null,
+        replyLanguageTag: String? = null,
         callback: (String?) -> Unit
     ) {
         val appContext = context.applicationContext
@@ -130,7 +131,7 @@ object AgentBrain {
             val reply = try {
                 runLoop(
                     appContext, history, userText, toolExecutor,
-                    replyLanguage, sessionContext
+                    replyLanguage, sessionContext, replyLanguageTag
                 )
             } catch (t: Throwable) {
                 // Andar ki anjaani gadbad: round 1 wali
@@ -149,7 +150,8 @@ object AgentBrain {
         userText: String,
         toolExecutor: (String, JSONObject) -> AgentTools.ToolResult,
         replyLanguage: PlayIntent.SpokenLang?,
-        sessionContext: String? = null
+        sessionContext: String? = null,
+        replyLanguageTag: String? = null
     ): String? {
         // Baatchit: purane turn + nayi baat; har round ke
         // baad model ka kaccha jawab aur auzaar ka natija
@@ -165,7 +167,9 @@ object AgentBrain {
         // v49: seekhe kaamon ke naam + (session ho to)
         // uska sandarbh bhi usi kataar me judte hain —
         // bhasha-bandhan phir bhi sabse aakhir me.
-        val instruction = buildInstruction(context, replyLanguage, sessionContext)
+        val instruction = buildInstruction(
+            context, replyLanguage, sessionContext, replyLanguageTag
+        )
         val steps = mutableListOf<String>()
         var lastSay: String? = null
         for (round in 1..MAX_ROUNDS) {
@@ -270,7 +274,8 @@ object AgentBrain {
     private fun buildInstruction(
         context: Context,
         replyLanguage: PlayIntent.SpokenLang? = null,
-        sessionContext: String? = null
+        sessionContext: String? = null,
+        replyLanguageTag: String? = null
     ): String {
         var text = AGENT_INSTRUCTION
         MayaMemory.contextBlock(context)?.let { block ->
@@ -314,6 +319,24 @@ object AgentBrain {
         // upar wale LANGUAGE RULE se upar hai: is
         // session me boli SIRF bandhi bhasha me hogi,
         // user kisi bhi bhasha me baat kare.
+        // v93: shaksiyat ke BAHAR wali bhasha (Tamil,
+        // Urdu, Spanish...) ho to wahi bandhan usi
+        // shabdawali me, bina shaksiyat ke naam ke —
+        // Maya/Tara wala jab (Bangla/Hindi) bilkul
+        // pehle jaisa rehta hai (tag un bhashaon ka
+        // ho to ye naya block chhuta hi nahi)।
+        val newLanguage = replyLanguageTag?.let {
+            com.aship.jarvis.commands.MayaLanguages.fromTag(it)
+        }?.takeIf { it.spokenLang == null }
+        if (newLanguage != null) {
+            text += "\n\nLANGUAGE OVERRIDE (highest priority): " +
+                "in this conversation EVERY \"say\" line and final " +
+                "answer from you MUST be in ${newLanguage.geminiName} " +
+                "ONLY — even if the user speaks or writes another " +
+                "language. Understand the user in any language, but " +
+                "always ANSWER in ${newLanguage.englishName} only."
+            return text
+        }
         when (replyLanguage) {
             PlayIntent.SpokenLang.HINDI -> text +=
                 "\n\nPERSONA LANGUAGE OVERRIDE (highest priority): " +
@@ -473,7 +496,10 @@ object AgentBrain {
             "do the online steps yourself (answering questions, deciding, " +
             "choosing search terms) and order the phone steps through " +
             "tools, one at a time, until the WHOLE task is complete. " +
-            "You understand Bengali, Hindi, English and Hinglish; the " +
+            "You understand Bengali, Hindi, English and Hinglish, as well " +
+            "as other major languages (Urdu, Tamil, Telugu, Marathi, " +
+            "Gujarati, Punjabi, Malayalam, Kannada, Odia, Assamese, " +
+            "Spanish, French, Arabic, Indonesian, Portuguese, Russian); the " +
             "user often speaks Bengali. LANGUAGE RULE: always reply in " +
             "the SAME language and script as the user's latest message " +
             "— a Bengali message gets a Bengali reply (Bengali script); " +

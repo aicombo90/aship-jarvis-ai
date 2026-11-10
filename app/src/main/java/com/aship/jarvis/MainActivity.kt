@@ -62,7 +62,9 @@ import com.aship.jarvis.commands.DataButtonLearner
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.ImageIntent
+import com.aship.jarvis.commands.LanguageCommands
 import com.aship.jarvis.commands.LearnCommands
+import com.aship.jarvis.commands.MayaLanguages
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
@@ -407,6 +409,19 @@ class MainActivity : Activity() {
 
         prefs = AppPrefs(this)
         speaker = TtsSpeaker(this)
+        // v93: TTS voice na mile (nayi bhasha ka voice
+        // phone par nahi) to fallback imaandaari se
+        // batao — toast, ek hi bhasha par ek hi baar।
+        speaker.onLanguageFallback = { requested, applied ->
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    "এই ফোনে ${MayaLanguages.displayName(requested)} voice নেই — " +
+                        "${MayaLanguages.displayName(applied)} voice-এ বলছি।",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
         commandEngine = CommandEngine(this)
         addaEngine = AddaEngine()
         modelManager = ModelManager(this)
@@ -547,7 +562,9 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.listenLangButton)?.setOnClickListener {
             // v33: shune wali bhasha ghumao — v77 se
             // Language card bhi wahi ek kaam karta hai।
-            cycleListenLanguage()
+            // v93: 3 bhasha ka ghumav khatm — 19 bhashaen
+            // hain, isliye chunao dialog khulta hai।
+            showLanguagePickerDialog()
         }
         findViewById<Button>(R.id.updateCheckButton).setOnClickListener {
             checkForUpdate(manual = true)
@@ -749,7 +766,7 @@ class MainActivity : Activity() {
      *   (voice wala screen_task hi uska raasta hai)।
      * - Memories card: MayaMemory ki bandhi baatein
      *   dialog me dikhao।
-     * - Language card: shune wali bhasha ghumao (wahi
+     * - Language card: bhasha chunao dialog (wahi
      *   kaam jo "শোনার ভাষা" button karta hai)।
      * - Home: upar scroll; Updates: update check (wahi
      *   jo "UPDATE CHECK KARO" karta hai); beech mic:
@@ -760,7 +777,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.topSettingsButton).setOnClickListener { openApiKeys() }
         findViewById<LinearLayout>(R.id.screenCard).setOnClickListener { startScreenVoice() }
         findViewById<LinearLayout>(R.id.memoriesCard).setOnClickListener { showMemoriesDialog() }
-        findViewById<LinearLayout>(R.id.languageCard).setOnClickListener { cycleListenLanguage() }
+        findViewById<LinearLayout>(R.id.languageCard).setOnClickListener { showLanguagePickerDialog() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
@@ -894,30 +911,59 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Language card + "শোনার ভাষা" button dono wahi ek
-     * kaam — Bangla -> Hindi -> English ghumao।
+     * v93: Language card + "শোনার ভাষা" button — bhasha
+     * CHUNAO dialog। 3 bhasha ka ghumav (v33) khatm —
+     * 19 bhashaen ghumakar badalna mumkin nahi। Chunte
+     * hi pasand bandhti hai (AppPrefs.listenLanguage),
+     * card + button taza hote hain; phone par us bhasha
+     * ki TTS voice na ho to imaandaar chetaavni — phir
+     * bhi chayan bandhta hai (sunna/Gemini us bhasha
+     * me chalte hain, bolna fallback voice me)।
      */
-    private fun cycleListenLanguage() {
-        prefs.listenLanguage = when (prefs.listenLanguage) {
-            "bn-IN" -> "hi-IN"
-            "hi-IN" -> "en-IN"
-            else -> "bn-IN"
-        }
+    private fun showLanguagePickerDialog() {
+        val items = MayaLanguages.ALL
+            .map { "${it.nativeName} (${it.englishName})" }
+            .toTypedArray()
+        val checked = MayaLanguages.ALL
+            .indexOfFirst { it.tag == prefs.listenLanguage }
+            .coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("ভাষা বেছে নাও — Maya কোন ভাষায় কথা বলবে?")
+            .setSingleChoiceItems(items, checked) { dialog, which ->
+                val lang = MayaLanguages.ALL[which]
+                applyListenLanguage(lang.tag)
+                if (::speaker.isInitialized) {
+                    val applied = speaker.resolveSpokenTag(lang.tag)
+                    if (applied != lang.tag) {
+                        Toast.makeText(
+                            this,
+                            "এই ফোনে ${lang.nativeName} voice নেই — " +
+                                "${MayaLanguages.displayName(applied)} voice-এ বলা হবে।",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            this,
+                            "শোনার ভাষা: ${lang.nativeName}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    /** Chuni hui bhasha bandho + card/button taza karo। */
+    private fun applyListenLanguage(tag: String) {
+        prefs.listenLanguage = tag
         refreshListenLangButton()
         refreshLanguageCard()
-        Toast.makeText(
-            this,
-            "শোনার ভাষা: ${listenLanguageName()}",
-            Toast.LENGTH_SHORT
-        ).show()
     }
 
     private fun listenLanguageName(): String {
-        return when (prefs.listenLanguage) {
-            "hi-IN" -> "हिन्दी"
-            "en-IN" -> "English"
-            else -> "বাংলা"
-        }
+        return MayaLanguages.displayName(prefs.listenLanguage)
     }
 
     private fun refreshLanguageCard() {
@@ -2412,6 +2458,26 @@ class MainActivity : Activity() {
         if (vocative != null) {
             prefs.lastForegroundPersonaName = vocative.first.name
         }
+        // v93: AWAAZ SE BHASHA BADLO — "English-এ কথা
+        // বলো" / "বাংলায় কথা বলো" / "language change
+        // করো"। Naam ke bina chunao dialog khulta hai;
+        // naam ke saath turant badal kar nayi bhasha
+        // me pushti। Shaksiyat-pukar ("মায়া, ...") ke
+        // baad bhi yehi jeetta hai — user ne saaf
+        // bhasha badli hai। Combo/niyam se pehle, taaki
+        // badlav kisi aur kaam me na badle।
+        if (LanguageCommands.isBareChangeRequest(commandText)) {
+            showLanguagePickerDialog()
+            return
+        }
+        LanguageCommands.extractLanguageSwitch(commandText)?.let { lang ->
+            applyListenLanguage(lang.tag)
+            val line = lang.confirmLine
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: $line")
+            speaker.speak(line, MayaLanguages.ttsTagFor(lang.tag))
+            return
+        }
         // v52: SEND BUTTON WALA HUKM — "সেন্ড করো" /
         // "কমান্ড পাঠাও" bolte hi apna hi send button
         // dabega: box me jo likha hai wohi bheja jayega
@@ -2925,19 +2991,12 @@ class MainActivity : Activity() {
     /** v33: "শোনার ভাষা" button ka label — AppPrefs wali pasand dikhao. */
     private fun refreshListenLangButton() {
         if (!::listenLangButton.isInitialized) return
-        listenLangButton.text = when (prefs.listenLanguage) {
-            "hi-IN" -> "শোনার ভাষা: हिन्दी (বদলাতে ট্যাপ করো)"
-            "en-IN" -> "শোনার ভাষা: English (বদলাতে ট্যাপ করো)"
-            else -> "শোনার ভাষা: বাংলা (বদলাতে ট্যাপ করো)"
-        }
+        val name = listenLanguageName()
+        listenLangButton.text = "শোনার ভাষা: $name (বদলাতে ট্যাপ করো)"
         // v35: wahi pasand button ke upar chhoti label me bhi —
         // galat bhasha lagi ho to bolne se pehle hi dikh jaye.
         if (::listenLangLabel.isInitialized) {
-            listenLangLabel.text = when (prefs.listenLanguage) {
-                "hi-IN" -> "শোনার ভাষা: हिन्दी"
-                "en-IN" -> "শোনার ভাষা: English"
-                else -> "শোনার ভাষা: বাংলা"
-            }
+            listenLangLabel.text = "শোনার ভাষা: $name"
         }
     }
 
@@ -3016,8 +3075,17 @@ class MainActivity : Activity() {
         // Hukm aur daud ek hi baari ke hain, isliye yahan
         // session wala bandhan nahi lagta।
         tools.userDirectedSend = SessionCommands.isSendInstruction(text)
+        // v93: jawab ki bhasha — naam-pukar ho to uski
+        // tag, warna chuni hui bhasha (AppPrefs)। AgentBrain
+        // ko tag bhi jata hai, taaki nayi bhashaon (Tamil,
+        // Urdu...) par saaf override lage; Bangla/Hindi/
+        // English par purana SpokenLang wala bandhan hi
+        // chalta hai (buildInstruction dekho)।
+        val effectiveTag = replyLanguage?.let { MayaLanguages.tagForSpoken(it) }
+            ?: prefs.listenLanguage
         AgentBrain.run(
-            this, geminiHistory.toList(), text, tools::execute, replyLanguage
+            this, geminiHistory.toList(), text, tools::execute, replyLanguage,
+            replyLanguageTag = effectiveTag
         ) { reply ->
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
@@ -3052,7 +3120,11 @@ class MainActivity : Activity() {
                     geminiHistory.removeAt(0)
                 }
                 showResponse("Maya: $safeReply")
-                speaker.speak(safeReply)
+                // v93: nayi bhasha ka jawab usi ki TTS awaaz
+                // me — Latin-lipi wale jawab script se nahi
+                // pehchane jate, isliye saaf tag (Bangla/
+                // Hindi/English par null = purana raasta)।
+                speaker.speak(safeReply, MayaLanguages.ttsTagFor(effectiveTag))
             }
         }
     }

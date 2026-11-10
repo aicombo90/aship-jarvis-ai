@@ -50,7 +50,9 @@ import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.ImageIntent
+import com.aship.jarvis.commands.LanguageCommands
 import com.aship.jarvis.commands.LearnCommands
+import com.aship.jarvis.commands.MayaLanguages
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
@@ -618,6 +620,21 @@ class JarvisWakeService : Service() {
         createNotificationChannel()
         speaker = TtsSpeaker(this)
         speaker.onUtteranceFinished = { onTtsFinished() }
+        // v93: TTS voice na mile (nayi bhasha ka voice
+        // phone par nahi) to fallback imaandaari se diag
+        // me likho — background se toast nahi banta, aur
+        // bolna kabhi nahi rukta (graceful fallback)।
+        speaker.onLanguageFallback = { requested, applied ->
+            try {
+                applicationContext.getSharedPreferences(
+                    "jarvis_diag", Context.MODE_PRIVATE
+                ).edit()
+                    .putString("last_tts_fallback", "$requested -> $applied")
+                    .apply()
+            } catch (t: Throwable) {
+                // Diag bonus hai — bolna isse nahi rukta।
+            }
+        }
         // Background flag: app launches cross the overlay bridge and
         // report a missing overlay permission honestly (Bug-1 fix).
         commandEngine = CommandEngine(applicationContext, fromBackgroundService = true)
@@ -2103,11 +2120,25 @@ class JarvisWakeService : Service() {
      * bhasha ki kataar khatm ho to session apne
      * miss-niyam par jata hai, dusri bhasha par
      * kabhi nahi girta.
+     * v93: ye ek-bhasha wali kataar SIRF tab, jab
+     * chuni hui bhasha Hindi/Bangla ho (Maya/Tara
+     * wala bandhan — bilkul pehle jaisa)। Chuni hui
+     * bhasha koi AUR ho (Tamil, English, Spanish...)
+     * to kataar usi se shuru hoti hai, phir shaksiyat
+     * ki bhasha, phir bn/hi/en — taaki nayi bhasha
+     * me boli sunai de, aur wapas Hindi/Bangla me
+     * badalne wala hukm bhi pakda ja sake।
      */
     private fun resetSystemCascade() {
-        systemCascadeLanguages = when (sessionPersona) {
-            Persona.MAYA -> listOf("hi-IN")
-            Persona.TARA -> listOf("bn-IN")
+        val selected = prefs.listenLanguage
+        val personaTag = when (sessionPersona) {
+            Persona.MAYA -> "hi-IN"
+            Persona.TARA -> "bn-IN"
+        }
+        systemCascadeLanguages = if (MayaLanguages.isPersonaLanguage(selected)) {
+            listOf(personaTag)
+        } else {
+            listOf(selected, personaTag, "bn-IN", "hi-IN", "en-IN").distinct()
         }
         systemCascadeIndex = 0
     }
@@ -3208,6 +3239,27 @@ class JarvisWakeService : Service() {
         // band karo — Vosk ne asal me suna kya tha, woh
         // agle test me bina andaze ke dikhega.
         logDeviceCommandHeard(text)
+        // v93: VOICE LANGUAGE SWITCH — "English-এ কথা
+        // বলো" / "বাংলায় কথা বলো" / "language change
+        // করো"। Naam ke bina bhashaon ki suchi wali
+        // boli (background me dialog nahi khulta);
+        // naam ke saath turant badal kar nayi bhasha
+        // me pushti — agle turn se kataar (resetSystem
+        // Cascade) aur Gemini dono nayi bhasha me।
+        if (LanguageCommands.isBareChangeRequest(text)) {
+            finishCommandResult(
+                text, CommandResult(LanguageCommands.askWhichReply(), true)
+            )
+            return
+        }
+        LanguageCommands.extractLanguageSwitch(text)?.let { lang ->
+            prefs.listenLanguage = lang.tag
+            finishCommandResult(
+                text, CommandResult(lang.confirmLine, true),
+                languageTag = MayaLanguages.ttsTagFor(lang.tag)
+            )
+            return
+        }
         // v92: lagatar scroll roko ("থামো" / "stop") —
         // baaki sabse PEHLE, taaki roko wala hukm kabhi
         // kisi aur kaam (gaana roko waghera) me na badle
@@ -3448,7 +3500,11 @@ class JarvisWakeService : Service() {
      * hi vyavhaar mile. Sirf executor thread se bulao; state
      * REPLY ho aur command session band ho chuka ho.
      */
-    private fun finishCommandResult(text: String, rawResult: CommandResult) {
+    private fun finishCommandResult(
+        text: String,
+        rawResult: CommandResult,
+        languageTag: String? = null
+    ) {
         // v49: taana session ke andar suna-par-na-juda
         // hukm — v48 wala retry/vida jaap yahan NAHI
         // chalega: session apne sawal wale raaste par
@@ -3510,7 +3566,10 @@ class JarvisWakeService : Service() {
         // taaki jawab ke dauraan aur uske baad wale intezaar me
         // screen jala rahe.
         lightScreenOnWake()
-        speaker.speak(result.responseText)
+        // v93: [languageTag] mile (nayi bhasha) to usi
+        // ki TTS awaaz me — warna purana script wala
+        // raasta (Bangla/Hindi/English pehle jaisa)।
+        speaker.speak(result.responseText, languageTag)
         armReplyFallback(result.responseText)
         // v1.5: jawab gole ke upar wale bubble me text me bhi dikhe,
         // aur gola jawab ke dauraan chamak (shimmer) mode me rahe.
@@ -3595,9 +3654,23 @@ class JarvisWakeService : Service() {
         // agent tak jata hai — Maya ke session me har
         // boli Hindi, Tara ke session me har boli
         // Bangla, user kisi bhi bhasha me bole.
+        // v93: chuni hui bhasha Hindi/Bangla ho to wahi
+        // bandhan (bilkul pehle jaisa); koi AUR bhasha
+        // (Tamil, English, Spanish...) chuni ho to
+        // usi ka tag jata hai — AgentBrain ka LANGUAGE
+        // OVERRIDE use karta hai, aur shaksiyat wala
+        // Hindi/Bangla override nahi lagta (MayaLanguages
+        // .effectiveSessionTag dekho)।
+        val effectiveTag =
+            MayaLanguages.effectiveSessionTag(sessionPersona, prefs.listenLanguage)
         AgentBrain.run(
             applicationContext, geminiHistory.toList(), text, tools::execute,
-            replyLanguage = personaSpokenLang(),
+            replyLanguage = if (MayaLanguages.isPersonaLanguage(effectiveTag)) {
+                personaSpokenLang()
+            } else {
+                null
+            },
+            replyLanguageTag = effectiveTag,
             sessionContext = contextForRun
         ) { reply ->
             executor.execute { onAgentBrainAnswer(text, reply, playQueryFallback) }
@@ -3705,8 +3778,16 @@ class JarvisWakeService : Service() {
         // uske sandarbh me bhi bandh jaye।
         noteSessionOutcome(text, safeReply)
         // v16 wala screen-wake refresh, aam jawab ki tarah.
+        // v93: nayi bhasha ka jawab usi ki TTS awaaz me
+        // (Latin-lipi wale jawab script se nahi pehchane
+        // jate — Bangla/Hindi par null = purana raasta)।
         lightScreenOnWake()
-        speaker.speak(safeReply)
+        speaker.speak(
+            safeReply,
+            MayaLanguages.ttsTagFor(
+                MayaLanguages.effectiveSessionTag(sessionPersona, prefs.listenLanguage)
+            )
+        )
         armReplyFallback(safeReply)
         orbOverlay.setReply(safeReply)
     }
@@ -3857,7 +3938,13 @@ class JarvisWakeService : Service() {
             pendingEndReason = SESSION_END_COMPLETED
             noteSessionOutcome(userText, line)
             lightScreenOnWake()
-            speaker.speak(line)
+            // v93: nayi bhasha ka jawab usi ki TTS awaaz me.
+            speaker.speak(
+                line,
+                MayaLanguages.ttsTagFor(
+                    MayaLanguages.effectiveSessionTag(sessionPersona, prefs.listenLanguage)
+                )
+            )
             armReplyFallback(line)
             orbOverlay.setReply(line)
         }
@@ -3973,7 +4060,13 @@ class JarvisWakeService : Service() {
             pendingEndReason = SESSION_END_COMPLETED
             noteSessionOutcome(userText, line)
             lightScreenOnWake()
-            speaker.speak(line)
+            // v93: nayi bhasha ka jawab usi ki TTS awaaz me.
+            speaker.speak(
+                line,
+                MayaLanguages.ttsTagFor(
+                    MayaLanguages.effectiveSessionTag(sessionPersona, prefs.listenLanguage)
+                )
+            )
             armReplyFallback(line)
             orbOverlay.setReply(line)
         }
