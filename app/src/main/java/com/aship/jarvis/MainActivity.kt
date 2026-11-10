@@ -23,6 +23,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
@@ -799,7 +800,24 @@ class MainActivity : Activity() {
      */
     private fun resolveHeroViews() {
         window.decorView.findViewWithTag<OrbView>("heroOrb")?.let { homeOrbView = it }
+            ?: findOrbViewByClass(window.decorView)?.let { homeOrbView = it }
         window.decorView.findViewWithTag<TextView>("micPill")?.let { micStatusPill = it }
+    }
+
+    /**
+     * v90: TAG na mile to class se dhoondho — decor tree me
+     * pehla OrbView hi hero orb hai (overlay wala alag window
+     * me hai, yahan nahi aata)। TAG lookup is phone par kabhi
+     * fail hota hai, isliye yeh doosra jaal।
+     */
+    private fun findOrbViewByClass(root: View): OrbView? {
+        if (root is OrbView) return root
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findOrbViewByClass(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
     }
 
     /**
@@ -939,14 +957,66 @@ class MainActivity : Activity() {
 
     /** Hero wali mic pill — sun raha ho ya band। */
     private fun refreshMicPill() {
-        // v89: TAG se taaza dhoondho (id wala lookup null deta hai)।
-        resolveHeroViews()
-        if (!::micStatusPill.isInitialized) return
-        micStatusPill.text = if (listening) {
-            "🎤 শুনছি — বলো, বস"
+        // v90: pill power haalat ki hai — "মাইক বন্ধ" wali purani
+        // line power refresh ko overwrite karke UI ko stale rakhti
+        // thi। Sunna chalu ho to "শুনছি", warna power haalat dikhao।
+        if (listening) {
+            resolveHeroViews()
+            window.decorView.findViewWithTag<TextView>("micPill")?.let { pill ->
+                pill.text = "🎤 শুনছি — বলো, বস"
+            }
         } else {
-            "🎤 মাইক বন্ধ — ট্যাপ করে বলো"
+            refreshOrbPowerState()
         }
+    }
+
+    /**
+     * v90: hero power UI ek hi jagah se rang do — button, label,
+     * pill, orb — chaahi haalat (on) seedha di jaye। Har view
+     * alag se TAG se milta hai; ek na mile to bhi baaki rangte
+     * hain (koi early return nahi jo sab rok de)। isRunning
+     * padhne ki deri (service async start hoti hai) se bachne
+     * ke liye powerOn()/powerOff() isko turant bulate hain
+     * (optimistic ON/OFF); 2 s wala refresh asli haalat se
+     * milata rehta hai।
+     */
+    private fun paintPowerUi(on: Boolean) {
+        resolveHeroViews()
+        // Orb — mile to hi (na mile to button/pill phir bhi rangte hain)।
+        if (::homeOrbView.isInitialized) {
+            homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
+            if (on) {
+                val speaking = ::speaker.isInitialized && speaker.isSpeakingNow
+                homeOrbView.setMode(
+                    if (speaking) OrbView.Mode.SPEAKING else OrbView.Mode.LISTENING
+                )
+                homeOrbView.startAnimations()
+            } else {
+                homeOrbView.stopAnimations()
+            }
+        }
+        // Pill — power haalat hi sach hai (sunna chalu ho to "শুনছি")।
+        val pillText = when {
+            listening -> "🎤 শুনছি — বলো, বস"
+            on -> "🎤 মায়া চালু আছে — বলো, বস"
+            else -> "🎤 মায়া বন্ধ — পাওয়ার চাপো"
+        }
+        val pillView = window.decorView.findViewWithTag<TextView>("micPill")
+            ?: if (::micStatusPill.isInitialized) micStatusPill else null
+        pillView?.text = pillText
+        // v87: hero box ke ANDAR wala POWER button — ON = NEELA,
+        // OFF = LAAL, taaki ek nazar me saaf pata chale।
+        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.let { btn ->
+            btn.setBackgroundResource(
+                if (on) R.drawable.power_hero_on_bg else R.drawable.power_hero_off_bg
+            )
+            btn.setColorFilter(android.graphics.Color.WHITE)
+            btn.alpha = 1f
+        }
+        window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setTextColor(
+            if (on) android.graphics.Color.rgb(191, 219, 254)
+            else android.graphics.Color.rgb(254, 202, 202)
+        )
     }
 
     /**
@@ -962,44 +1032,8 @@ class MainActivity : Activity() {
      * likha jata hai (refreshMicPill v79 wapas)।
      */
     private fun refreshOrbPowerState() {
-        // v89: TAG se taaza dhoondho (id wala findViewById
-        // persistently null deta hai) — mila to field theek ho
-        // jata hai, taaki orb sach me animate ho aur button
-        // haalat dikhaye।
-        resolveHeroViews()
-        if (!::homeOrbView.isInitialized) return
-        val on = JarvisWakeService.isRunning
-        homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
-        if (on) {
-            val speaking = ::speaker.isInitialized && speaker.isSpeakingNow
-            homeOrbView.setMode(
-                if (speaking) OrbView.Mode.SPEAKING else OrbView.Mode.LISTENING
-            )
-            homeOrbView.startAnimations()
-        } else {
-            homeOrbView.stopAnimations()
-        }
-        if (::micStatusPill.isInitialized) {
-            micStatusPill.text = when {
-                listening -> "🎤 শুনছি — বলো, বস"
-                on -> "🎤 মায়া চালু আছে — বলো, বস"
-                else -> "🎤 মায়া বন্ধ — পাওয়ার চাপো"
-            }
-        }
-        // v87: hero box ke ANDAR wala POWER button bhi haalat dikhaye —
-        // gol button + "পাওয়ার" label; ON = NEELA, OFF = LAAL,
-        // taaki ek nazar me saaf pata chale chalu hai ya band।
-        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.let { btn ->
-            btn.setBackgroundResource(
-                if (on) R.drawable.power_hero_on_bg else R.drawable.power_hero_off_bg
-            )
-            btn.setColorFilter(android.graphics.Color.WHITE)
-            btn.alpha = 1f
-        }
-        window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setTextColor(
-            if (on) android.graphics.Color.rgb(191, 219, 254)
-            else android.graphics.Color.rgb(254, 202, 202)
-        )
+        // v90: 2 s wala refresh — asli service haalat se milao।
+        paintPowerUi(JarvisWakeService.isRunning)
     }
 
     /** Cache wala mausam turant dikhao (net ka intezaar nahi)। */
@@ -1429,10 +1463,12 @@ class MainActivity : Activity() {
                 Toast.LENGTH_SHORT
             ).show()
         }
-        // Asli haalat 2 s wala refresh sach batayega —
-        // yahan turant pill/orb taaza karo (service abhi
-        // bhi load ho rahi ho to agla refresh theek karega)।
-        refreshOrbPowerState()
+        // v90: tap par UI TURANT ON rang do (optimistic) —
+        // startForegroundService async hai, isRunning abhi
+        // bhi false hai, isliye refreshOrbPowerState() yahan
+        // OFF rang deta tha। 2 s wala refresh + 5 s check
+        // galat hone par theek kar denge।
+        paintPowerUi(true)
         // v88: service sach me chalu hui ya chupchaap band ho
         // gayi (model load fail), 5 s baad saaf batao — taaki
         // "kuch nahi hota" wali haalat dobara na aaye। Service
@@ -1463,7 +1499,10 @@ class MainActivity : Activity() {
                 Toast.LENGTH_SHORT
             ).show()
         }
-        refreshOrbPowerState()
+        // v90: tap par UI TURANT OFF rang do — stopIntent async
+        // hai, isRunning abhi bhi true hai, isliye
+        // refreshOrbPowerState() yahan ON rang deta tha।
+        paintPowerUi(false)
     }
 
     private fun toggleListening() {

@@ -119,6 +119,10 @@ class OrbView(context: Context) : View(context) {
 
     // Buniyadi paratein.
     private val spherePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // v90: ON = kaala-safed kana-gola (mockup/video jaisa) — gehra gola।
+    private val darkSpherePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(8, 11, 30)
+    }
     private val shadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val beadPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -503,9 +507,14 @@ class OrbView(context: Context) : View(context) {
         // Chingariyan: chhoti ghoomti-tiltilati roshniyaan.
         drawSparks(canvas, ph, twoPi)
 
-        // v86: ON hone par ghoomta kana-gola (particle sphere) —
-        // dekhte hi pata chale chalu hai; OFF par bilkul nahi।
-        if (flowAnimator.isRunning) drawParticleSphere(canvas, ph, twoPi, speaking)
+        // v90: ON = KAALA-SAFED kana-gola (mockup/video jaisa) —
+        // gehra gola bhar kar rang-biranga marble chhupao, phir
+        // us par safed bindu ghumao (harkat andar saaf dikhe)।
+        // OFF par yeh block chalta hi nahi — marble waisa hi rehta hai।
+        if (flowAnimator.isRunning) {
+            canvas.drawCircle(centerX, centerY, radius, darkSpherePaint)
+            drawParticleSphere(canvas, ph, twoPi, speaking)
+        }
 
         // Gloss: naram safed jhalak + chhoti tez chamak.
         canvas.drawCircle(centerX, centerY, radius, highlightPaint)
@@ -647,7 +656,8 @@ class OrbView(context: Context) : View(context) {
             val alpha = (50f + 205f * depth).toInt().coerceIn(0, 255)
             val dotR = (radius * 0.026f * (0.55f + 0.65f * depth) * pulse)
                 .coerceAtLeast(0.6f)
-            particlePaint.color = Color.rgb(190, 242, 255)
+            // v90: bindu safed (kaala-safed kana-gola — mockup jaisa)।
+            particlePaint.color = Color.WHITE
             particlePaint.alpha = alpha
             canvas.drawCircle(centerX + xr * pr, centerY + y * pr, dotR, particlePaint)
         }
