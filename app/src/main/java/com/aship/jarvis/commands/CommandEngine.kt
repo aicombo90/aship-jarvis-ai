@@ -11,6 +11,7 @@ import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.ai.DialectMap
 import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.ProactiveRoutines
 import com.aship.jarvis.ai.ScreenEyes
 import com.aship.jarvis.ai.ScreenSafety
 import com.aship.jarvis.ai.ScreenshotStore
@@ -1366,8 +1367,18 @@ class CommandEngine(
                 TargetKind.SETTINGS -> PhoneActions.openSettingsFromBackground(context)
             }
             return when (outcome) {
-                LaunchOutcome.LAUNCHED ->
+                LaunchOutcome.LAUNCHED -> {
+                    // v100: PROACTIVE — khula hua app routine
+                    // ki tarah bandho (wahi app wahi samay 3
+                    // baar hote hi Maya khud prastav karegi)।
+                    if (target.kind == TargetKind.PACKAGE) {
+                        ProactiveRoutines.observe(
+                            context, ProactiveRoutines.Kind.APP,
+                            target.packageName!!, target.displayName
+                        )
+                    }
                     CommandResult("${target.displayName} खोल दिया है।", true)
+                }
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, true)
                 LaunchOutcome.LOCKED ->
@@ -1383,6 +1394,13 @@ class CommandEngine(
             TargetKind.PACKAGE -> PhoneActions.openApp(context, target.packageName!!)
             TargetKind.CAMERA -> PhoneActions.openCamera(context)
             TargetKind.SETTINGS -> PhoneActions.openSettings(context)
+        }
+        // v100: PROACTIVE — khula hua app routine ki tarah bandho।
+        if (opened && target.kind == TargetKind.PACKAGE) {
+            ProactiveRoutines.observe(
+                context, ProactiveRoutines.Kind.APP,
+                target.packageName!!, target.displayName
+            )
         }
         return if (opened) {
             CommandResult("${target.displayName} खोल दिया है।", true)
@@ -4654,8 +4672,17 @@ class CommandEngine(
                 TargetKind.SETTINGS -> PhoneActions.openSettingsFromBackground(context)
             }
             return when (outcome) {
-                LaunchOutcome.LAUNCHED ->
+                LaunchOutcome.LAUNCHED -> {
+                    // v100: PROACTIVE — khula hua app routine
+                    // ki tarah bandho (openTarget wala hi niyam)।
+                    if (target.kind == TargetKind.PACKAGE) {
+                        ProactiveRoutines.observe(
+                            context, ProactiveRoutines.Kind.APP,
+                            target.packageName!!, target.displayName
+                        )
+                    }
                     CommandResult("${target.displayName} खोल दिया है।", true)
+                }
                 LaunchOutcome.PERMISSION_NEEDED ->
                     CommandResult(OVERLAY_PERMISSION_REPLY, false)
                 LaunchOutcome.LOCKED ->
@@ -4671,6 +4698,13 @@ class CommandEngine(
             TargetKind.PACKAGE -> PhoneActions.openApp(context, target.packageName!!)
             TargetKind.CAMERA -> PhoneActions.openCamera(context)
             TargetKind.SETTINGS -> PhoneActions.openSettings(context)
+        }
+        // v100: PROACTIVE — khula hua app routine ki tarah bandho।
+        if (opened && target.kind == TargetKind.PACKAGE) {
+            ProactiveRoutines.observe(
+                context, ProactiveRoutines.Kind.APP,
+                target.packageName!!, target.displayName
+            )
         }
         return if (opened) {
             CommandResult("${target.displayName} खोल दिया है।", true)

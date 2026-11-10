@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.aship.jarvis.MainActivity
+import com.aship.jarvis.ai.ProactiveRoutines
 import com.aship.jarvis.speaker.TtsSpeaker
 import org.json.JSONArray
 import org.json.JSONObject
@@ -236,6 +237,18 @@ object ReminderCommands {
                 true
             )
         }
+        // v100: PROACTIVE — lagaya hua yaad routine ki
+        // tarah bandho (wahi kaam wahi samay 3 baar
+        // hote hi Maya khud prastav karegi — arg me
+        // kaam + samay, dono bandhte hain)।
+        val remindCal = Calendar.getInstance()
+        remindCal.timeInMillis = atMillis
+        ProactiveRoutines.observe(
+            context, ProactiveRoutines.Kind.ALARM,
+            task + "|" + remindCal.get(Calendar.HOUR_OF_DAY) + ":" +
+                remindCal.get(Calendar.MINUTE).toString().padStart(2, '0'),
+            task
+        )
         return CommandResult(
             when (lang) {
                 PlayIntent.SpokenLang.BENGALI ->

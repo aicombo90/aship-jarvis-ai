@@ -43,6 +43,7 @@ import com.aship.jarvis.ai.LearnedRoutines
 import com.aship.jarvis.ai.MayaMemory
 import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.ProviderKeys
+import com.aship.jarvis.ai.ProactiveRoutines
 import com.aship.jarvis.ai.ReplyGuard
 import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
@@ -73,6 +74,7 @@ import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PersonaVocative
 import com.aship.jarvis.commands.PhoneLearner
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.ProactiveCommands
 import com.aship.jarvis.commands.RuleCommands
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
@@ -665,6 +667,8 @@ class MainActivity : Activity() {
         refreshNotificationCard()
         // v99: UPI card ki sthiti taza — kitne payee mane hain।
         refreshUpiCard()
+        // v100: Proposals card ki sthiti taza — kitni routine seekhi hain।
+        refreshProposalsCard()
         // v82: orb ki power haalat taaza — service chal
         // rahi ho to chamakta/ghoomta, band ho to dhunda।
         refreshOrbPowerState()
@@ -677,6 +681,11 @@ class MainActivity : Activity() {
         refreshGeminiKeyUi()
         // v97: OFFLINE MODE indicator bhi turant taza ho।
         refreshOfflineIndicator()
+        // v100: PROACTIVE PROPOSAL — routine ka samay
+        // ho to app kholte hi ek baar prastav bolo
+        // (din me ek baar per routine); TTS chal raha
+        // ho to chup (overlap nahi)।
+        maybeSpeakProposal()
         refreshHistoryUi()
         // Keep the report lines live while this screen is visible.
         mainHandler.removeCallbacks(wakeRefreshRunnable)
@@ -794,6 +803,10 @@ class MainActivity : Activity() {
         findViewById<LinearLayout>(R.id.notificationCard)?.setOnClickListener { showNotificationAccessDialog() }
         // v99: UPI card — sikhe hue payees wala dialog।
         findViewById<LinearLayout>(R.id.upiCard)?.setOnClickListener { showUpiPayeesDialog() }
+        // v100: Proposals card — seekhi routinein wala dialog।
+        // findViewById null de sakta hai (v83 wala sabak) —
+        // isliye surakshit ?. (card na mile to chupchaap chhodo)।
+        findViewById<LinearLayout>(R.id.proposalsCard)?.setOnClickListener { showProposalsDialog() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
@@ -1048,6 +1061,125 @@ class MainActivity : Activity() {
         } else {
             "এখনো কেউ নেই — ট্যাপ করুন"
         }
+    }
+
+    /**
+     * v100: Proposals card ki sthiti taza karo — kitni
+     * routine seekhi hain, prastav chalu hain ya band।
+     * Naya view hai, isliye lateinit nahi — har baar
+     * surakshit dhoondho (v83 wala sabak: id wala
+     * lookup null de sakta hai)।
+     */
+    private fun refreshProposalsCard() {
+        val sub = findViewById<TextView>(R.id.proposalsCardSubText) ?: return
+        val learned = ProactiveRoutines.learnedCount(this)
+        sub.text = when {
+            !ProactiveRoutines.isGlobalEnabled(this) ->
+                "প্রস্তাব বন্ধ আছে — ট্যাপ করুন"
+            learned > 0 ->
+                "$learned টা রুটিন শেখা আছে"
+            else ->
+                "এখনো কিছু শেখা হয়নি — ট্যাপ করুন"
+        }
+    }
+
+    /**
+     * v100: Proposals wala dialog — seekhi routinein
+     * (naam + kitni baar), tap karke ek routine ka
+     * prastav band/chalu, aur saare prastav ek saath
+     * band/chalu। Maya kabhi khud paise nahi bhejti,
+     * call/message nahi karti — sirf prastav karti
+     * hai, HAAN par hi kaam hota hai। setMessage +
+     * setItems ek saath nahi chalte (list message ko
+     * dhak deta hai) — isliye hatana/band karna alag
+     * dialog se (UPI wala hi dhang)।
+     */
+    private fun showProposalsDialog() {
+        if (isFinishing || isDestroyed) return
+        val routines = ProactiveRoutines.readAll(this)
+            .sortedByDescending { it.count }
+        val info = StringBuilder()
+        if (routines.isEmpty()) {
+            info.append(
+                "এখনো কোনো রুটিন শেখা হয়নি।\n\n" +
+                    "একই কাজ একই সময়ে ৩ বার করলে মায়া সেটা রুটিন হিসেবে শিখবে — " +
+                    "তারপর সেই সময়ে নিজে থেকে প্রস্তাব করবে (গান, কম্বো, অ্যাপ, মনে করানো)। " +
+                    "প্রস্তাবে 'হ্যাঁ' বললেই কাজ হবে, 'না' বললে ৩ দিন আর বলবে না।"
+            )
+        } else {
+            routines.forEach { routine ->
+                info.append("• ${routine.label} — ${routine.count} বার")
+                if (!routine.enabled) info.append(" (বন্ধ)")
+                info.append("\n")
+            }
+            info.append("\nকোনো রুটিনে ট্যাপ করলে তার প্রস্তাব বন্ধ/চালু হবে।")
+        }
+        val globalOn = ProactiveRoutines.isGlobalEnabled(this)
+        val builder = AlertDialog.Builder(this)
+            .setTitle("💡 প্রস্তাব (রুটিন)")
+            .setMessage(info.toString())
+            .setPositiveButton(if (globalOn) "সব বন্ধ করো" else "সব চালু করো") { _, _ ->
+                val nowEnabled = !ProactiveRoutines.isGlobalEnabled(this)
+                ProactiveRoutines.setGlobalEnabled(this, nowEnabled)
+                refreshProposalsCard()
+                Toast.makeText(
+                    this,
+                    if (nowEnabled) "প্রস্তাব চালু করে দিয়েছি।"
+                    else "প্রস্তাব বন্ধ করে দিয়েছি।",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            .setNegativeButton("ঠিক আছে", null)
+        if (routines.isNotEmpty()) {
+            builder.setNeutralButton("একটা বন্ধ/চালু করো") { _, _ ->
+                val labels = routines.map { routine ->
+                    routine.label + if (routine.enabled) "" else " (বন্ধ)"
+                }.toTypedArray()
+                AlertDialog.Builder(this)
+                    .setTitle("কোন রুটিনের প্রস্তাব বন্ধ/চালু করবো?")
+                    .setItems(labels) { _, which ->
+                        val routine = routines[which]
+                        ProactiveRoutines.setRoutineEnabled(
+                            this, routine.key, !routine.enabled
+                        )
+                        refreshProposalsCard()
+                        Toast.makeText(
+                            this,
+                            if (routine.enabled) {
+                                "'${routine.label}'-এর প্রস্তাব বন্ধ করে দিয়েছি।"
+                            } else {
+                                "'${routine.label}'-এর প্রস্তাব চালু করে দিয়েছি।"
+                            },
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    .setNegativeButton("ফিরে যাও", null)
+                    .show()
+            }
+        }
+        builder.show()
+    }
+
+    /**
+     * v100: PROACTIVE PROPOSAL — app kholte hi due
+     * prastav ek baar bolo। Din me ek baar per routine
+     * (markProposed), TTS chal raha ho to chup
+     * (overlap nahi)। Jawab agle hukm se aayega
+     * (processCommand wala HAAN/NA raasta)।
+     */
+    private fun maybeSpeakProposal() {
+        if (isFinishing || isDestroyed) return
+        try {
+            if (speaker.isSpeakingNow) return
+        } catch (t: Throwable) {
+            // Boli ki haalat na mile to bhi prastav bolo।
+        }
+        val routine = ProactiveRoutines.dueProposal(this) ?: return
+        val lang = ProactiveCommands.langFromTag(prefs.listenLanguage)
+        val question = ProactiveCommands.proposalQuestion(routine, lang)
+        ProactiveRoutines.markProposed(this, routine)
+        showResponse("Maya: $question")
+        speaker.speak(question, MayaLanguages.ttsTagFor(prefs.listenLanguage))
     }
 
     /**
@@ -2611,6 +2743,32 @@ class MainActivity : Activity() {
             showResponse("Maya: jawab mil gaya — screen wala kaam aage badh raha hai...")
             return
         }
+        // v100: PROACTIVE PROPOSAL ka jawab — latka
+        // prastav ho to ye baat uska HAAN/NA hai, naya
+        // hukm nahi। Screen wale sawal ka jawab upar
+        // pehle hi pakda gaya hai, isliye yahan koi
+        // takraav nahi। HAAN/NA history me nahi bandhta
+        // (woh asal hukm nahi) — isliye ye jaanch
+        // history se PEHLE hai। Gaane par host ka
+        // runDirectYouTubePlay natija khud bolega।
+        when (val answer = ProactiveCommands.tryAnswerProposal(
+            this, commandEngine, text,
+            ProactiveCommands.langFromTag(prefs.listenLanguage),
+            fromBackgroundService = false, allowScreenshot = false
+        ) { q -> runDirectYouTubePlay(q, q, false) }) {
+            is ProactiveCommands.ProposalAnswer.Spoken -> {
+                politeFailureSpokenThisTurn = false
+                showRecognized("Aapne kaha: $text")
+                showResponse("Jarvis: ${answer.line}")
+                speaker.speak(answer.line)
+                return
+            }
+            ProactiveCommands.ProposalAnswer.HandledElsewhere -> {
+                showRecognized("Aapne kaha: $text")
+                return
+            }
+            ProactiveCommands.ProposalAnswer.NotAnAnswer -> { /* aam raasta */ }
+        }
         // v53: COMMAND HISTORY — naya hukm yaad rakho
         // (shutdown aur latke sawal ka jawab nahi —
         // woh upar pehle hi pakde gaye)।
@@ -2814,6 +2972,20 @@ class MainActivity : Activity() {
             politeFailureSpokenThisTurn = false
             showResponse("Maya: $learnLine")
             speaker.speak(learnLine)
+            return
+        }
+        // v100: PROACTIVE PROPOSAL — "প্রস্তাব বন্ধ
+        // করো" / "প্রস্তাব চালু করো" / "আমার রুটিন
+        // কী কী" / "'X'-এর প্রস্তাব আর কোরো না"। Sirf
+        // saaf prastav/routine wale roop pakadta hai —
+        // baaki aam raasta।
+        ProactiveCommands.tryHandleAdmin(
+            this, commandText,
+            vocativeLang ?: PlayIntent.requestLanguage(commandText)
+        )?.let { proposalLine ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: $proposalLine")
+            speaker.speak(proposalLine)
             return
         }
         // v56: START button wala hi kaam, bolkar — "ফোন
@@ -3456,6 +3628,14 @@ class MainActivity : Activity() {
                 AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
             }
             PlayIntent.saveDirectPlayDiag(this, query, result)
+            // v100: PROACTIVE — chala hua gaana routine
+            // ki tarah bandho (wahi gaana wahi samay 3
+            // baar hote hi Maya khud prastav karegi)।
+            if (result.ok) {
+                ProactiveRoutines.observe(
+                    this, ProactiveRoutines.Kind.SONG, query, query
+                )
+            }
             // v96: background me bajane ka hukm tha aur gaana
             // chal gaya ho to imaandaar Premium wali line bhi
             // jodo — bina Premium ke background playback

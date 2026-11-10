@@ -36,6 +36,7 @@ import com.aship.jarvis.ai.ScreenConfirm
 import com.aship.jarvis.ai.GeminiBrain
 import com.aship.jarvis.ai.ImageGen
 import com.aship.jarvis.ai.LearnedRoutines
+import com.aship.jarvis.ai.ProactiveRoutines
 import com.aship.jarvis.ai.ProviderChain
 import com.aship.jarvis.ai.SessionShot
 import com.aship.jarvis.ai.TaughtCommands
@@ -58,6 +59,7 @@ import com.aship.jarvis.commands.OfflineMode
 import com.aship.jarvis.commands.PasteSendIntent
 import com.aship.jarvis.commands.Persona
 import com.aship.jarvis.commands.PlayIntent
+import com.aship.jarvis.commands.ProactiveCommands
 import com.aship.jarvis.commands.RuleCommands
 import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
@@ -1383,6 +1385,32 @@ class JarvisWakeService : Service() {
      */
     private fun promptSessionMore() {
         if (destroyed) return
+        // v100: PROACTIVE PROPOSAL — due ho to "আর কিছু?"
+        // ki jagah prastav poochho; agli khidki usi ka
+        // HAAN/NA sunegi (onCommandHeard wala raasta)।
+        // Din me ek baar per routine (markProposed)।
+        // NA par prastav 3 din rukega, HAAN par kaam
+        // chalega — kuch aur bole to prastav hatkar
+        // aam hukm chalega।
+        val proposalLang = personaSpokenLang()
+        ProactiveRoutines.dueProposal(applicationContext)?.let { routine ->
+            val question =
+                ProactiveCommands.proposalQuestion(routine, proposalLang)
+            ProactiveRoutines.markProposed(applicationContext, routine)
+            sessionAwaitingMore = true
+            state = State.ACK
+            ackEndsConversation = false
+            setStatus("Session chal raha hai — prastav pooch rahi hoon")
+            updateNotification(
+                "Session chal raha hai — prastav ka jawab dijiye"
+            )
+            lightScreenOnWake()
+            speaker.speak(question)
+            armAckFallback()
+            orbOverlay.setReply(question)
+            armSessionIdle()
+            return
+        }
         sessionAwaitingMore = true
         state = State.ACK
         ackEndsConversation = false
@@ -3046,6 +3074,26 @@ class JarvisWakeService : Service() {
             startWakeSession()
             return
         }
+        // v100: PROACTIVE PROPOSAL ka jawab — latka
+        // prastav ho to ye baat uska HAAN/NA hai, naya
+        // hukm nahi। Screen wale sawal ka jawab upar
+        // pehle hi pakda gaya hai, isliye yahan koi
+        // takraav nahi। HAAN par kaam chalega (gaana /
+        // combo / app / yaad), NA par prastav 3 din
+        // rukega; kuch aur bole to prastav chup-chaap
+        // hat jayega aur aam hukm chalega। Gaane par
+        // runDirectYouTubePlay natija khud bolega।
+        when (val answer = ProactiveCommands.tryAnswerProposal(
+            applicationContext, commandEngine, text, personaSpokenLang(),
+            fromBackgroundService = true, allowScreenshot = true
+        ) { q -> runDirectYouTubePlay(q, q, false) }) {
+            is ProactiveCommands.ProposalAnswer.Spoken -> {
+                finishCommandResult(text, CommandResult(answer.line, true))
+                return
+            }
+            ProactiveCommands.ProposalAnswer.HandledElsewhere -> return
+            ProactiveCommands.ProposalAnswer.NotAnAnswer -> { /* aam raasta */ }
+        }
         // v52: SEND BUTTON — background me koi box hota
         // hi nahi, isliye yahan sirf imaandaar jawab:
         // screen kholo, likho, phir "সেন্ড করো" bolo।
@@ -3172,6 +3220,22 @@ class JarvisWakeService : Service() {
             speaker.speak(learnLine)
             armReplyFallback(learnLine)
             orbOverlay.setReply(learnLine)
+            return
+        }
+        // v100: PROACTIVE PROPOSAL — "প্রস্তাব বন্ধ
+        // করো" / "প্রস্তাব চালু করো" / "আমার রুটিন
+        // কী কী" / "'X'-এর প্রস্তাব আর কোরো না"। Sirf
+        // saaf prastav/routine wale roop pakadta hai —
+        // baaki aam raasta।
+        ProactiveCommands.tryHandleAdmin(
+            applicationContext, text, personaSpokenLang()
+        )?.let { proposalLine ->
+            setStatus("Prastav wala hukm — jawab de raha hoon")
+            updateNotification("Jarvis jawab de raha hai...")
+            lightScreenOnWake()
+            speaker.speak(proposalLine)
+            armReplyFallback(proposalLine)
+            orbOverlay.setReply(proposalLine)
             return
         }
         // v48: DUSRI BHASHA PAR VINAMRA MOD — Maya ke
@@ -3935,6 +3999,15 @@ class JarvisWakeService : Service() {
                 AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
             }
             PlayIntent.saveDirectPlayDiag(applicationContext, query, result)
+            // v100: PROACTIVE — chala hua gaana routine
+            // ki tarah bandho (wahi gaana wahi samay 3
+            // baar hote hi Maya khud prastav karegi)।
+            if (result.ok) {
+                ProactiveRoutines.observe(
+                    applicationContext, ProactiveRoutines.Kind.SONG,
+                    query, query
+                )
+            }
             // v48: natije ki boli bhi shaksiyat ki pakki
             // bhasha me — suna hua text kisi bhi script
             // me raha ho, Maya Hindi hi bolegi, Tara

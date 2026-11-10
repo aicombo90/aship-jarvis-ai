@@ -3,6 +3,7 @@ package com.aship.jarvis.commands
 import android.content.Context
 import com.aship.jarvis.ai.BrainRules
 import com.aship.jarvis.ai.ComboRules
+import com.aship.jarvis.ai.ProactiveRoutines
 import com.aship.jarvis.ai.TaughtCommands
 import java.util.Locale
 
@@ -144,6 +145,15 @@ object ComboCommands {
                 ?: return null
             val report = ComboRules.runCombo(
                 context, engine, combo, lang, allowScreenshot
+            )
+            // v100: PROACTIVE — chala hua combo routine
+            // ki tarah bandho (3 baar hote hi Maya khud
+            // prastav karegi — sirf chala hua hi, koshish
+            // nahi)। Paise / call / message wala combo
+            // hota hi nahi (resolveStep mana karta hai)।
+            ProactiveRoutines.observe(
+                context, ProactiveRoutines.Kind.COMBO,
+                combo.trigger, combo.trigger
             )
             runSummaryReply(combo, report, lang)
         } catch (t: Throwable) {
