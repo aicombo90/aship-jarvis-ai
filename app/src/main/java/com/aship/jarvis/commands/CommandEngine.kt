@@ -2,8 +2,10 @@ package com.aship.jarvis.commands
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
@@ -2757,6 +2759,805 @@ class CommandEngine(
         } catch (t: Throwable) {
             // Report bonus hai — asal hukm isse nahi rukta.
         }
+    }
+
+    // ------------------------------------------------------------------
+    // v96: TOGGLE (WiFi / Bluetooth / brightness) + BACKGROUND
+    //      gaana + PASAND KI SITE
+    //
+    // Maya ne kaha: seedha toggle (WiFi, Bluetooth,
+    // brightness), gaana YouTube par background me, aur
+    // pasand ki site jaldi kholna — ye teeno yahin se
+    // pakke raaste se chalenge, agent se pehle।
+    //
+    // IMAANDAAR SEEMA (Android 16, third-party app):
+    // - WiFi seedha toggle NAHI ho sakta (Android 10+
+    //   par WifiManager.setWifiEnabled sirf system app
+    //   ka) — QS tile wala raasta (accessibility) + na
+    //   mile to Settings panel kholo aur sach bolo।
+    // - Bluetooth enable() ko Android 12+ par user ki
+    //   manzoori chahiye — wahi QS tile wala raasta।
+    // - Brightness seedha set hoti hai (WRITE_SETTINGS
+    //   ho to — na ho to system settings kholo aur bolo)।
+    // - YouTube background playback ke liye YouTube
+    //   Premium chahiye — bina Premium ke gaana
+    //   foreground me hi bajega, ye baat saaf boli
+    //   jayegi (backgroundNote)।
+    // ------------------------------------------------------------------
+
+    /** v96: toggle ka nishana — kaun si cheez badalni hai। */
+    private enum class ToggleTarget { WIFI, BLUETOOTH, BRIGHTNESS }
+
+    /** v96: toggle wale nishane ke shabd (Latin + Bangla + Devanagari)। */
+    private val wifiWords = listOf(
+        "wifi", "wi-fi", "ওয়াইফাই", "वाइफाई", "ওয়াই ফাই", "वाइ फाई"
+    )
+    private val bluetoothWords = listOf(
+        "bluetooth", "ব্লুটুথ", "ब्लूटूथ", "ব্লু টুথ", "ब्लू टूथ"
+    )
+    private val brightnessWords = listOf(
+        "brightness", "ব্রাইটনেস", "ब्राइटनेस",
+        "উজ্জ্বলতা", "उज्ज्वलता", "bright"
+    )
+
+    /** v96: toggle ki kriya ke shabd (skeleton milan ke liye)। */
+    private val toggleVerbMarkers = listOf(
+        "chalu", "chalao", "চালু", "चालू", "চালাও", "चलाओ",
+        "khol", "খোলো", "खोलो", "খুলে", "খুলো", "খুলো",
+        "start", "শুরু", "शुरू", "toggle", "টগল", "टॉगल"
+    )
+
+    /** v96: ON disha ke shabd — token milan (chhote shabd ke liye surakshit)। */
+    private val toggleOnTokens = setOf(
+        "on", "chalu", "chalao", "start", "khol", "kholo"
+    )
+
+    /** v96: brightness badhane ke shabd। */
+    private val brightUpMarkers = listOf(
+        "barhao", "বাড়াও", "बढ़ाओ", "বাড়া", "बढ़ा",
+        "increase", "বেশি", "ज्यादा"
+    )
+
+    /** v96: brightness kam karne ke shabd। */
+    private val brightDownMarkers = listOf(
+        "kamao", "কমাও", "कमाओ", "কম", "कम",
+        "decrease", "কমিয়ে", "कम"
+    )
+
+    /** v96: background me bajane ke shabd। */
+    private val backgroundMarkers = listOf(
+        "background", "ব্যাকগ্রাউন্ড", "बैकग्राउंड",
+        "পেছনে", "पीछे", "peeche", "pechone"
+    )
+
+    /** v96: pasand site sikhane wala hissa (naam + pata wala) — akela hissa kaafi nahi (neeche dekho)। */
+    private val favAddPhrases = listOf(
+        "পছন্দের সাইটে", "পছন্দের তালিকায়", "পছন্দের সাইট",
+        "পছন্দের তালিকা", "पसंद की साइट", "पसंदीदा साइट",
+        "पसंद की सूची", "favourite site", "favorite site", "fav site"
+    )
+
+    /** v96: sikhane ki kriya — hissa + kriya dono hon to hi sikhana (warna "পছন্দের সাইটগুলো বলো" bhi sikhane me ghus jata)। */
+    private val favAddVerbs = listOf(
+        "যোগ", "রাখো", "রাখ", "add", "save", "জোড়", "jod"
+    )
+
+    /** v96: pasand site hatane ke shabd। */
+    private val favRemoveMarkers = listOf(
+        "পছন্দের সাইট মুছে", "পছন্দের সাইট থেকে মুছে",
+        "পছন্দের সাইট হাটাও", "পছন্দের সাইট হটাও",
+        "पसंद की साइट हटाओ", "remove favourite", "remove favorite",
+        "delete favourite", "delete favorite"
+    )
+
+    /** v96: pasand site gin kar sunane ke shabd। */
+    private val favListMarkers = listOf(
+        "পছন্দের সাইটগুলো", "পছন্দের সাইট গুলো",
+        "পছন্দের সাইট দেখাও", "পছন্দের সাইট বলো",
+        "पसंद की साइटें", "list favourite", "list favorite"
+    )
+
+    /** v96: "সাইট" shabd (kholne wala hukm pehchanne ke liye)। */
+    private val siteWordMarkers = listOf("সাইট", "साइट", "site")
+
+    /** v96: kholne ki kriya ke shabd। */
+    private val openVerbMarkers = listOf(
+        "খোলো", "खोलो", "খুলে", "খুলো", "খুলো",
+        "open", "khol", "kholo", "চালু", "चालू", "chalu"
+    )
+
+    /** v96: pasand-site wale hukm se naam nikalte waqt hatane wale shabd। */
+    private val favDropWords = setOf(
+        "site", "সাইট", "साइट", "সাইটটা", "সাইটটি", "साइटটা",
+        "khol", "kholo", "খোলো", "खोलो", "খুলে", "খুলো", "খুলো",
+        "open", "খোল", "खोल", "চালু", "चालू", "chalu", "on",
+        "মুছে", "ফেলো", "মুছো", "হাটাও", "হটাও", "remove", "delete",
+        "বলো", "দেখাও", "list", "গুলো", "কী", "কি",
+        "রাখো", "রাখ", "যোগ", "করো", "add", "save", "কর", "দাও",
+        "এই", "এটা", "ওটা", "আমার", "পছন্দের", "তালিকায়", "তালিকা"
+    )
+
+    /** v96: ek baar me brightness kitni badle (0–255 me se ~10%)। */
+    private val brightnessStep = 25
+
+    /** v96: brightness padh na paye to beech ka maan। */
+    private val brightnessDefault = 128
+
+    /**
+     * v96: marker (kisi bhi script me) suna hua text me
+     * hai kya — v95 wali satahein (raw + normalize +
+     * scrollSkeleton + hindiSkeleton), taaki likhavat ke
+     * halke farq milan na todein।
+     */
+    private fun matchesAny(rawText: String, markers: List<String>): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT)
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        return markers.any { marker ->
+            val needles = listOf(scrollSkeleton(marker), hindiSkeleton(marker)).distinct()
+            surfaces.any { surface -> needles.any { surface.contains(it) } }
+        }
+    }
+
+    /** v96: toggle ka nishana hai kya (sasta match, koi IO nahi)। */
+    private fun toggleTarget(rawText: String): ToggleTarget? {
+        return when {
+            matchesAny(rawText, wifiWords) -> ToggleTarget.WIFI
+            matchesAny(rawText, bluetoothWords) -> ToggleTarget.BLUETOOTH
+            matchesAny(rawText, brightnessWords) -> ToggleTarget.BRIGHTNESS
+            else -> null
+        }
+    }
+
+    /** v96: toggle ki kriya hai kya — on/off/badhana/kam karna/toggle। */
+    private fun hasToggleVerb(rawText: String): Boolean {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        if (text.isEmpty()) return false
+        if (hasOffWord(text)) return true
+        val tokens = text.split(Regex("""\s+"""))
+        if (tokens.any { it in toggleOnTokens }) return true
+        return matchesAny(rawText, toggleVerbMarkers)
+    }
+
+    /** v96: MainActivity ke liye sasti pehchan — bandha kaam background executor par chalega। */
+    fun isToggleCommand(rawText: String): Boolean {
+        val target = toggleTarget(rawText) ?: return false
+        if (hasToggleVerb(rawText)) return true
+        if (target == ToggleTarget.BRIGHTNESS) {
+            // "ব্রাইটনেস বাড়াও / কমাও" me toggle wali kriya
+            // nahi hoti — upar/neeche wale shabd hi kriya hain।
+            if (matchesAny(rawText, brightUpMarkers)) return true
+            if (matchesAny(rawText, brightDownMarkers)) return true
+            // "ব্রাইটনেস ৮০ করো" — number hi hukm hai।
+            if (extractBrightnessNumber(rawText) != null) return true
+        }
+        return false
+    }
+
+    /** v96: MainActivity wala bandha raasta — background executor se bulana (QS tile latch)। */
+    fun runToggleCommand(rawText: String): CommandResult {
+        return toggleCommand(rawText)
+            ?: CommandResult(toggleWhatReply(PlayIntent.requestLanguage(rawText), "WiFi"), true)
+    }
+
+    /**
+     * v96: toggle hukm — WiFi / Bluetooth / brightness me
+     * se ek। BANDHA call hai (QS tile latch): background
+     * thread se hi bulana (wake service ka executor, ya
+     * MainActivity ka background executor)। Na ho to null
+     * — bulane wala apna aam raasta aage badhaye।
+     */
+    fun toggleCommand(rawText: String): CommandResult? {
+        if (!isToggleCommand(rawText)) return null
+        return when (toggleTarget(rawText)) {
+            ToggleTarget.WIFI -> wifiToggleCommand(rawText)
+            ToggleTarget.BLUETOOTH -> bluetoothToggleCommand(rawText)
+            ToggleTarget.BRIGHTNESS -> brightnessCommand(rawText)
+            null -> null
+        }
+    }
+
+    /**
+     * v96: toggle ki disha — true = on/badhana, false = off,
+     * null = disha mili hi nahi। OFF hamesha jeetega (v36
+     * wala niyam): dono disha ke shabd hon to OFF।
+     */
+    private fun parseToggleDirection(rawText: String): Boolean? {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        if (text.isEmpty()) return null
+        if (hasOffWord(text)) return false
+        val tokens = text.split(Regex("""\s+"""))
+        if (tokens.any { it in toggleOnTokens }) return true
+        return null
+    }
+
+    /** v96: WiFi Settings panel kholo (tile na mile to imaandaar fallback)। */
+    private fun openWifiPanel() {
+        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Settings.Panel.ACTION_WIFI
+        } else {
+            Settings.ACTION_WIFI_SETTINGS
+        }
+        if (fromBackgroundService) {
+            PhoneActions.openPanelFromBackground(context, action)
+        } else {
+            PhoneActions.openPanel(context, action)
+        }
+    }
+
+    /** v96: Bluetooth Settings panel kholo (tile na mile to imaandaar fallback)। */
+    private fun openBluetoothPanel() {
+        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Settings.Panel.ACTION_BLUETOOTH
+        } else {
+            Settings.ACTION_BLUETOOTH_SETTINGS
+        }
+        if (fromBackgroundService) {
+            PhoneActions.openPanelFromBackground(context, action)
+        } else {
+            PhoneActions.openPanel(context, action)
+        }
+    }
+
+    /**
+     * v96: WiFi toggle — BANDHA call (QS tile latch):
+     * background thread se hi bulana। Tile wala raasta
+     * hi sachha raasta hai (seedha system API Android
+     * 10+ par third-party app ke liye band hai) — tile
+     * na mile ya service band ho to Settings panel
+     * kholo aur SAACH bolo, "chal gaya" kabhi jhooth
+     * nahi।
+     */
+    private fun wifiToggleCommand(rawText: String): CommandResult {
+        val lang = PlayIntent.requestLanguage(rawText)
+        val target = parseToggleDirection(rawText)
+            ?: return CommandResult(toggleWhatReply(lang, "WiFi"), true)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            openWifiPanel()
+            return CommandResult(togglePanelReply(lang, "WiFi", target), true)
+        }
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.NamedTileResult? = null
+        try {
+            JarvisAccessibilityService.toggleNamedTile(
+                context,
+                JarvisAccessibilityService.NamedTileKind.WIFI,
+                target
+            ) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            openWifiPanel()
+            return CommandResult(togglePanelReply(lang, "WiFi", target), true)
+        }
+        val completed = try {
+            latch.await(DATA_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed || outcome == null) {
+            return CommandResult(toggleTimeoutReply(lang, "WiFi"), true)
+        }
+        return CommandResult(
+            when (outcome) {
+                JarvisAccessibilityService.NamedTileResult.SUCCESS ->
+                    toggleDoneReply(lang, "WiFi", target)
+                JarvisAccessibilityService.NamedTileResult.TILE_NOT_FOUND,
+                JarvisAccessibilityService.NamedTileResult.PANEL_NOT_OPENED,
+                JarvisAccessibilityService.NamedTileResult.SERVICE_OFF -> {
+                    openWifiPanel()
+                    togglePanelReply(lang, "WiFi", target)
+                }
+                JarvisAccessibilityService.NamedTileResult.TAPPED_UNKNOWN ->
+                    toggleUnknownReply(lang, "WiFi", target)
+                null -> toggleTimeoutReply(lang, "WiFi")
+            }, true
+        )
+    }
+
+    /**
+     * v96: Bluetooth toggle — WiFi wala hi chalan (QS
+     * tile + jaanch, na mile to Settings panel)। Seedha
+     * BluetoothAdapter.enable() Android 12+ par user ki
+     * manzoori maangta hai, isliye tile wala raasta hi
+     * imaandaar raasta hai।
+     */
+    private fun bluetoothToggleCommand(rawText: String): CommandResult {
+        val lang = PlayIntent.requestLanguage(rawText)
+        val target = parseToggleDirection(rawText)
+            ?: return CommandResult(toggleWhatReply(lang, "Bluetooth"), true)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            openBluetoothPanel()
+            return CommandResult(togglePanelReply(lang, "Bluetooth", target), true)
+        }
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.NamedTileResult? = null
+        try {
+            JarvisAccessibilityService.toggleNamedTile(
+                context,
+                JarvisAccessibilityService.NamedTileKind.BLUETOOTH,
+                target
+            ) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            openBluetoothPanel()
+            return CommandResult(togglePanelReply(lang, "Bluetooth", target), true)
+        }
+        val completed = try {
+            latch.await(DATA_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed || outcome == null) {
+            return CommandResult(toggleTimeoutReply(lang, "Bluetooth"), true)
+        }
+        return CommandResult(
+            when (outcome) {
+                JarvisAccessibilityService.NamedTileResult.SUCCESS ->
+                    toggleDoneReply(lang, "Bluetooth", target)
+                JarvisAccessibilityService.NamedTileResult.TILE_NOT_FOUND,
+                JarvisAccessibilityService.NamedTileResult.PANEL_NOT_OPENED,
+                JarvisAccessibilityService.NamedTileResult.SERVICE_OFF -> {
+                    openBluetoothPanel()
+                    togglePanelReply(lang, "Bluetooth", target)
+                }
+                JarvisAccessibilityService.NamedTileResult.TAPPED_UNKNOWN ->
+                    toggleUnknownReply(lang, "Bluetooth", target)
+                null -> toggleTimeoutReply(lang, "Bluetooth")
+            }, true
+        )
+    }
+
+    /** v96: brightness abhi kitni hai (0–255) — na padh paye to null। */
+    private fun readBrightnessNow(): Int? {
+        return try {
+            Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * v96: "ব্রাইটনেস ৮০ করো" me se number nikaalo
+     * (0–100 = percent, 101–255 = seedha maan) — na
+     * mile to null। Bangla/Devanagari ank normalize
+     * se Latin ho jate hain।
+     */
+    private fun extractBrightnessNumber(rawText: String): Int? {
+        val text = normalize(rawText.lowercase(Locale.ROOT))
+        val match = Regex("""\d+""").find(text) ?: return null
+        val value = match.value.toIntOrNull() ?: return null
+        return when {
+            value in 0..100 -> (value * 255) / 100
+            value in 101..255 -> value
+            else -> null
+        }
+    }
+
+    /**
+     * v96: brightness — upar/neeche ya seedha number।
+     * Seedha Settings likhna hai (WRITE_SETTINGS ho
+     * to), isliye toggle wale hi niyam se background
+     * thread par bulana।
+     */
+    private fun brightnessCommand(rawText: String): CommandResult {
+        val lang = PlayIntent.requestLanguage(rawText)
+        val current = readBrightnessNow()
+        val number = extractBrightnessNumber(rawText)
+        if (number != null) {
+            return setBrightnessTo(number, lang)
+        }
+        val up = matchesAny(rawText, brightUpMarkers)
+        val down = matchesAny(rawText, brightDownMarkers)
+        val step = when {
+            up && !down -> brightnessStep
+            down && !up -> -brightnessStep
+            else -> return CommandResult(brightnessWhatReply(lang, current), true)
+        }
+        val target = ((current ?: brightnessDefault) + step).coerceIn(10, 255)
+        return setBrightnessTo(target, lang)
+    }
+
+    /** v96: brightness seedha set karo — WRITE_SETTINGS na ho to settings kholo aur sach bolo। */
+    private fun setBrightnessTo(target: Int, lang: PlayIntent.SpokenLang): CommandResult {
+        if (!Settings.System.canWrite(context)) {
+            // Ek baar ki manzoori — system settings kholo,
+            // user wahan Allow kare, phir seedha chalega।
+            if (fromBackgroundService) {
+                PhoneActions.openManageWriteSettingsFromBackground(context)
+            } else {
+                PhoneActions.openManageWriteSettings(context)
+            }
+            return CommandResult(brightnessPermissionReply(lang), true)
+        }
+        val value = target.coerceIn(10, 255)
+        val ok = try {
+            Settings.System.putInt(
+                context.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                value
+            )
+        } catch (t: Throwable) {
+            false
+        }
+        return if (ok) {
+            CommandResult(brightnessDoneReply(lang, value), true)
+        } else {
+            CommandResult(brightnessFailReply(lang), true)
+        }
+    }
+
+    // -- v96: toggle / brightness wale jawab (hukm ki bhasha me) --
+
+    private fun toggleWhatReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name চালু করব না বন্ধ করব — একটু বলে দাও।"
+        PlayIntent.SpokenLang.HINDI -> "$name चालू करूँ या बंद — बता दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Should I turn $name on or off?"
+    }
+
+    private fun toggleDoneReply(lang: PlayIntent.SpokenLang, name: String, on: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> if (on) "$name চালু করে দিয়েছি।" else "$name বন্ধ করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> if (on) "$name चालू कर दिया है।" else "$name बंद कर दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> if (on) "$name is on now." else "$name is off now."
+    }
+
+    private fun toggleUnknownReply(lang: PlayIntent.SpokenLang, name: String, on: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "$name-এর বোতামটা চেপে দিয়েছি, কিন্তু " + (if (on) "চালু হলো" else "বন্ধ হলো") +
+                " কিনা পাক্কা বুঝতে পারিনি — একবার নিজে দেখে নাও।"
+        PlayIntent.SpokenLang.HINDI ->
+            "$name का बटन दबा दिया है, पर " + (if (on) "चालू हुआ" else "बंद हुआ") +
+                " या नहीं यह पक्का नहीं हो पाया — एक बार ख़ुद देख लेना।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "I tapped the $name button, but I couldn't confirm it actually turned " +
+                (if (on) "on" else "off") + " — please check once."
+    }
+
+    private fun toggleTimeoutReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name বদলাতে গিয়ে সময় শেষ হয়ে গেল — একবার নিজে দেখে নাও।"
+        PlayIntent.SpokenLang.HINDI -> "$name बदलने में समय निकल गया — एक बार ख़ुद देख लेना।"
+        PlayIntent.SpokenLang.ENGLISH -> "I ran out of time trying to change $name — please check once."
+    }
+
+    private fun togglePanelReply(lang: PlayIntent.SpokenLang, name: String, on: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "$name-এর বোতামটা খুঁজে পেলাম না, তাই $name-এর settings খুলে দিয়েছি — " +
+                "ওখানে নিজে " + (if (on) "চালু" else "বন্ধ") + " করে দাও।"
+        PlayIntent.SpokenLang.HINDI ->
+            "$name का बटन नहीं मिला, इसलिए $name की settings खोल दी है — " +
+                "वहाँ ख़ुद " + (if (on) "चालू" else "बंद") + " कर देना।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "I couldn't find the $name button, so I opened the $name settings — " +
+                "please turn it " + (if (on) "on" else "off") + " there."
+    }
+
+    private fun brightnessWhatReply(lang: PlayIntent.SpokenLang, current: Int?): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ব্রাইটনেস কত করব — বাড়াব না কমাব?" +
+                (if (current != null) " এখন " + (current * 100 / 255) + "% আছে।" else "")
+        PlayIntent.SpokenLang.HINDI ->
+            "Brightness कितनी करूँ — बढ़ाऊँ या घटाऊँ?" +
+                (if (current != null) " अभी " + (current * 100 / 255) + "% है।" else "")
+        PlayIntent.SpokenLang.ENGLISH ->
+            "How bright should it be — brighter or dimmer?" +
+                (if (current != null) " It's at " + (current * 100 / 255) + "% now." else "")
+    }
+
+    private fun brightnessDoneReply(lang: PlayIntent.SpokenLang, value: Int): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ব্রাইটনেস " + (value * 100 / 255) + "% করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "Brightness " + (value * 100 / 255) + "% कर दी है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Brightness set to " + (value * 100 / 255) + "%."
+    }
+
+    private fun brightnessPermissionReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ব্রাইটনেস বদলাতে একবার অনুমতি লাগবে — settings খুলে দিয়েছি, " +
+                "ওখানে Allow করে দাও, তারপর আবার বলো।"
+        PlayIntent.SpokenLang.HINDI ->
+            "Brightness बदलने के लिए एक बार अनुमति चाहिए — settings खोल दी है, " +
+                "वहाँ Allow कर देना, फिर दोबारा बोलना।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "I need permission once to change brightness — I've opened the " +
+                "settings, please Allow it there, then ask me again."
+    }
+
+    private fun brightnessFailReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ব্রাইটনেস বদলাতে পারলাম না — একবার নিজে চেষ্টা করে দেখো।"
+        PlayIntent.SpokenLang.HINDI -> "Brightness बदल नहीं पाई — एक बार ख़ुद कोशिश करके देखो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't change the brightness — please try once yourself."
+    }
+
+    // -- v96: BACKGROUND me gaana --
+
+    /** v96: gaana BACKGROUND me bajane ka hukm hai kya — "ব্যাকগ্রাউন্ডে গান চালাও"। */
+    fun isBackgroundPlayRequest(rawText: String): Boolean {
+        if (PlayIntent.extractPlayQuery(rawText).isNullOrEmpty()) return false
+        return matchesAny(rawText, backgroundMarkers)
+    }
+
+    /** v96: background-play wali imaandaar line — Premium ke bina background nahi bajega। */
+    fun backgroundPlayNote(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "একটা কথা: YouTube-এর গান background-এ চালাতে Premium লাগে — " +
+                "Premium না থাকলে গানটা সামনে খুলেই বাজবে, পেছনে গেলে থেমে যাবে।"
+        PlayIntent.SpokenLang.HINDI ->
+            "Ek baat: YouTube ka gaana background me chalane ke liye " +
+                "Premium chahiye — bina Premium ke gaana saamne khulkar " +
+                "hi bajega, peeche jaane par ruk jayega."
+        PlayIntent.SpokenLang.ENGLISH ->
+            "One thing: playing YouTube music in the background needs " +
+                "Premium — without it the song plays in the foreground " +
+                "only, and stops when you leave the app."
+    }
+
+    // -- v96: PASAND KI SITE --
+
+    /** v96: pasand site wala hukm hai kya (sikhao / kholo / hatao / bolo) — sasta match, koi IO nahi। */
+    fun isFavSiteCommand(rawText: String): Boolean {
+        if (isFavAdd(rawText)) return true
+        if (matchesAny(rawText, favRemoveMarkers)) return true
+        if (matchesAny(rawText, favListMarkers)) return true
+        return isFavSiteOpen(rawText)
+    }
+
+    /** v96: sikhane wala hukm — hissa ("পছন্দের সাইটে") + kriya ("যোগ করো") dono chahiye। */
+    private fun isFavAdd(rawText: String): Boolean {
+        return matchesAny(rawText, favAddPhrases) && matchesAny(rawText, favAddVerbs)
+    }
+
+    /** v96: "[naam] সাইট খোলো" wala hukm — naam bache to true। */
+    private fun isFavSiteOpen(rawText: String): Boolean {
+        if (!matchesAny(rawText, siteWordMarkers)) return false
+        if (!matchesAny(rawText, openVerbMarkers)) return false
+        return extractFavSiteName(rawText) != null
+    }
+
+    /** v96: MainActivity wala bandha raasta — background executor se bulana (kholo wala fallback khoj network par jata hai)। */
+    fun runFavSiteCommand(rawText: String): CommandResult {
+        return favSiteCommand(rawText)
+            ?: CommandResult(favSiteWhatReply(PlayIntent.requestLanguage(rawText)), true)
+    }
+
+    /**
+     * v96: pasand site wala hukm — sikhao / kholo / hatao /
+     * bolo। BANDHA ho sakta hai (kholo wala fallback khoj
+     * network par jata hai): background thread se hi bulana।
+     * Na ho to null — bulane wala apna aam raasta aage badhaye।
+     */
+    fun favSiteCommand(rawText: String): CommandResult? {
+        if (!isFavSiteCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        // SIKHAO pehle — "পছন্দের সাইটে যোগ করো" wala hukm
+        // "সাইট খোলো" wale hisse se pehle jeetega।
+        if (isFavAdd(rawText)) {
+            return favSiteAddCommand(rawText, lang)
+        }
+        if (matchesAny(rawText, favRemoveMarkers)) {
+            return favSiteRemoveCommand(rawText, lang)
+        }
+        if (matchesAny(rawText, favListMarkers)) {
+            return favSiteListCommand(lang)
+        }
+        return favSiteOpenCommand(rawText, lang)
+    }
+
+    /** v96: sikhane wale hukm se naam (+ pata, ho to) nikaalo — pata aakhiri dot wala token। */
+    private fun extractFavSiteTeach(rawText: String): Pair<String, String?> {
+        var text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        for (phrase in favAddPhrases) {
+            text = text.replace(phrase, " ")
+        }
+        // "ডট" ko "." banao (bolkar suna pata: "youtube dot com")।
+        text = text
+            .replace(" dot ", ".")
+            .replace(" ডট ", ".")
+            .replace(" डॉट ", ".")
+            .replace("ডটকম", ".com")
+            .replace("dotcom", ".com")
+        val tokens = text.split(Regex("""\s+"""))
+            .filter { it.isNotEmpty() && it !in favDropWords }
+        if (tokens.isEmpty()) return "" to null
+        val last = tokens.last()
+        val url = FavSites.cleanUrl(last)
+        return if (url != null) {
+            tokens.dropLast(1).joinToString(" ").trim() to url
+        } else {
+            tokens.joinToString(" ").trim() to null
+        }
+    }
+
+    /** v96: "[naam] সাইট খোলো / মুছে ফেলো" me se naam nikaalo — na mile to null। */
+    private fun extractFavSiteName(rawText: String): String? {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        val name = text.split(Regex("""\s+"""))
+            .filter { it.isNotEmpty() && it !in favDropWords }
+            .joinToString(" ")
+            .trim()
+        return name.takeIf { it.isNotEmpty() }
+    }
+
+    /** v96: pasand site sikhao — naam + pata bole gaye hon, ya sirf naam (pata aakhiri khoj se)। */
+    private fun favSiteAddCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val (name, url) = extractFavSiteTeach(rawText)
+        if (name.isNotEmpty() && url != null) {
+            return saveFavSiteResult(name, url, lang)
+        }
+        if (name.isNotEmpty()) {
+            // Sirf naam — pata aakhiri khoj ke pehle natije se।
+            val firstUrl = WebSearchIntent.loadLastSearch(context)
+                ?.second?.firstOrNull()?.url
+            if (firstUrl != null) {
+                return saveFavSiteResult(name, firstUrl, lang)
+            }
+            return CommandResult(favSiteNeedUrlReply(lang, name), true)
+        }
+        return CommandResult(favSiteTeachWhatReply(lang), true)
+    }
+
+    /** v96: pasand site bachao — natija hamesha sachha। */
+    private fun saveFavSiteResult(name: String, url: String, lang: PlayIntent.SpokenLang): CommandResult {
+        return when (FavSites.save(context, name, url)) {
+            FavSites.SaveOutcome.SAVED -> CommandResult(favSiteSavedReply(lang, name), true)
+            FavSites.SaveOutcome.UPDATED -> CommandResult(favSiteUpdatedReply(lang, name), true)
+            FavSites.SaveOutcome.INVALID -> CommandResult(favSiteInvalidReply(lang), true)
+            FavSites.SaveOutcome.FULL -> CommandResult(favSiteFullReply(lang), true)
+        }
+    }
+
+    /** v96: pasand site hatao। */
+    private fun favSiteRemoveCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val name = extractFavSiteName(rawText)
+            ?: return CommandResult(favSiteWhatReply(lang), true)
+        return if (FavSites.remove(context, name)) {
+            CommandResult(favSiteRemovedReply(lang, name), true)
+        } else {
+            CommandResult(favSiteNotFoundReply(lang, name), true)
+        }
+    }
+
+    /** v96: pasand site gin kar sunao। */
+    private fun favSiteListCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val names = FavSites.listNames(context)
+        return if (names.isEmpty()) {
+            CommandResult(favSiteEmptyReply(lang), true)
+        } else {
+            CommandResult(favSiteListReply(lang, names), true)
+        }
+    }
+
+    /** v96: pasand site kholo — suchi me ho to seedha, na ho to v79 wali khoj wala fallback, sach bolkar। */
+    private fun favSiteOpenCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val name = extractFavSiteName(rawText)
+            ?: return CommandResult(favSiteWhatReply(lang), true)
+        val found = FavSites.find(context, name)
+        if (found != null) {
+            val (storedName, url) = found
+            val opened = openFavUrl(url)
+            return if (opened) {
+                CommandResult(favSiteOpenedReply(lang, storedName), true)
+            } else {
+                CommandResult(favSiteOpenFailReply(lang, storedName), true)
+            }
+        }
+        // Pasand me nahi — v79 wali khoj: pehla natija kholo, aur saaf bolo ki khoj se khola।
+        val results = try {
+            WebSearchIntent.searchWeb(name)
+        } catch (t: Throwable) {
+            emptyList()
+        }
+        if (results.isEmpty()) {
+            return CommandResult(favSiteNotFoundReply(lang, name), true)
+        }
+        val first = results.first()
+        try {
+            WebSearchIntent.saveLastSearch(context, name, results)
+        } catch (t: Throwable) {
+            // Bachana bonus hai — kholna isse nahi rukta.
+        }
+        return if (openFavUrl(first.url)) {
+            CommandResult(favSiteSearchOpenedReply(lang, name, first.title), true)
+        } else {
+            CommandResult(favSiteOpenFailReply(lang, name), true)
+        }
+    }
+
+    /** v96: pasand site ka URL kholo — foreground ho to seedha, background se OverlayLauncher wala raasta। */
+    private fun openFavUrl(url: String): Boolean {
+        return if (fromBackgroundService) {
+            PhoneActions.openUrlFromBackground(context, url) == LaunchOutcome.LAUNCHED
+        } else {
+            PhoneActions.openUrl(context, url)
+        }
+    }
+
+    // -- v96: pasand site wale jawab (hukm ki bhasha me) --
+
+    private fun favSiteWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কোন সাইটটা? নামটা বলো।"
+        PlayIntent.SpokenLang.HINDI -> "कौन सी साइट? नाम बता दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Which site? Tell me the name."
+    }
+
+    private fun favSiteSavedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name' পছন্দের সাইটে রেখে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' पसंद की साइट में रख दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Saved '$name' to your favourite sites."
+    }
+
+    private fun favSiteUpdatedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name'-এর ঠিকানা বদলে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' का पता बदल दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Updated the address for '$name'."
+    }
+
+    private fun favSiteInvalidReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ঠিকানাটা বুঝতে পারলাম না — নাম আর ঠিকানা আলাদা করে বলো (যেমন: ইউটিউব youtube.com)।"
+        PlayIntent.SpokenLang.HINDI -> "पता समझ नहीं पाया — नाम और पता अलग-अलग बोलो (जैसे: यूट्यूब youtube.com)।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't understand the address — say the name and address separately (like: youtube youtube.com)."
+    }
+
+    private fun favSiteFullReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পছন্দের তালিকা ভরে গেছে (২০টা) — আগে একটা মুছে ফেলো।"
+        PlayIntent.SpokenLang.HINDI -> "पसंद की सूची भर गई है (20) — पहले एक हटा दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Your favourite list is full (20) — remove one first."
+    }
+
+    private fun favSiteNeedUrlReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name'-এর ঠিকানাটা জানি না — আগে ওটা খুঁজে নাও, তারপর রাখব।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' का पता मुझे नहीं पता — पहले उसे खोज लो, फिर रख दूँगा।"
+        PlayIntent.SpokenLang.ENGLISH -> "I don't know the address for '$name' — search for it first, then I'll save it."
+    }
+
+    private fun favSiteTeachWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কোন সাইটটা রাখব? নাম আর ঠিকানা বলো (যেমন: ইউটিউব youtube.com)।"
+        PlayIntent.SpokenLang.HINDI -> "कौन सी साइट रखूँ? नाम और पता बोलो (जैसे: यूट्यूब youtube.com)।"
+        PlayIntent.SpokenLang.ENGLISH -> "Which site should I save? Say the name and address (like: youtube youtube.com)."
+    }
+
+    private fun favSiteOpenedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name' খুলে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' खोल दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Opened '$name'."
+    }
+
+    private fun favSiteOpenFailReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name' খুলতে পারলাম না — ব্রাউজারটা একবার দেখে নাও।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' खुल नहीं पाया — ब्राउज़र एक बार देख लेना।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't open '$name' — please check the browser once."
+    }
+
+    private fun favSiteNotFoundReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পছন্দের তালিকায় '$name' নেই, আর খুঁজেও কিছু পেলাম না।"
+        PlayIntent.SpokenLang.HINDI -> "पसंद की सूची में '$name' नहीं है, और खोजने पर भी कुछ नहीं मिला।"
+        PlayIntent.SpokenLang.ENGLISH -> "'$name' isn't in your favourites, and searching found nothing either."
+    }
+
+    private fun favSiteSearchOpenedReply(lang: PlayIntent.SpokenLang, name: String, title: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পছন্দের তালিকায় '$name' নেই, তাই খুঁজে '$title' খুলে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "पसंद की सूची में '$name' नहीं है, इसलिए खोजकर '$title' खोल दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "'$name' isn't in your favourites, so I searched and opened '$title'."
+    }
+
+    private fun favSiteRemovedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name' পছন্দের তালিকা থেকে মুছে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' पसंद की सूची से हटा दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Removed '$name' from your favourites."
+    }
+
+    private fun favSiteEmptyReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পছন্দের তালিকা এখনো খালি — 'পছন্দের সাইটে যোগ করো' বলে একটা রাখো।"
+        PlayIntent.SpokenLang.HINDI -> "पसंद की सूची अभी ख़ाली है — 'पसंद की साइट में जोड़ो' बोलकर एक रख लो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Your favourite list is still empty — save one by saying 'add to favourite sites'."
+    }
+
+    private fun favSiteListReply(lang: PlayIntent.SpokenLang, names: List<String>): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পছন্দের সাইট: " + names.joinToString(", ") + "।"
+        PlayIntent.SpokenLang.HINDI -> "पसंद की साइटें: " + names.joinToString(", ") + "।"
+        PlayIntent.SpokenLang.ENGLISH -> "Your favourite sites: " + names.joinToString(", ") + "."
     }
 
     /**

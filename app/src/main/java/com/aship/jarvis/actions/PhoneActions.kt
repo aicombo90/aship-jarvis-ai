@@ -385,6 +385,61 @@ object PhoneActions {
         return OverlayLauncher.launch(context, intent)
     }
 
+    /**
+     * v96: koi Settings panel kholo (foreground) — WiFi /
+     * Bluetooth wala panel (Settings.Panel.ACTION_WIFI /
+     * ACTION_BLUETOOTH)। Tile na mile to yehi imaandaar
+     * fallback hai: panel khulta hai, user wahan toggle
+     * khud dabata hai — Maya "chal gaya" jhooth nahi bolegi।
+     */
+    fun openPanel(context: Context, panelAction: String): Boolean {
+        val intent = Intent(panelAction)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Background variant of [openPanel] — overlay bridge se. */
+    fun openPanelFromBackground(context: Context, panelAction: String): LaunchOutcome {
+        val intent = Intent(panelAction)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return OverlayLauncher.launch(context, intent)
+    }
+
+    /**
+     * v96: brightness badalne ki anumati wala Settings
+     * screen kholo (foreground) — WRITE_SETTINGS ek baar
+     * Allow karni padti hai, tabhi SCREEN_BRIGHTNESS
+     * seedha likha ja sakta hai।
+     */
+    fun openManageWriteSettings(context: Context): Boolean {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_WRITE_SETTINGS,
+            Uri.parse("package:" + context.packageName)
+        )
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Background variant of [openManageWriteSettings]. */
+    fun openManageWriteSettingsFromBackground(context: Context): LaunchOutcome {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_WRITE_SETTINGS,
+            Uri.parse("package:" + context.packageName)
+        )
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return OverlayLauncher.launch(context, intent)
+    }
+
     /** Background variant of [setAlarm]. */
     fun setAlarmFromBackground(context: Context, hour: Int?, minute: Int?): LaunchOutcome =
         OverlayLauncher.launch(context, buildAlarmIntent(hour, minute))

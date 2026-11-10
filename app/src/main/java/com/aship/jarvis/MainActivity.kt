@@ -2736,6 +2736,19 @@ class MainActivity : Activity() {
             runDirectScreenEyes(commandText)
             return
         }
+        // v96: TOGGLE (WiFi / Bluetooth / brightness) + PASAND
+        // KI SITE — agent se pehle pakke raaste se। Bandha
+        // kaam (QS tile latch / khoj) background executor par
+        // (runDirectScreenEyes wala hi niyam), natija
+        // mainHandler se wapas aakar bola/dikhaya jata hai।
+        if (commandEngine.isToggleCommand(commandText)) {
+            runDirectToggle(commandText)
+            return
+        }
+        if (commandEngine.isFavSiteCommand(commandText)) {
+            runDirectFavSite(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -2771,7 +2784,10 @@ class MainActivity : Activity() {
         // khulega, pehle jaisa).
         val playQuery = PlayIntent.extractPlayQuery(commandText)
         if (!playQuery.isNullOrEmpty()) {
-            handlePlayRequest(commandText, playQuery, vocativeLang)
+            handlePlayRequest(
+                commandText, playQuery, vocativeLang,
+                commandEngine.isBackgroundPlayRequest(commandText)
+            )
             return
         }
         // v48: LINK wala kaam (URL + kholne/browser ka
@@ -3152,14 +3168,15 @@ class MainActivity : Activity() {
     private fun handlePlayRequest(
         text: String,
         query: String,
-        replyLanguage: PlayIntent.SpokenLang? = null
+        replyLanguage: PlayIntent.SpokenLang? = null,
+        backgroundNote: Boolean = false
     ) {
         if (geminiBrainAllowed()) {
             showResponse("Maya soch rahi hai — gaana chala rahi hai...")
-            askAgentBrain(text, replyLanguage) { runDirectYouTubePlay(text, query) }
+            askAgentBrain(text, replyLanguage) { runDirectYouTubePlay(text, query, backgroundNote) }
             return
         }
-        runDirectYouTubePlay(text, query)
+        runDirectYouTubePlay(text, query, backgroundNote)
     }
 
     /**
@@ -3171,7 +3188,7 @@ class MainActivity : Activity() {
      * bhasha me aur hamesha sachha — chal gaya / pakka
      * nahi / khula hi nahi.
      */
-    private fun runDirectYouTubePlay(text: String, query: String) {
+    private fun runDirectYouTubePlay(text: String, query: String, backgroundNote: Boolean = false) {
         showResponse("Maya: '$query' chala rahi hoon...")
         background.execute {
             val tools = AgentTools(this, commandEngine, fromBackgroundService = false)
@@ -3181,9 +3198,16 @@ class MainActivity : Activity() {
                 AgentTools.ToolResult(false, "FAILED — auzaar tak pahunch nahi payi.")
             }
             PlayIntent.saveDirectPlayDiag(this, query, result)
-            val line = PlayIntent.playOutcomeReply(
+            // v96: background me bajane ka hukm tha aur gaana
+            // chal gaya ho to imaandaar Premium wali line bhi
+            // jodo — bina Premium ke background playback
+            // hota hi nahi, ye baat chhupani nahi।
+            var line = PlayIntent.playOutcomeReply(
                 result, query, PlayIntent.requestLanguage(text)
             )
+            if (backgroundNote && result.ok) {
+                line += " " + commandEngine.backgroundPlayNote(PlayIntent.requestLanguage(text))
+            }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post
                 politeFailureSpokenThisTurn = false
@@ -3754,6 +3778,53 @@ class MainActivity : Activity() {
                 commandEngine.runScreenEyesCommand(text)
             } catch (t: Throwable) {
                 CommandResult("স্ক্রিনটা দেখতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v96: bina mastishk ke seedha toggle — runDirectScreenEyes
+     * wala hi raasta: koshish background executor par (QS tile
+     * latch bandha kaam hai; main thread par nahi chal sakta),
+     * natija mainHandler se wapas aakar bola/dikhaya jata hai।
+     */
+    private fun runDirectToggle(text: String) {
+        showResponse("Maya: বদলাচ্ছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runToggleCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("বদলাতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v96: bina mastishk ke seedha pasand-site wala kaam —
+     * runDirectToggle wala hi raasta: koshish background
+     * executor par (kholo wala fallback khoj network par
+     * jata hai), natija mainHandler se wapas aakar
+     * bola/dikhaya jata hai।
+     */
+    private fun runDirectFavSite(text: String) {
+        showResponse("Maya: খুলছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runFavSiteCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("সাইটটা খুলতে পারলাম না।", true)
             }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post

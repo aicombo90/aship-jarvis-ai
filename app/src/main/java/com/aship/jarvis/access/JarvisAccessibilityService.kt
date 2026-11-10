@@ -14,6 +14,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.telephony.TelephonyManager
@@ -206,6 +207,40 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         /** Quick-settings panel khula hi nahi. */
         PANEL_NOT_OPENED,
+
+        /** Service band hai (ya beech me band ho gayi). */
+        SERVICE_OFF
+    }
+
+    /**
+     * v96: QS tile se toggle karne layak cheez — data
+     * tile wala hi raasta, sirf naam aur haalat-padhna
+     * alag hai। WiFi ki haalat WifiManager se (ACCESS_
+     * WIFI_STATE), Bluetooth ki tile ke isChecked se
+     * (BLUETOOTH_CONNECT maange bina)।
+     */
+    enum class NamedTileKind {
+        WIFI,
+        BLUETOOTH
+    }
+
+    /** v96: naam wale tile ke toggle ki koshish ka sachha natija. */
+    enum class NamedTileResult {
+        /** Tile mila, daba, aur dabane ke baad haalat jaanch kar pakki hui. */
+        SUCCESS,
+
+        /** Panel khula, par us naam ka tile nahi mila / dab nahi paya. */
+        TILE_NOT_FOUND,
+
+        /** Quick-settings panel khula hi nahi. */
+        PANEL_NOT_OPENED,
+
+        /**
+         * Tile dab to gaya, par dabane ke baad ki haalat
+         * padh nahi paye — dabna pakka, natija nahi
+         * (data wale TAPPED_UNKNOWN jaisa hi sach)।
+         */
+        TAPPED_UNKNOWN,
 
         /** Service band hai (ya beech me band ho gayi). */
         SERVICE_OFF
@@ -486,6 +521,46 @@ class JarvisAccessibilityService : AccessibilityService() {
             // kaam nahi ho payega — sach bata do.
             try {
                 callback(DataOutcome.SERVICE_OFF)
+            } catch (t2: Throwable) {
+                // Bulane wala ja chuka hai: natija chhod do.
+            }
+        }
+    }
+
+    /**
+     * v96: naam wala QS tile toggle — WiFi / Bluetooth,
+     * data tile wala hi raasta (panel kholo, naam se tile
+     * dhoondho, dabao, dabane ke baad haalat jaanch kar
+     * hi SUCCESS)। Turant laut aata hai; asal kaam
+     * background thread par hota hai aur natija [callback]
+     * se (usi thread par) milta hai। Seedha system API se
+     * toggle NAHI hota (Android 10+ par WiFi aur Android
+     * 12+ par Bluetooth third-party app ke liye band hai)
+     * — isiliye tile wala raasta hi sachha raasta hai।
+     */
+    fun toggleNamedTile(
+        kind: NamedTileKind,
+        turnOn: Boolean,
+        callback: (NamedTileResult) -> Unit
+    ) {
+        try {
+            worker.execute {
+                val result = try {
+                    runNamedTileToggle(kind, turnOn)
+                } catch (t: Throwable) {
+                    NamedTileResult.TILE_NOT_FOUND
+                }
+                try {
+                    callback(result)
+                } catch (t2: Throwable) {
+                    // Bulane wala ja chuka hai: natija chhod do.
+                }
+            }
+        } catch (t: Throwable) {
+            // Service band ho rahi hai aur worker band ho chuka:
+            // kaam nahi ho payega — sach bata do.
+            try {
+                callback(NamedTileResult.SERVICE_OFF)
             } catch (t2: Throwable) {
                 // Bulane wala ja chuka hai: natija chhod do.
             }
@@ -2259,6 +2334,308 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     // ------------------------------------------------------------------
+    // v96: NAAM WALA QS TILE toggle — WiFi / Bluetooth
+    //
+    // Data tile wala hi raasta (panel kholo, naam se tile
+    // dhoondho, dabao, dabane ke baad haalat jaanch kar hi
+    // SUCCESS), sirf naam aur haalat-padhna alag hai।
+    // ------------------------------------------------------------------
+
+    /** v96: asal kaam — sirf worker thread se bulana. */
+    private fun runNamedTileToggle(kind: NamedTileKind, turnOn: Boolean): NamedTileResult {
+        toggleTrace.clear()
+        val search = searchNamedTile(kind)
+        val foundTile = search.tile ?: run {
+            // Panel khula hi nahi to BACK mat bhejo — woh
+            // neeche wali app ko peeche dhakel dega (runToggle
+            // wala hi niyam)। Panel khula tha par tile nahi
+            // mila to panel band karke sach batao — bulane
+            // wala tab Settings panel wala fallback chalata hai।
+            if (search.panelSeen) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            return if (search.panelSeen) {
+                NamedTileResult.TILE_NOT_FOUND
+            } else {
+                NamedTileResult.PANEL_NOT_OPENED
+            }
+        }
+        val clickTarget = search.clickTarget ?: foundTile
+        // Pehle ASLI haalat — WiFi WifiManager se, Bluetooth
+        // tile ke isChecked se। Pehle se chahi hui haalat me
+        // ho to dabana hi nahi (data wala hi niyam)।
+        val currentState = readNamedTileState(kind, foundTile)
+        if (currentState != null && currentState == turnOn) {
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return NamedTileResult.SUCCESS
+        }
+        // Dabao — ACTION_CLICK; na chale to tile ke beech me
+        // ungli wala tap (vivo tile aksar gesture se hi dabta hai)।
+        var tapped = try {
+            clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (t: Throwable) {
+            false
+        }
+        if (!tapped) {
+            tapped = tapTileCenter(clickTarget)
+        }
+        if (!tapped) {
+            toggleTrace.append("named-tile tap failed; ")
+            pendingScanReport =
+                (pendingScanReport ?: "") + toggleTraceSuffix()
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return NamedTileResult.TILE_NOT_FOUND
+        }
+        SystemClock.sleep(CLICK_SETTLE_MS)
+        // Dabane ke BAAD asli haalat ki jaanch — bina jaanche
+        // SUCCESS kabhi nahi (v63 ka niyam)।
+        if (waitForNamedTileState(kind, turnOn, VERIFY_TIMEOUT_MS)) {
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return NamedTileResult.SUCCESS
+        }
+        // Ek baar phir — tile ke beech me gesture tap, phir jaanch।
+        if (tapTileCenter(clickTarget) &&
+            waitForNamedTileState(kind, turnOn, VERIFY_TIMEOUT_MS)
+        ) {
+            pendingScanReport =
+                "OK tile=" + (scanTileLabel ?: "?") +
+                    " state=" + (if (turnOn) "on" else "off") + " (verified)"
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            return NamedTileResult.SUCCESS
+        }
+        // Dab to gaya, par haalat padh nahi paye — dabna
+        // pakka, natija nahi (data wala TAPPED_UNKNOWN)।
+        pendingScanReport =
+            (pendingScanReport ?: "") + " tapped-unknown; "
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return NamedTileResult.TAPPED_UNKNOWN
+    }
+
+    /**
+     * v96: QS panel kholkar naam wala tile dhoondho —
+     * searchPanelTile wala hi raasta, sirf dhoondhne wala
+     * naam data ki jagah [kind] ka hai। Panel khul hi na
+     * paye to tile null aur panelSeen false milega।
+     */
+    private fun searchNamedTile(kind: NamedTileKind): PanelSearch {
+        resetScanCollectors()
+        if (!performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)) {
+            snapshotScanReport()
+            return PanelSearch(panelSeen = false, tile = null, clickTarget = null)
+        }
+        val deadline = SystemClock.uptimeMillis() + TOTAL_BUDGET_MS
+        var panelSeen = false
+        var tile: AccessibilityNodeInfo? = null
+        var lastLabelCount = -1
+        var lastLabelChangeMs = SystemClock.uptimeMillis()
+        while (tile == null && SystemClock.uptimeMillis() < deadline) {
+            val roots = systemUiRootsOnly(collectRoots())
+            for (root in roots) {
+                if (root.packageName?.toString() == SYSTEMUI_PACKAGE) {
+                    panelSeen = true
+                    scanSysuiSeen = true
+                }
+                val found = findNamedTile(root, kind)
+                if (found != null) {
+                    tile = found
+                    break
+                }
+            }
+            if (tile == null) {
+                roots.forEach { root ->
+                    try {
+                        root.recycle()
+                    } catch (t: Throwable) {
+                        // Pehle se saaf: kuch nahi karna.
+                    }
+                }
+                if (panelSeen) {
+                    if (scanLabels.size != lastLabelCount) {
+                        lastLabelCount = scanLabels.size
+                        lastLabelChangeMs = SystemClock.uptimeMillis()
+                    } else if (
+                        SystemClock.uptimeMillis() - lastLabelChangeMs > 1500L
+                    ) {
+                        break
+                    }
+                }
+                SystemClock.sleep(POLL_INTERVAL_MS)
+            }
+        }
+        if (tile == null) {
+            snapshotScanReport()
+            return PanelSearch(panelSeen, null, null)
+        }
+        val foundTile = tile
+        scanTileLabel = nodeLabel(foundTile)
+        snapshotScanReport()
+        return PanelSearch(
+            panelSeen,
+            foundTile,
+            findClickableAncestor(foundTile) ?: foundTile
+        )
+    }
+
+    /**
+     * v96: ek ped me naam wala tile dhoondho — findDataTile
+     * wala hi chalan, sirf number dene wala
+     * [namedTileScore] alag hai। Sabse bada number wala
+     * node hi tile hai।
+     */
+    private fun findNamedTile(
+        root: AccessibilityNodeInfo,
+        kind: NamedTileKind
+    ): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = 0
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (!stack.isEmpty() && visited < MAX_NODES) {
+            val node = stack.removeLast()
+            visited++
+            var score = namedTileScore(node, kind)
+            if (score > 0 && isInStatusBarStrip(node)) score = 0
+            if (score > bestScore) {
+                bestScore = score
+                best = node
+            }
+            if (score > scanBestScore) {
+                scanBestScore = score
+            }
+            for (i in 0 until node.childCount) {
+                try {
+                    node.getChild(i)?.let { child -> stack.addLast(child) }
+                } catch (t: Throwable) {
+                    // Ped beech me badal gaya: jo mila wahi kaafi.
+                }
+            }
+        }
+        return best
+    }
+
+    /** v96: node ke naam ko [kind] wale tile hone ke number do (0 = nahi hai). */
+    private fun namedTileScore(node: AccessibilityNodeInfo, kind: NamedTileKind): Int {
+        val shown = nodeLabel(node)
+        if (shown.isNotEmpty() && scanLabels.size < MAX_SCAN_LABELS) {
+            scanLabels.add(shown.take(MAX_SCAN_LABEL_CHARS))
+        }
+        val label = shown.lowercase(Locale.ROOT)
+        if (label.isEmpty()) return 0
+        if (label.contains("saver") || label.contains("roaming")) return 0
+        return when (kind) {
+            NamedTileKind.WIFI -> {
+                // Hotspot wala tile WiFi nahi hai — woh alag
+                // cheez hai, isliye use kabhi WiFi na mano।
+                if (label.contains("hotspot")) return 0
+                when {
+                    label == "wi-fi" || label == "wifi" ||
+                        label == "ওয়াইফাই" || label == "वाइफाई" -> 3
+                    label.contains("wi-fi") || label.contains("wifi") ||
+                        label.contains("ওয়াইফাই") || label.contains("वाइफाई") -> 2
+                    else -> 0
+                }
+            }
+            NamedTileKind.BLUETOOTH -> when {
+                label == "bluetooth" ||
+                    label == "ব্লুটুথ" || label == "ब्लूटूथ" -> 3
+                label.contains("bluetooth") ||
+                    label.contains("ব্লুটুথ") || label.contains("ब्लूटूथ") -> 2
+                else -> 0
+            }
+        }
+    }
+
+    /**
+     * v96: [kind] ki ASLI haalat — WiFi WifiManager se
+     * (ACCESS_WIFI_STATE), Bluetooth tile ke isChecked
+     * se (BLUETOOTH_CONNECT maange bina)। Na padh paye
+     * to null — bulane wala dabane ke baad bhi isse
+     * jaanch lega, aur na mile to TAPPED_UNKNOWN bolega।
+     */
+    private fun readNamedTileState(
+        kind: NamedTileKind,
+        tile: AccessibilityNodeInfo
+    ): Boolean? {
+        return when (kind) {
+            NamedTileKind.WIFI -> wifiEnabledNow()
+            NamedTileKind.BLUETOOTH -> {
+                readTileState(tile)
+                    ?: readTileState(findClickableAncestor(tile) ?: tile)
+            }
+        }
+    }
+
+    /** v96: WiFi abhi chal raha hai kya — WifiManager se, na mile to null। */
+    private fun wifiEnabledNow(): Boolean? {
+        return try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE)
+                as? WifiManager ?: return null
+            wifi.isWifiEnabled
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * v96: Bluetooth tile ki taaza haalat — ped dobara
+     * padhkar tile dhoondho, phir isChecked। WiFi ke
+     * liye ye nahi chahiye (WifiManager seedha batata hai)।
+     */
+    private fun findNamedTileStateNow(kind: NamedTileKind): Boolean? {
+        val roots = systemUiRootsOnly(collectRoots())
+        var state: Boolean? = null
+        try {
+            for (root in roots) {
+                val tile = findNamedTile(root, kind) ?: continue
+                state = readTileState(tile)
+                    ?: readTileState(findClickableAncestor(tile) ?: tile)
+                if (state != null) break
+            }
+        } catch (t: Throwable) {
+            // Ped badal gaya: neeche wala raasta।
+        } finally {
+            roots.forEach { root ->
+                try {
+                    root.recycle()
+                } catch (t: Throwable) {
+                    // Pehle se saaf: kuch nahi karna.
+                }
+            }
+        }
+        return state
+    }
+
+    /**
+     * v96: dabane ke baad chahi hui haalat aane ka intezaar
+     * — WiFi WifiManager se, Bluetooth tile dobara padhkar।
+     * Radio ko waqt lagta hai, isliye [timeoutMs] tak
+     * padhte raho।
+     */
+    private fun waitForNamedTileState(
+        kind: NamedTileKind,
+        desired: Boolean,
+        timeoutMs: Long
+    ): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            val current = when (kind) {
+                NamedTileKind.WIFI -> wifiEnabledNow()
+                NamedTileKind.BLUETOOTH -> findNamedTileStateNow(kind)
+            }
+            if (current == desired) return true
+            SystemClock.sleep(300L)
+        }
+        return false
+    }
+
+    // ------------------------------------------------------------------
     // v57: SCREENSHOT-VISION fallback — chihn dekhkar data tile
     // ------------------------------------------------------------------
 
@@ -3449,6 +3826,29 @@ class JarvisAccessibilityService : AccessibilityService() {
                 return
             }
             service.flipMobileData(callback)
+        }
+
+        /**
+         * v96: kahin se bhi naam wale tile (WiFi / Bluetooth)
+         * ke toggle ki koshish: service band ho to turant
+         * [NamedTileResult.SERVICE_OFF], warna chalti hui
+         * service ko kaam saunp do (natija callback se,
+         * background thread par)।
+         */
+        fun toggleNamedTile(
+            context: Context,
+            kind: NamedTileKind,
+            turnOn: Boolean,
+            callback: (NamedTileResult) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                // Settings me ON ho tab bhi instance abhi bandha
+                // na ho to is pal kaam nahi ho payega.
+                callback(NamedTileResult.SERVICE_OFF)
+                return
+            }
+            service.toggleNamedTile(kind, turnOn, callback)
         }
 
         /**

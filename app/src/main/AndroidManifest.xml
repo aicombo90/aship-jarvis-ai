@@ -40,12 +40,30 @@
          "Unknown permission" kehta hai)। Grant reboot aur
          app update ke baad bhi rehta hai। -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <!-- v96: brightness SEEDHA badalne ke liye
+         (Settings.System.SCREEN_BRIGHTNESS) — ye "special
+         access" hai, runtime dialog se nahi milti; user
+         app se khule Settings screen me ek baar Allow karta
+         hai (code me canWrite() jaanch kar khud hi woh
+         screen kholta hai)। Na mile to brightness ka hukm
+         imaandaar manaahi dega — jhootha "badh gaya" nahi। -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <!-- Downloading the offline Vosk model; later also online AI -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v21 Phase 3: Gemini ko bulane se pehle net chalu hai ya
          nahi, ye ConnectivityManager se jaanchna hai — usi jaanch
          ke liye ye aam (normal) permission chahiye. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- v96: WiFi ki ASLI haalat (WifiManager.isWifiEnabled)
+         padhne ke liye — QS tile dabane ke baad "chal gaya ya
+         nahi" ki jaanch isse hoti hai (mobile data wali
+         READ_PHONE_STATE jaisi hi baat)। Ye aam (normal)
+         permission hai — install par mil jati hai, koi
+         runtime dialog nahi aata। SetWifiEnabled se WiFi
+         seedha badla NAHI jata (Android 10+ par third-party
+         app ke liye band hai) — toggle QS tile se hota hai,
+         ye sirf haalat padhne ke liye hai। -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Opening / pre-filling the alarm screen -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- v59: voice reminders — exact alarm mile to exact, warna

@@ -3327,6 +3327,23 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, eyesResult)
             return
         }
+        // v96: TOGGLE (WiFi / Bluetooth / brightness) + PASAND
+        // KI SITE — agent se pehle pakke raaste se। Bandhi
+        // koshish (QS tile latch / khoj) isi executor thread
+        // par chalti hai, main thread par nahi — screenshot
+        // wala hi niyam। Tile wala raasta hi sachha raasta
+        // hai (seedha system API Android 10+ par band hai);
+        // tile na mile to Settings panel kholo aur sach bolo।
+        if (commandEngine.isToggleCommand(text)) {
+            val toggleResult = commandEngine.runToggleCommand(text)
+            finishCommandResult(text, toggleResult)
+            return
+        }
+        if (commandEngine.isFavSiteCommand(text)) {
+            val favResult = commandEngine.runFavSiteCommand(text)
+            finishCommandResult(text, favResult)
+            return
+        }
         // v38: pakka scroll hukm bhi agent se pehle pakke
         // offline raaste se — "স্ক্রল ডাউন করো" bolte hi
         // Accessibility swipe karegi, mastishk ke chakkar
@@ -3386,7 +3403,9 @@ class JarvisWakeService : Service() {
             if (geminiBrainAllowed()) {
                 askAgentBrain(text, playQuery)
             } else {
-                runDirectYouTubePlay(text, playQuery)
+                runDirectYouTubePlay(
+                    text, playQuery, commandEngine.isBackgroundPlayRequest(text)
+                )
             }
             return
         }
@@ -3733,7 +3752,9 @@ class JarvisWakeService : Service() {
             // gaana seedhe auzaar se bajega, offline engine
             // use sirf kholkar nahi chhodega.
             if (playQueryFallback != null) {
-                runDirectYouTubePlay(text, playQueryFallback)
+                runDirectYouTubePlay(
+                    text, playQueryFallback, commandEngine.isBackgroundPlayRequest(text)
+                )
                 return
             }
             // v48: adda sirf MAYA ke session me (Hindi
@@ -3826,7 +3847,11 @@ class JarvisWakeService : Service() {
      * Bola jaane wala natija PlayIntent se user ki bhasha
      * me aur hamesha sachha.
      */
-    private fun runDirectYouTubePlay(text: String, query: String) {
+    private fun runDirectYouTubePlay(
+        text: String,
+        query: String,
+        backgroundNote: Boolean = false
+    ) {
         setStatus("Gaana chala rahi hoon...")
         updateNotification("Gaana chala rahi hoon...")
         Thread {
@@ -3843,9 +3868,16 @@ class JarvisWakeService : Service() {
             // bhasha me — suna hua text kisi bhi script
             // me raha ho, Maya Hindi hi bolegi, Tara
             // Bangla hi.
-            val line = PlayIntent.playOutcomeReply(
+            // v96: background me bajane ka hukm tha aur
+            // gaana chal gaya ho to imaandaar Premium wali
+            // line bhi jodo — bina Premium ke background
+            // playback hota hi nahi, ye baat chhupani nahi।
+            var line = PlayIntent.playOutcomeReply(
                 result, query, personaSpokenLang()
             )
+            if (backgroundNote && result.ok) {
+                line += " " + commandEngine.backgroundPlayNote(personaSpokenLang())
+            }
             executor.execute {
                 if (destroyed || state != State.REPLY) return@execute
                 setStatus("Seedha jawab mila — bol rahi hoon")
