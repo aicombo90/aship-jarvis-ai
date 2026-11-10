@@ -2,12 +2,14 @@ package com.aship.jarvis.commands
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
+import com.aship.jarvis.actions.OverlayLauncher
 import com.aship.jarvis.actions.PhoneActions
 import com.aship.jarvis.ai.DialectMap
 import com.aship.jarvis.ai.GeminiBrain
@@ -5332,6 +5334,583 @@ class CommandEngine(
         "setting" to AppTarget("Settings", TargetKind.SETTINGS)
     )
 
+    // ------------------------------------------------------------------
+    // v102: FULL VOICE HANDS-FREE OS MODE — home / app drawer /
+    // form bharna / app-scroll / mode admin।
+    //
+    // User (2026-11-10): "মোবাইলটাকে ফুল ভয়েস দিয়ে কন্ট্রোল
+    // করতে পারবে" — har kaam mukh se: home screen, app list,
+    // form bharna। Mode ON ho to wake service har command ke
+    // baad bina wake word ke chup-chaap agli khidki kholta hai
+    // (HandsFreeMode — 30 s khidki, wake service dekho)।
+    // Form kabhi khud submit nahi hota, password wale khane
+    // me kabhi nahi likha jata — dono pakke niyam hain।
+    // Bharna v67 wala hi raasta (clipboard + paste, phir
+    // set-text) — naya mechanism nahi।
+    // ------------------------------------------------------------------
+
+    /** v102: hands-free wala hukm hai kya — home / drawer / form / mode / app-scroll (sasta match, koi IO nahi)। */
+    fun isHandsFreeCommand(rawText: String): Boolean {
+        if (matchesAny(rawText, handsFreeHomeMarkers)) return true
+        if (matchesAny(rawText, handsFreeDrawerMarkers)) return true
+        if (matchesAny(rawText, handsFreeOnMarkers)) return true
+        if (matchesAny(rawText, handsFreeOffMarkers)) return true
+        if (matchesAny(rawText, handsFreeWhatMarkers)) return true
+        if (isAppScrollCommand(rawText)) return true
+        if (isFillCommand(rawText)) return true
+        return false
+    }
+
+    fun runHandsFreeCommand(rawText: String): CommandResult {
+        return handsFreeCommand(rawText)
+            ?: CommandResult(handsFreeWhatReply(PlayIntent.requestLanguage(rawText)), true)
+    }
+
+    /**
+     * v102: hands-free wala hukm — mode admin -> home -> drawer ->
+     * app-scroll -> form bharna। Na ho to null — bulane wala apna
+     * aam raasta aage badhaye। BANDHA call hai (fill / swipe latch):
+     * background thread se hi bulana (wake service ka executor, ya
+     * MainActivity ka background executor)।
+     */
+    private fun handsFreeCommand(rawText: String): CommandResult? {
+        if (!isHandsFreeCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        // 1. Mode admin — on/off/what.
+        if (matchesAny(rawText, handsFreeOnMarkers)) {
+            HandsFreeMode.setOn(context, true)
+            return CommandResult(handsFreeOnReply(lang), true)
+        }
+        if (matchesAny(rawText, handsFreeOffMarkers)) {
+            HandsFreeMode.setOn(context, false)
+            return CommandResult(handsFreeOffReply(lang), true)
+        }
+        if (matchesAny(rawText, handsFreeWhatMarkers)) {
+            return CommandResult(handsFreeWhatReply(lang), true)
+        }
+        // 2. Home screen.
+        if (matchesAny(rawText, handsFreeHomeMarkers)) return homeCommand(lang)
+        // 3. App drawer.
+        if (matchesAny(rawText, handsFreeDrawerMarkers)) return drawerCommand(lang)
+        // 4. App-scroll — home kholo, phir lagatar scroll (v92 wala hi)।
+        if (isAppScrollCommand(rawText)) return appScrollCommand(lang)
+        // 5. Form bharna.
+        if (isFillCommand(rawText)) return fillFieldCommand(rawText, lang)
+        return null
+    }
+
+    /** v102: home wala hukm — "হোম স্ক্রিনে যাও" / "go home"। */
+    private val handsFreeHomeMarkers = listOf(
+        // Bangla (script)
+        "হোম স্ক্রিনে যাও", "হোমে যাও", "হোম স্ক্রিন খোলো",
+        "হোম স্ক্রিনে ফিরে যাও", "হোমে ফিরে যাও",
+        // Hindi
+        "होम स्क्रीन पर जाओ", "होम पर जाओ", "होम स्क्रीन खोलो",
+        // English
+        "go home", "go to home screen", "open home screen"
+    )
+
+    /** v102: app drawer wala hukm — "অ্যাপস দেখাও" / "show apps"। */
+    private val handsFreeDrawerMarkers = listOf(
+        // Bangla (script)
+        "অ্যাপস দেখাও", "অ্যাপ ড্রয়ার খোলো", "অ্যাপ লিস্ট দেখাও",
+        "সব অ্যাপ দেখাও", "অ্যাপগুলো দেখাও",
+        // Hindi
+        "ऐप्स दिखाओ", "ऐप ड्रॉअर खोलो", "सब ऐप्स दिखाओ",
+        // English
+        "show all apps", "show apps", "open app drawer"
+    )
+
+    /** v102: hands-free mode chalane wala hukm। */
+    private val handsFreeOnMarkers = listOf(
+        "হ্যান্ডস-ফ্রি মোড চালু করো", "হ্যান্ডস ফ্রি মোড চালু করো",
+        "হ্যান্ডস-ফ্রি চালু করো", "হ্যান্ডস ফ্রি চালু করো",
+        "हैंड्स-फ्री मोड चालू करो", "हैंड्स-फ्री चालू करो",
+        "hands-free mode on", "hands free mode on",
+        "turn on hands-free", "hands-free on"
+    )
+
+    /** v102: hands-free mode band karne wala hukm। */
+    private val handsFreeOffMarkers = listOf(
+        "হ্যান্ডস-ফ্রি মোড বন্ধ করো", "হ্যান্ডস ফ্রি মোড বন্ধ করো",
+        "হ্যান্ডস-ফ্রি বন্ধ করো", "হ্যান্ডস ফ্রি বন্ধ করো",
+        "हैंड्स-फ्री मोड बंद करो", "हैंड्स-फ्री बंद करो",
+        "hands-free mode off", "hands free mode off",
+        "turn off hands-free", "hands-free off"
+    )
+
+    /** v102: hands-free mode kya hai — samjhane wala hukm। */
+    private val handsFreeWhatMarkers = listOf(
+        "হ্যান্ডস-ফ্রি মোড কী", "হ্যান্ডস ফ্রি মোড কী",
+        "হ্যান্ডস-ফ্রি কী", "হ্যান্ডস ফ্রি কী",
+        "हैंड्स-फ्री मोड क्या है", "हैंड्स-फ्री क्या है",
+        "what is hands-free", "what is hands-free mode"
+    )
+
+    /** v102: form bharne ki kriya — "লেখো" / "ভরো" / "লিখে দাও"। */
+    private val fillVerbMarkers = listOf(
+        "লেখো", "লিখে দাও", "ভরো", "ভরে দাও",
+        "लिखो", "लिख दो", "भरो", "भर दो",
+        "type", "fill", "write"
+    )
+
+    /**
+     * v102: form bharne ka sandarbh — bina inme se kisi ke
+     * akele "লেখো" kabhi form nahi (message wala raasta
+     * surakshit: "মেসেজ লেখো" me koi sandarbh shabd nahi)।
+     */
+    private val fillContextMarkers = listOf(
+        "এখানে", "ফর্মে", "ফরমে", "বাক্সে", "খানায়", "ঘরে",
+        "নাম", "ফোন নম্বর", "ফোন", "ইমেইল", "ই-মেইল",
+        "यहाँ", "फॉर्म में", "बॉक्स में",
+        "नाम", "फोन नंबर", "फोन", "ईमेल",
+        "here", "in this box", "in the form",
+        "name", "phone", "email"
+    )
+
+    /** v102: home kholne ka natija — jawab hamesha sachha (khula / kyun nahi khula)। */
+    private enum class HomeOutcome { OPENED, NO_HANDLER, OVERLAY_NEEDED, LOCKED, FAILED }
+
+    /**
+     * v102: home screen kholo — standard HOME intent (UPI wala
+     * hi raasta: pehle resolveActivity jaanch, phir background
+     * me OverlayLauncher, foreground me seedha startActivity)।
+     */
+    private fun openHome(): HomeOutcome {
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val resolved = try {
+            intent.resolveActivity(context.packageManager) != null
+        } catch (e: Exception) {
+            false
+        }
+        if (!resolved) return HomeOutcome.NO_HANDLER
+        if (fromBackgroundService) {
+            return when (OverlayLauncher.launch(context, intent)) {
+                LaunchOutcome.LAUNCHED -> HomeOutcome.OPENED
+                LaunchOutcome.PERMISSION_NEEDED -> HomeOutcome.OVERLAY_NEEDED
+                LaunchOutcome.LOCKED -> HomeOutcome.LOCKED
+                LaunchOutcome.NOT_AVAILABLE, LaunchOutcome.FAILED -> HomeOutcome.FAILED
+            }
+        }
+        return try {
+            context.startActivity(intent)
+            HomeOutcome.OPENED
+        } catch (e: Exception) {
+            HomeOutcome.FAILED
+        }
+    }
+
+    /** v102: home wala hukm — natije ke hisaab se sachha jawab। */
+    private fun homeCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        return CommandResult(homeOutcomeReply(openHome(), lang), true)
+    }
+
+    /** v102: home kholne ke natije ka jawab — user ki bhasha me। */
+    private fun homeOutcomeReply(
+        outcome: HomeOutcome,
+        lang: PlayIntent.SpokenLang
+    ): String = when (outcome) {
+        HomeOutcome.OPENED -> homeOpenedReply(lang)
+        HomeOutcome.OVERLAY_NEEDED -> homeOverlayReply(lang)
+        HomeOutcome.LOCKED -> homeLockedReply(lang)
+        HomeOutcome.NO_HANDLER, HomeOutcome.FAILED -> homeFailedReply(lang)
+    }
+
+    /**
+     * v102: app drawer kholo — drawer home par hi rehta hai,
+     * isliye pehle home kholo, phir upar swipe (launcher ka
+     * aam raasta — vivo samet zyada tar launcher me drawer
+     * upar swipe se hi khulta hai)। Swipe sirf gesture
+     * bhejta hai — khula ya nahi, ye nahi batata; isliye
+     * jawab kaam batata hai, natija nahi: "হোম খুলে উপরে
+     * সোয়াইপ করেছি"। Accessibility band ho to home + imaandaar
+     * hint (swipe khud karo)।
+     */
+    private fun drawerCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val home = openHome()
+        if (home != HomeOutcome.OPENED) {
+            return CommandResult(homeOutcomeReply(home, lang), true)
+        }
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(drawerSwipeHintReply(lang), true)
+        }
+        // Launcher ko saamne aane ka waqt do, phir upar swipe।
+        try {
+            Thread.sleep(DRAWER_SWIPE_WAIT_MS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota — swipe phir bhi aazmao।
+        }
+        return if (swipeUpLatch()) {
+            CommandResult(drawerOpenedReply(lang), true)
+        } else {
+            CommandResult(drawerSwipeHintReply(lang), true)
+        }
+    }
+
+    /** v102: poori-screen upar swipe — bandha intezaar (latch), sachha natija। */
+    private fun swipeUpLatch(): Boolean {
+        val latch = CountDownLatch(1)
+        var ok = false
+        try {
+            JarvisAccessibilityService.swipeScreen(
+                context,
+                JarvisAccessibilityService.SwipeDirection.UP
+            ) { result ->
+                ok = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        return try {
+            latch.await(HANDSFREE_FILL_WAIT_MS, TimeUnit.MILLISECONDS) && ok
+        } catch (e: InterruptedException) {
+            false
+        }
+    }
+
+    /** v102: app-scroll wala hukm — "অ্যাপস স্ক্রল করো" / "scroll apps" (aam "নিচে স্ক্রল করো" nahi — woh v92 ka hai)। */
+    private fun isAppScrollCommand(rawText: String): Boolean {
+        val lower = fixVowelSigns(rawText.lowercase(Locale.ROOT).trim())
+        return lower.contains("অ্যাপস স্ক্রল") || lower.contains("অ্যাপ স্ক্রল") ||
+            lower.contains("app scroll") || lower.contains("apps scroll") ||
+            lower.contains("ऐप्स स्क्रॉल") || lower.contains("ऐप स्क्रॉल")
+    }
+
+    /**
+     * v102: app list scroll karo — pehle home kholo (app list
+     * wahin rehti hai), phir v92 lagatar scroll (dheema, "থামো"
+     * tak)। Home na khule to bhi current screen par scroll
+     * chalega (jawab waisa hi sachha)।
+     */
+    private fun appScrollCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val homeOpened = openHome() == HomeOutcome.OPENED
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(scrollNeedsAccessibilityReply(lang), true)
+        }
+        startContinuousScroll(context, true)
+        saveContinuousScrollDiag("অ্যাপস স্ক্রল করো", true, "STARTED")
+        return CommandResult(appScrollReply(lang, homeOpened), true)
+    }
+
+    /** v102: form bharne wale khane ki kism — naam / phone / email (label khoj ke liye)। */
+    private enum class FillKind(val labels: List<String>) {
+        NAME(listOf("নাম", "name", "नाम")),
+        PHONE(listOf("ফোন", "phone", "फोन")),
+        EMAIL(listOf("ইমেইল", "email", "ईमेल"))
+    }
+
+    /** v102: form bharne wala hukm hai kya — kriya + sandarbh dono chahiye। */
+    private fun isFillCommand(rawText: String): Boolean {
+        if (!matchesAny(rawText, fillVerbMarkers)) return false
+        return matchesAny(rawText, fillContextMarkers)
+    }
+
+    /** v102: form bharne ka bandha roop — kism + likhai। */
+    private data class FillParts(val kind: FillKind?, val text: String)
+
+    /**
+     * v102: form bharne wale hukm se kism + likhai nikalo —
+     * token wala tareeka: kriya + sandarbh wale token hatao,
+     * pehla bacha token (ya pehle do) kism hai to use bhi
+     * hatao, baaki likhai hai। Likhai RAW roop me rehti hai
+     * (normalize wala shabd-naksha nahi — naam jaisa bola
+     * waisa hi likha jaye)। Phone ki kism me Bangla/Devanagari
+     * ank Latin me badalte hain।
+     */
+    private fun extractFillParts(rawText: String): FillParts? {
+        var text = fixVowelSigns(rawText.lowercase(Locale.ROOT).trim())
+        if (text.isEmpty()) return null
+        // Multi-word wale sandarbh pehle hatao (token todne se pehle)।
+        for (phrase in fillStripPhrases) {
+            text = text.replace(phrase, " ")
+        }
+        val tokens = text.split(Regex("\\s+"))
+            .filter { it.isNotEmpty() }
+            .toMutableList()
+        // Kriya + sandarbh wale token hatao (kahin bhi hon)।
+        tokens.removeAll { it in fillStripTokens }
+        if (tokens.isEmpty()) return null
+        // Pehla token (ya pehle do) kism hai kya?
+        var kind: FillKind? = null
+        if (tokens.size >= 2 &&
+            ((tokens[0] == "ফোন" && tokens[1] == "নম্বর") ||
+                (tokens[0] == "phone" && tokens[1] == "number") ||
+                (tokens[0] == "फोन" && tokens[1] == "नंबर"))
+        ) {
+            kind = FillKind.PHONE
+            tokens.removeAt(0)
+            tokens.removeAt(0)
+        } else {
+            kind = when (tokens[0]) {
+                "নাম", "name", "नाम" -> FillKind.NAME
+                "ফোন", "phone", "फोन" -> FillKind.PHONE
+                "ইমেইল", "ই-মেইল", "email", "ईमेल" -> FillKind.EMAIL
+                else -> null
+            }
+            if (kind != null) tokens.removeAt(0)
+        }
+        val joined = tokens.joinToString(" ").trim()
+        if (joined.isEmpty()) return null
+        val finalText = if (kind == FillKind.PHONE) {
+            UpiCommands.normalizeDigits(joined)
+        } else {
+            joined
+        }
+        return FillParts(kind, finalText)
+    }
+
+    /** v102: multi-word wale sandarbh (token todne se pehle hataye jate hain)। */
+    private val fillStripPhrases = listOf(
+        "ফোন নম্বর", "phone number", "फोन नंबर",
+        "in this box", "in the form", "फॉर्म में", "बॉक्स में"
+    )
+
+    /** v102: ek-token wale kriya + sandarbh shabd (likhai se hataye jate hain)। */
+    private val fillStripTokens = setOf(
+        // Kriya
+        "লেখো", "লেখ", "লিখে", "দাও", "ভরো", "ভরে",
+        "लिखो", "लिख", "दो", "भरो", "भर",
+        "type", "fill", "write",
+        // Sandarbh
+        "এখানে", "ফর্মে", "ফরমে", "বাক্সে", "খানায়", "ঘরে",
+        "here", "यहाँ", "फॉर्म", "बॉक्स"
+    )
+
+    /**
+     * v102: form bharo — naam wala khana ho to label se
+     * dhoondho (kism ke labels, kram se), warna focus wale
+     * khane me bharo। Password wala khana kabhi nahi,
+     * khana na mile to imaandaar "পেলাম না" — andaze se
+     * kisi aur khane me nahi likha jata। Submit kabhi nahi
+     * hota — bharna hi kaam hai, submit user khud karega।
+     */
+    private fun fillFieldCommand(
+        rawText: String,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val parts = extractFillParts(rawText)
+            ?: return CommandResult(fillWhatReply(lang), true)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            return CommandResult(fillNeedsAccessibilityReply(lang), true)
+        }
+        val result = fillBlocking(parts.kind, parts.text)
+        return when (result) {
+            JarvisAccessibilityService.FieldFillResult.PASTED,
+            JarvisAccessibilityService.FieldFillResult.TYPED ->
+                CommandResult(fillDoneReply(lang), true)
+            JarvisAccessibilityService.FieldFillResult.NO_FIELD ->
+                CommandResult(fillNoFieldReply(lang, parts.kind), true)
+            JarvisAccessibilityService.FieldFillResult.PASSWORD_REFUSED ->
+                CommandResult(fillPasswordRefusedReply(lang), true)
+            JarvisAccessibilityService.FieldFillResult.FAILED ->
+                CommandResult(fillFailedReply(lang), true)
+        }
+    }
+
+    /**
+     * v102: form bharne ka bandha intezaar (latch) — naam
+     * wala khana ho to kism ke labels kram se aazmao (sirf
+     * NO_FIELD par agla label — khana mil gaya par bharna
+     * asafal raha to doosre khane me nahi likha jata)।
+     */
+    private fun fillBlocking(
+        kind: FillKind?,
+        text: String
+    ): JarvisAccessibilityService.FieldFillResult {
+        val labels = kind?.labels ?: emptyList()
+        for (label in labels) {
+            val result = fillByLabelBlocking(label, text)
+            if (result != JarvisAccessibilityService.FieldFillResult.NO_FIELD) {
+                return result
+            }
+        }
+        if (labels.isNotEmpty()) {
+            return JarvisAccessibilityService.FieldFillResult.NO_FIELD
+        }
+        return fillFocusedBlocking(text)
+    }
+
+    /** v102: ek label se bharne ka bandha intezaar (latch)। */
+    private fun fillByLabelBlocking(
+        label: String,
+        text: String
+    ): JarvisAccessibilityService.FieldFillResult {
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.FieldFillResult =
+            JarvisAccessibilityService.FieldFillResult.FAILED
+        try {
+            JarvisAccessibilityService.fillFieldByLabel(context, label, text) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return JarvisAccessibilityService.FieldFillResult.FAILED
+        }
+        val completed = try {
+            latch.await(HANDSFREE_FILL_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed) return JarvisAccessibilityService.FieldFillResult.FAILED
+        return outcome
+    }
+
+    /** v102: focus wale khane me bharne ka bandha intezaar (latch)। */
+    private fun fillFocusedBlocking(
+        text: String
+    ): JarvisAccessibilityService.FieldFillResult {
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.FieldFillResult =
+            JarvisAccessibilityService.FieldFillResult.FAILED
+        try {
+            JarvisAccessibilityService.fillFocusedField(context, text) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return JarvisAccessibilityService.FieldFillResult.FAILED
+        }
+        val completed = try {
+            latch.await(HANDSFREE_FILL_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed) return JarvisAccessibilityService.FieldFillResult.FAILED
+        return outcome
+    }
+
+    /** v102: sirf bikhre swar-chinh jodo (ে+া -> ো) — [normalize] wala shabd-naksha nahi, taaki likhai jaisi boli waisi hi rahe। */
+    private fun fixVowelSigns(input: String): String =
+        input.replace("\u09C7\u09BE", "\u09CB").replace("\u09C7\u09D7", "\u09CC")
+
+    // ------------------------------------------------------------------
+    // v102: HANDS-FREE — jawab (user ki bhasha me)
+    // ------------------------------------------------------------------
+
+    private fun homeOpenedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হোম স্ক্রিনে চলে গেছি।"
+        PlayIntent.SpokenLang.HINDI -> "होम स्क्रीन पर आ गया।"
+        PlayIntent.SpokenLang.ENGLISH -> "On the home screen."
+    }
+
+    private fun homeFailedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হোম স্ক্রিন খুলতে পারলাম না।"
+        PlayIntent.SpokenLang.HINDI -> "होम स्क्रीन नहीं खुल पाई।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't open the home screen."
+    }
+
+    private fun homeOverlayReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হোম স্ক্রিন খুলতে 'Display over other apps' অনুমতি লাগবে — অ্যাপে গিয়ে অনুমতি দিন।"
+        PlayIntent.SpokenLang.HINDI -> "होम स्क्रीन खोलने के लिए 'Display over other apps' की अनुमति चाहिए — ऐप में जाकर अनुमति दीजिए।"
+        PlayIntent.SpokenLang.ENGLISH -> "I need the 'Display over other apps' permission to open the home screen from the background."
+    }
+
+    private fun homeLockedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ফোন লক আছে — আনলক করে আবার বলো।"
+        PlayIntent.SpokenLang.HINDI -> "फ़ोन लॉक है — अनलॉक करके फिर बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "The phone is locked — unlock it and ask again."
+    }
+
+    private fun drawerOpenedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "অ্যাপস দেখাচ্ছি — হোম স্ক্রিন খুলে উপরে সোয়াইপ করেছি।"
+        PlayIntent.SpokenLang.HINDI -> "ऐप्स दिखा रही हूँ — होम स्क्रीन खोलकर ऊपर स्वाइप किया।"
+        PlayIntent.SpokenLang.ENGLISH -> "Showing your apps — I opened the home screen and swiped up."
+    }
+
+    private fun drawerSwipeHintReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "অ্যাপ ড্রয়ার খুলতে পারলাম না — হোম স্ক্রিন থেকে উপরে সোয়াইপ করলে অ্যাপগুলো দেখা যাবে।"
+        PlayIntent.SpokenLang.HINDI -> "ऐप ड्रॉअर नहीं खुल पाया — होम स्क्रीन से ऊपर स्वाइप करने पर ऐप्स दिखेंगे।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't open the app drawer — swipe up from the home screen to see your apps."
+    }
+
+    private fun appScrollReply(lang: PlayIntent.SpokenLang, homeOpened: Boolean): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            if (homeOpened) "অ্যাপ লিস্ট স্ক্রল করছি — থামাতে 'থামো' বলো।"
+            else "এই স্ক্রিনটা স্ক্রল করছি — থামাতে 'থামো' বলো।"
+        PlayIntent.SpokenLang.HINDI ->
+            if (homeOpened) "ऐप लिस्ट स्क्रॉल कर रही हूँ — रोकने के लिए 'रुको' बोलो।"
+            else "इस स्क्रीन को स्क्रॉल कर रही हूँ — रोकने के लिए 'रुको' बोलो।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            if (homeOpened) "Scrolling the app list — say 'stop' to stop."
+            else "Scrolling this screen — say 'stop' to stop."
+    }
+
+    private fun fillDoneReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "লিখে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "लिख दिया।"
+        PlayIntent.SpokenLang.ENGLISH -> "Written."
+    }
+
+    private fun fillWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কী লিখবো? লেখাটা বলো — যেমন 'এখানে রাহুল লেখো'।"
+        PlayIntent.SpokenLang.HINDI -> "क्या लिखूँ? लिखाई बोलो — जैसे 'यहाँ राहुल लिखो'।"
+        PlayIntent.SpokenLang.ENGLISH -> "What should I write? Tell me the text — like 'write Rahul here'."
+    }
+
+    private fun fillNoFieldReply(
+        lang: PlayIntent.SpokenLang,
+        kind: FillKind?
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> when (kind) {
+            FillKind.NAME -> "নাম লেখার বাক্সটা পেলাম না — বাক্সটায় ট্যাপ করে আবার বলো।"
+            FillKind.PHONE -> "ফোন নম্বর লেখার বাক্সটা পেলাম না — বাক্সটায় ট্যাপ করে আবার বলো।"
+            FillKind.EMAIL -> "ইমেইল লেখার বাক্সটা পেলাম না — বাক্সটায় ট্যাপ করে আবার বলো।"
+            null -> "কোনো লেখার বাক্স খোলা পেলাম না — বাক্সটায় ট্যাপ করে আবার বলো।"
+        }
+        PlayIntent.SpokenLang.HINDI -> when (kind) {
+            FillKind.NAME -> "नाम लिखने वाला बॉक्स नहीं मिला — बॉक्स पर टैप करके फिर बोलो।"
+            FillKind.PHONE -> "फ़ोन नंबर लिखने वाला बॉक्स नहीं मिला — बॉक्स पर टैप करके फिर बोलो।"
+            FillKind.EMAIL -> "ईमेल लिखने वाला बॉक्स नहीं मिला — बॉक्स पर टैप करके फिर बोलो।"
+            null -> "कोई लिखने वाला बॉक्स खुला नहीं मिला — बॉक्स पर टैप करके फिर बोलो।"
+        }
+        PlayIntent.SpokenLang.ENGLISH -> when (kind) {
+            FillKind.NAME -> "I couldn't find the name box — tap the box and ask again."
+            FillKind.PHONE -> "I couldn't find the phone number box — tap the box and ask again."
+            FillKind.EMAIL -> "I couldn't find the email box — tap the box and ask again."
+            null -> "I couldn't find a text box — tap the box and ask again."
+        }
+    }
+
+    private fun fillPasswordRefusedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পাসওয়ার্ডের বাক্সে আমি লিখবো না — ওটা তুমি নিজে লেখো।"
+        PlayIntent.SpokenLang.HINDI -> "पासवर्ड वाले बॉक्स में मैं नहीं लिखूँगी — वो तुम खुद लिखो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I won't write in a password box — please type that yourself."
+    }
+
+    private fun fillFailedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "লিখতে পারলাম না — বাক্সটা আবার ট্যাপ করে বলো।"
+        PlayIntent.SpokenLang.HINDI -> "लिख नहीं पाई — बॉक्स पर फिर टैप करके बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't write it — tap the box again and ask."
+    }
+
+    private fun fillNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ফর্ম ভরতে Accessibility চালু লাগবে — সেটিংসে গিয়ে চালু করো।"
+        PlayIntent.SpokenLang.HINDI -> "फॉर्म भरने के लिए Accessibility चालू चाहिए — सेटिंग्स में जाकर चालू करो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Filling a form needs Accessibility turned on — enable it in Settings."
+    }
+
+    private fun handsFreeOnReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হ্যান্ডস-ফ্রি মোড চালু — এখন ওয়েক ওয়ার্ড ছাড়াই কথা বলতে পারবে, ৩০ সেকেন্ড চুপ থাকলে আবার ওয়েক ওয়ার্ড লাগবে।"
+        PlayIntent.SpokenLang.HINDI -> "हैंड्स-फ्री मोड चालू — अब बिना वेक वर्ड के बोल सकते हो, 30 सेकंड चुप रहे तो फिर वेक वर्ड चाहिए।"
+        PlayIntent.SpokenLang.ENGLISH -> "Hands-free mode is on — you can keep talking without the wake word; after 30 seconds of silence you'll need the wake word again."
+    }
+
+    private fun handsFreeOffReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হ্যান্ডস-ফ্রি মোড বন্ধ — এখন প্রতিবার ওয়েক ওয়ার্ড বলতে হবে।"
+        PlayIntent.SpokenLang.HINDI -> "हैंड्स-फ्री मोड बंद — अब हर बार वेक वर्ड बोलना होगा।"
+        PlayIntent.SpokenLang.ENGLISH -> "Hands-free mode is off — you'll need the wake word each time now."
+    }
+
+    private fun handsFreeWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "হ্যান্ডস-ফ্রি মোডে মায়া ৩০ সেকেন্ড ধরে ওয়েক ওয়ার্ড ছাড়াই শুনতে থাকে — হোম স্ক্রিন, অ্যাপ স্ক্রল, ফর্ম ভরা, সব মুখে বলেই করা যায়। চালু করতে 'হ্যান্ডস-ফ্রি মোড চালু করো' বলো।"
+        PlayIntent.SpokenLang.HINDI -> "हैंड्स-फ्री मोड में माया 30 सेकंड तक बिना वेक वर्ड के सुनती रहती है — होम स्क्रीन, ऐप स्क्रॉल, फॉर्म भरना, सब मुँह से बोलकर किया जा सकता है। चालू करने के लिए 'हैंड्स-फ्री मोड चालू करो' बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "In hands-free mode Maya keeps listening for 30 seconds without the wake word — home screen, app scrolling, filling forms, all by voice. Say 'turn on hands-free mode' to enable it."
+    }
+
     // v94: companion public — teardown() calls
     // CommandEngine.stopContinuousScroll() (v92) and the
     // private companion made it uncompilable (CI v92:
@@ -5404,6 +5983,16 @@ class CommandEngine(
          * rahi hoti hai।
          */
         const val DATA_COMMAND_WAIT_MS = 60_000L
+
+        /**
+         * v102: form bharne (fill) ka bandha intezaar — paste +
+         * jaanch aam taur par 1-2 s me ho jata hai; 10 s kaafi hai
+         * (60 s wala data-tile wala intezaar yahan nahi chahiye)।
+         */
+        const val HANDSFREE_FILL_WAIT_MS = 10_000L
+
+        /** v102: app drawer kholne par launcher ko saamne aane ka waqt (home intent ke baad swipe se pehle)। */
+        const val DRAWER_SWIPE_WAIT_MS = 700L
 
         /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
         const val SCROLL_COMMAND_WAIT_MS = 5_000L

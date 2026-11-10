@@ -63,6 +63,7 @@ import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.ContactCallCommands
 import com.aship.jarvis.commands.DataButtonLearner
 import com.aship.jarvis.commands.DialectCommands
+import com.aship.jarvis.commands.HandsFreeMode
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.HistoryCommands
 import com.aship.jarvis.commands.ImageIntent
@@ -363,6 +364,12 @@ class MainActivity : Activity() {
 
     private var engine: SpeechEngine? = null
     private var listening = false
+
+    // v102: HANDS-FREE — is turn me dobara sunna ek baar
+    // hi shuru ho (armHandsFreeRelisten wala ek-baar
+    // callback); har naye suna hua hukm par taaza hota
+    // hai (onFinalResult dekho)।
+    private var handsFreeRelistenDone = false
 
     // System recognizer "start" par hi fail ho jaye (unavailable /
     // mic start error) to AUTO/ONLINE me ek baar Vosk par girne ke
@@ -689,6 +696,8 @@ class MainActivity : Activity() {
         refreshGeminiKeyUi()
         // v97: OFFLINE MODE indicator bhi turant taza ho।
         refreshOfflineIndicator()
+        // v102: HANDS-FREE MODE indicator bhi turant taza ho।
+        refreshHandsFreeIndicator()
         // v100: PROACTIVE PROPOSAL — routine ka samay
         // ho to app kholte hi ek baar prastav bolo
         // (din me ek baar per routine); TTS chal raha
@@ -1783,6 +1792,14 @@ class MainActivity : Activity() {
                 }
                 return
             }
+            // v102: hands-free khidki ka aakhri suna — saamne
+            // wali screen par bhi har asal hukm 30 s wali
+            // khidki ko taaza karta hai; is turn ki dobara
+            // sunne wali koshish bhi yahin se shuru (jawab
+            // ki boli khatm hote hi bina tap ke phir suno)।
+            HandsFreeMode.noteHeard(this@MainActivity)
+            handsFreeRelistenDone = false
+            armHandsFreeRelisten()
             // Session khatm ho gaya hai. Kuch flows me iske baad
             // onListeningStateChanged(false) aata hi nahi — wahi
             // v1.5 wala atkav tha — isliye mic yahin se wake
@@ -3367,6 +3384,14 @@ class MainActivity : Activity() {
             runDirectClipboard(commandText)
             return
         }
+        // v102: FULL VOICE HANDS-FREE OS MODE — home /
+        // drawer / form bharna / app-scroll / mode admin।
+        // Bandha kaam background executor par
+        // (runDirectClipboard wala hi raasta)।
+        if (commandEngine.isHandsFreeCommand(commandText)) {
+            runDirectHandsFree(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -3655,6 +3680,55 @@ class MainActivity : Activity() {
             if (offline) android.graphics.Color.rgb(252, 165, 165)
             else android.graphics.Color.rgb(134, 239, 172)
         )
+    }
+
+    /**
+     * v102: HANDS-FREE MODE indicator — "হ্যান্ডস-ফ্রি চালু"
+     * (neela) ya "হ্যান্ডস-ফ্রি বন্ধ" (dhundla)। Tag se
+     * milta hai (refreshOfflineIndicator wala hi niyam);
+     * na mile to chup (crash nahi)। onResume + har 2 s
+     * wale refresh + mode badalne par taza hota hai।
+     */
+    private fun refreshHandsFreeIndicator() {
+        val badge = window.decorView.findViewWithTag<TextView>("handsFreeBadge") ?: return
+        val on = HandsFreeMode.isOn(this)
+        badge.text = if (on) "🎙️ হ্যান্ডস-ফ্রি চালু" else "🎙️ হ্যান্ডস-ফ্রি বন্ধ"
+        badge.setTextColor(
+            if (on) android.graphics.Color.rgb(147, 197, 253)
+            else android.graphics.Color.rgb(148, 163, 184)
+        )
+    }
+
+    /**
+     * v102: HANDS-FREE — saamne wali screen par jawab ki
+     * boli khatm hote hi bina tap ke phir suno (ek-baar
+     * wala callback — [speaker.onUtteranceFinished] wala
+     * hi save/restore dhang, ScreenConfirm wala hi
+     * tareeka)। Jawab ki boli hi na ho to callback
+     * kabhi nahi aayega aur phir sunna nahi hoga —
+     * woh haal surakshit hai (user tap karke bol
+     * sakta hai, wake word bhi hai)। Saare jaal
+     * ek saath: mode ON, screen saamne, mic
+     * khaali, boli khatm, 30 s khidki abhi khuli।
+     */
+    private fun armHandsFreeRelisten() {
+        if (!HandsFreeMode.isOn(this)) return
+        if (handsFreeRelistenDone) return
+        val previous = speaker.onUtteranceFinished
+        speaker.onUtteranceFinished = {
+            speaker.onUtteranceFinished = previous
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                if (!HandsFreeMode.isOn(this@MainActivity)) return@post
+                if (handsFreeRelistenDone) return@post
+                if (!activityInForeground) return@post
+                if (listening) return@post
+                if (speaker.isSpeakingNow) return@post
+                if (HandsFreeMode.windowExpired(this@MainActivity)) return@post
+                handsFreeRelistenDone = true
+                startListening()
+            }
+        }
     }
 
     /**
@@ -4564,6 +4638,32 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * v102: bina mastishk ke seedha hands-free wala kaam —
+     * runDirectClipboard wala hi raasta: koshish background
+     * executor par (home intent / swipe / fill latch),
+     * natija mainHandler se wapas aakar bola/dikhaya
+     * jata hai। Mode on/off bhi yahin se badalta hai —
+     * isliye badge bhi yahin taaza hota hai।
+     */
+    private fun runDirectHandsFree(text: String) {
+        showResponse("Maya: দেখছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runHandsFreeCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("হ্যান্ডস-ফ্রি কাজটা করতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+                refreshHandsFreeIndicator()
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Offline model download
     // ------------------------------------------------------------------
@@ -4694,6 +4794,8 @@ class MainActivity : Activity() {
             refreshOrbPowerState()
             // v97: OFFLINE MODE indicator bhi har 2 s taaza।
             refreshOfflineIndicator()
+            // v102: HANDS-FREE MODE indicator bhi har 2 s taaza।
+            refreshHandsFreeIndicator()
             mainHandler.postDelayed(this, WAKE_REFRESH_MS)
         }
     }

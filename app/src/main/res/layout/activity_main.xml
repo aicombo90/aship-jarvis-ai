@@ -216,6 +216,22 @@
                     android:textColor="#86EFAC"
                     android:textSize="12sp" />
 
+                <!-- v102: HANDS-FREE MODE indicator — mode chal
+                     raha ho to "🎙️ হ্যান্ডস-ফ্রি চালু" (neela),
+                     band ho to "🎙️ হ্যান্ডস-ফ্রি বন্ধ" (dhundla)।
+                     Tag se milta hai (offlineBadge wala hi
+                     niyam); na mile to chup (crash nahi)। -->
+                <TextView
+                    android:id="@+id/handsFreeBadge"
+                    android:tag="handsFreeBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="4dp"
+                    android:text="🎙️ হ্যান্ডস-ফ্রি বন্ধ"
+                    android:textColor="#94A3B8"
+                    android:textSize="12sp" />
+
                 <TextView
                     android:id="@+id/speakHintText"
                     android:layout_width="wrap_content"

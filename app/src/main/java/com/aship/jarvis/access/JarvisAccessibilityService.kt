@@ -953,6 +953,17 @@ class JarvisAccessibilityService : AccessibilityService() {
     enum class PasteResult { PASTED, TYPED, FAILED }
 
     /**
+     * v102: form bharne ka sachha natija — PASTED
+     * (clipboard + ACTION_PASTE se chipka), TYPED
+     * (paste nahi baitha, ACTION_SET_TEXT se bhara),
+     * FAILED (dono raaste nahi chale), NO_FIELD
+     * (koi likhne wala khana mila hi nahi),
+     * PASSWORD_REFUSED (password wala khana — Maya
+     * usme kabhi nahi likhti)।
+     */
+    enum class FieldFillResult { PASTED, TYPED, FAILED, NO_FIELD, PASSWORD_REFUSED }
+
+    /**
      * v37: is pal focus wale (ya pehle dikhai dene wale
      * editable) khane me [text] likho — ACTION_SET_TEXT,
      * woh na chale to clipboard + paste wala raasta.
@@ -1042,6 +1053,30 @@ class JarvisAccessibilityService : AccessibilityService() {
         callback: (PasteResult) -> Unit
     ) {
         runOnWorker(callback, PasteResult.FAILED) { runPasteIntoText(label, text) }
+    }
+
+    /**
+     * v102: is pal focus wale (ya pehle dikhai dene
+     * wale editable) khane me [text] bharo — password
+     * wala khana ho to imaandaar manaahi (PASSWORD_REFUSED),
+     * khana hi na mile to NO_FIELD। Bharna [pasteIntoNode]
+     * wala hi v67 raasta (clipboard + paste, phir set-text)।
+     */
+    fun fillFocusedField(text: String, callback: (FieldFillResult) -> Unit) {
+        runOnWorker(callback, FieldFillResult.FAILED) { runFillFocusedField(text) }
+    }
+
+    /**
+     * v102: NAAM wale khane me [text] bharo — khana
+     * [findFieldByLabel] se (uske naam/hint se, warna
+     * paas wale label se), password ho to manaahi।
+     */
+    fun fillFieldByLabel(
+        label: String,
+        text: String,
+        callback: (FieldFillResult) -> Unit
+    ) {
+        runOnWorker(callback, FieldFillResult.FAILED) { runFillFieldByLabel(label, text) }
     }
 
     /**
@@ -1652,6 +1687,42 @@ class JarvisAccessibilityService : AccessibilityService() {
     private fun runPasteIntoText(labelRaw: String, text: String): PasteResult {
         val field = findFieldByLabel(labelRaw) ?: return PasteResult.FAILED
         return pasteIntoNode(field, text)
+    }
+
+    /**
+     * v102: focus wala khana bharo — sirf worker thread se।
+     * Password wala khana kabhi nahi bhara jata (Maya
+     * password nahi likhti); khana na mile to NO_FIELD।
+     */
+    private fun runFillFocusedField(text: String): FieldFillResult {
+        val node = findEditableField() ?: return FieldFillResult.NO_FIELD
+        if (isPasswordField(node)) return FieldFillResult.PASSWORD_REFUSED
+        return fillNode(node, text)
+    }
+
+    /** v102: naam wala khana bharo — sirf worker thread se (password manaahi ke saath)। */
+    private fun runFillFieldByLabel(labelRaw: String, text: String): FieldFillResult {
+        val field = findFieldByLabel(labelRaw) ?: return FieldFillResult.NO_FIELD
+        if (isPasswordField(field)) return FieldFillResult.PASSWORD_REFUSED
+        return fillNode(field, text)
+    }
+
+    /** v102: password wala khana hai kya — isPassword hi pehchan hai (API 18+)। */
+    private fun isPasswordField(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            node.isPassword
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** v102: ek khane me bharo — [pasteIntoNode] wala hi v67 raasta, natija usi ka। */
+    private fun fillNode(node: AccessibilityNodeInfo, text: String): FieldFillResult {
+        return when (pasteIntoNode(node, text)) {
+            PasteResult.PASTED -> FieldFillResult.PASTED
+            PasteResult.TYPED -> FieldFillResult.TYPED
+            PasteResult.FAILED -> FieldFillResult.FAILED
+        }
     }
 
     /**
@@ -4145,6 +4216,35 @@ class JarvisAccessibilityService : AccessibilityService() {
                 return
             }
             service.pasteIntoScreenText(label, text, callback)
+        }
+
+        /** v102: kahin se bhi focus wale khane me bharo — service band ho to turant FAILED. */
+        fun fillFocusedField(
+            context: Context,
+            text: String,
+            callback: (FieldFillResult) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(FieldFillResult.FAILED)
+                return
+            }
+            service.fillFocusedField(text, callback)
+        }
+
+        /** v102: kahin se bhi naam wale khane me bharo — service band ho to turant FAILED. */
+        fun fillFieldByLabel(
+            context: Context,
+            label: String,
+            text: String,
+            callback: (FieldFillResult) -> Unit
+        ) {
+            val service = instance
+            if (service == null) {
+                callback(FieldFillResult.FAILED)
+                return
+            }
+            service.fillFieldByLabel(label, text, callback)
         }
 
         /** v45: kahin se bhi focus wale khane par IME enter — service band ho to turant false. */

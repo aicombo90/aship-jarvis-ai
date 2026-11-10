@@ -51,6 +51,7 @@ import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
 import com.aship.jarvis.commands.DialectCommands
+import com.aship.jarvis.commands.HandsFreeMode
 import com.aship.jarvis.commands.HearingGate
 import com.aship.jarvis.commands.ImageIntent
 import com.aship.jarvis.commands.LanguageCommands
@@ -1225,6 +1226,9 @@ class JarvisWakeService : Service() {
         stopWakeSession()
         // A real wake proves listening works: clear the error counter.
         wakeErrorCount = 0
+        // v102: hands-free khidki ka aakhri suna bhi yahin
+        // taaza — wake sunna hi matlab user bol raha hai।
+        HandsFreeMode.noteHeard(applicationContext)
         // v12: har naye wake ke saath command ko ek taaza retry mile.
         commandRetryCount = 0
         ackEndsConversation = false
@@ -1418,6 +1422,26 @@ class JarvisWakeService : Service() {
             speaker.speak(question)
             armAckFallback()
             orbOverlay.setReply(question)
+            armSessionIdle()
+            return
+        }
+        // v102: HANDS-FREE MODE — "আর কিছু?" bina bole chup-chaap
+        // agli khidki kholo (wake word nahi chahiye); 30 s khidki
+        // tootti hai to session apne aap band (armSessionIdle
+        // wala raasta — neeche wala "আর কিছু?" nahi bola jata)।
+        // Prastav wala block upar pehle aata hai — due prastav
+        // ho to wohi poochha jayega, chup khidki nahi।
+        if (HandsFreeMode.isOn(applicationContext)) {
+            sessionAwaitingMore = true
+            state = State.ACK
+            ackEndsConversation = false
+            setStatus("Session chal raha hai — hands-free sun rahi hoon")
+            updateNotification(
+                "Session chal raha hai — boliye, band karne ke liye " +
+                    "'সিস্টেম শাটডাউন' boliye"
+            )
+            lightScreenOnWake()
+            startCommandSession()
             armSessionIdle()
             return
         }
@@ -1740,7 +1764,16 @@ class JarvisWakeService : Service() {
 
     private fun armSessionIdle() {
         mainHandler.removeCallbacks(sessionIdleRunnable)
-        mainHandler.postDelayed(sessionIdleRunnable, SESSION_IDLE_MS)
+        // v102: hands-free ON ho to idle ghadi sirf 30 s ki
+        // (WINDOW_MS) — uske baad session band aur wake-word
+        // wala sunna phir chalu; band ho to purani 15-minute
+        // wali ghadi (SESSION_IDLE_MS)।
+        val idleMs = if (HandsFreeMode.isOn(applicationContext)) {
+            HandsFreeMode.WINDOW_MS
+        } else {
+            SESSION_IDLE_MS
+        }
+        mainHandler.postDelayed(sessionIdleRunnable, idleMs)
     }
 
     private fun disarmSessionIdle() {
@@ -1766,6 +1799,15 @@ class JarvisWakeService : Service() {
     }
 
     private fun reopenSessionWindow() {
+        // v102: hands-free ON ho aur 30 s khidki beet gayi
+        // ho to khidki phir mat kholo — session idle ghadi
+        // se band hoga aur wake-word wala sunna phir chalu
+        // hoga। Khidki abhi khuli ho to pehle jaisa hi।
+        if (HandsFreeMode.isOn(applicationContext) &&
+            HandsFreeMode.windowExpired(applicationContext)
+        ) {
+            return
+        }
         // v51 (item 6b): lagatar khaali khidkiyon par
         // antar peeche hat-ta hai — pehli 3 par 600 ms,
         // phir 3 s, phir 8 s। Har khaali khidki ek
@@ -3016,6 +3058,9 @@ class JarvisWakeService : Service() {
         // khidkiyon wala peeche-hatne ka hisaab taaza
         // (agli khaali khidki phir 600 ms se shuru)।
         sessionEmptyReopenCount = 0
+        // v102: hands-free khidki ka aakhri suna — har asal
+        // hukm 30 s wali khidki ko phir se taaza karta hai।
+        HandsFreeMode.noteHeard(applicationContext)
         // v49: ye khidki "আর কিছু?" wale prompt ke
         // turant baad wali thi kya — sirf usi haal me
         // saaf "না" session band karega (neeche
@@ -3481,6 +3526,16 @@ class JarvisWakeService : Service() {
         if (commandEngine.isClipboardCommand(text)) {
             val clipboardResult = commandEngine.runClipboardCommand(text)
             finishCommandResult(text, clipboardResult)
+            return
+        }
+        // v102: FULL VOICE HANDS-FREE OS MODE — home /
+        // drawer / form bharna / app-scroll / mode admin।
+        // Agent se pehle pakke raaste se — home intent +
+        // swipe + fill bandhe kaam hain, isi executor
+        // thread par।
+        if (commandEngine.isHandsFreeCommand(text)) {
+            val handsFreeResult = commandEngine.runHandsFreeCommand(text)
+            finishCommandResult(text, handsFreeResult)
             return
         }
         // v38: pakka scroll hukm bhi agent se pehle pakke
