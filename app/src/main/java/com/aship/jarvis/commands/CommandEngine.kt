@@ -2696,7 +2696,13 @@ class CommandEngine(
         "setting" to AppTarget("Settings", TargetKind.SETTINGS)
     )
 
-    private companion object {
+    // v94: companion public — teardown() calls
+    // CommandEngine.stopContinuousScroll() (v92) and the
+    // private companion made it uncompilable (CI v92:
+    // "Cannot access 'companion object Companion': it is
+    // private"). The state inside stays private; only the
+    // stop function and the reply constants are reachable.
+    companion object {
         /** Spoken when a background launch needs the overlay permission. */
         const val OVERLAY_PERMISSION_REPLY =
             "इसके लिए 'Display over other apps' अनुमति चाहिए — " +
