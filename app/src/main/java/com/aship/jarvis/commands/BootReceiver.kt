@@ -49,7 +49,12 @@ class BootReceiver : BroadcastReceiver() {
             // (pehle wala jaldi-return ab wake ke baad hai)।
             try {
                 val prefs = AppPrefs(ctx)
-                if (!prefs.wakeStoppedByShutdown &&
+                // v91: power kabhi chalu hua hi na ho (pehli baar
+                // on karne se pehle wala reboot) to boot par khud
+                // chalu nahi hogi — power hamesha malik hi chalu
+                // karega; ek baar on ho chuka ho to boot par
+                // wapas aayegi (24h background)।
+                if (prefs.wakeEverPoweredOn && !prefs.wakeStoppedByShutdown &&
                     ContextCompat.checkSelfPermission(
                         ctx, Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED

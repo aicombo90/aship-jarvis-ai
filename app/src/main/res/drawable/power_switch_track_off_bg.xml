@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v91: sliding power switch — OFF haalat: pill track, LAAL
+     (#DC2626), gol kinare (knob ke 40dp + 4dp margin ke hisaab
+     se 24dp radius)। -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#DC2626" />
+    <corners android:radius="24dp" />
+</shape>

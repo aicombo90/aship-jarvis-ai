@@ -27,7 +27,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.ScrollView
@@ -830,10 +829,13 @@ class MainActivity : Activity() {
      * v89: TAG se jodo (id wala lookup is phone par null
      * deta hai) — pehle resolveHeroViews, phir button/label/
      * row teeno par listener।
+     * v91: gol button ki jagah sliding switch — track +
+     * knob + label + row, chaaro par wahi toggle।
      */
     private fun attachPowerToggle() {
         resolveHeroViews()
-        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.setOnClickListener { orbPowerToggle() }
+        window.decorView.findViewWithTag<View>("heroPowerSwitch")?.setOnClickListener { orbPowerToggle() }
+        window.decorView.findViewWithTag<View>("heroPowerKnob")?.setOnClickListener { orbPowerToggle() }
         window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setOnClickListener { orbPowerToggle() }
         window.decorView.findViewWithTag<LinearLayout>("heroPowerRow")?.setOnClickListener { orbPowerToggle() }
     }
@@ -982,6 +984,7 @@ class MainActivity : Activity() {
      */
     private fun paintPowerUi(on: Boolean) {
         resolveHeroViews()
+        lastPaintPowerOn = on
         // Orb — mile to hi (na mile to button/pill phir bhi rangte hain)।
         if (::homeOrbView.isInitialized) {
             homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
@@ -1004,19 +1007,51 @@ class MainActivity : Activity() {
         val pillView = window.decorView.findViewWithTag<TextView>("micPill")
             ?: if (::micStatusPill.isInitialized) micStatusPill else null
         pillView?.text = pillText
-        // v87: hero box ke ANDAR wala POWER button — ON = NEELA,
-        // OFF = LAAL, taaki ek nazar me saaf pata chale।
-        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.let { btn ->
-            btn.setBackgroundResource(
-                if (on) R.drawable.power_hero_on_bg else R.drawable.power_hero_off_bg
-            )
-            btn.setColorFilter(android.graphics.Color.WHITE)
-            btn.alpha = 1f
-        }
+        // v91: hero box ke ANDAR wala SLIDING SWITCH — track
+        // ka rang + knob ki jagah, paintPowerUi se hi (koi
+        // alag state nahi; knob ~250ms me sarakta hai)।
+        paintPowerSwitch(on)
         window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setTextColor(
             if (on) android.graphics.Color.rgb(191, 219, 254)
             else android.graphics.Color.rgb(254, 202, 202)
         )
+    }
+
+    /**
+     * v91: sliding power switch — track ka rang (OFF = LAAL
+     * #DC2626, ON = NEELA #2563EB) + safed gol knob ki jagah।
+     * Knob ViewPropertyAnimator se ~250ms me ek chhor se
+     * doosre chhor tak sarakta hai (translationX): OFF = 0
+     * (baayein, 4dp margin), ON = track - knob - 2*margin
+     * (daayein)। Haalat paintPowerUi se hi aati hai — koi
+     * alag switch state nahi, isliye 2 s wala refresh bhi
+     * knob ko hamesha asli service haalat par rakhta hai।
+     * Track/knob abhi naape na gaye hon (width == 0, jaise
+     * pehli paint) to layout ke baad ek baar phir, aakhiri
+     * jaani haalat (lastPaintPowerOn) se; baar-baar post na
+     * ho isliye ek pending jhanda।
+     */
+    private fun paintPowerSwitch(on: Boolean) {
+        val track = window.decorView.findViewWithTag<View>("heroPowerSwitch") ?: return
+        val knob = window.decorView.findViewWithTag<View>("heroPowerKnob") ?: return
+        track.setBackgroundResource(
+            if (on) R.drawable.power_switch_track_on_bg else R.drawable.power_switch_track_off_bg
+        )
+        if (track.width == 0 || knob.width == 0) {
+            if (!powerSwitchRelayoutPending) {
+                powerSwitchRelayoutPending = true
+                track.post {
+                    powerSwitchRelayoutPending = false
+                    if (!isFinishing && !isDestroyed) paintPowerSwitch(lastPaintPowerOn)
+                }
+            }
+            return
+        }
+        val marginPx = (4 * resources.displayMetrics.density).toInt()
+        val travelPx = (track.width - knob.width - 2 * marginPx).coerceAtLeast(0).toFloat()
+        val targetX = if (on) travelPx else 0f
+        knob.animate().cancel()
+        knob.animate().translationX(targetX).setDuration(250L).start()
     }
 
     /**
@@ -1401,6 +1436,14 @@ class MainActivity : Activity() {
     private var lastPowerToggleMs = 0L
 
     /**
+     * v91: sliding switch ki aakhiri jaani haalat — layout
+     * na hua ho to knob ki jagah layout ke baad isi se
+     * tay hoti hai (paintPowerSwitch dekho)।
+     */
+    private var lastPaintPowerOn: Boolean = false
+    private var powerSwitchRelayoutPending: Boolean = false
+
+    /**
      * v82: orb = POWER BUTTON — tap = Maya chalu/band।
      * Chalu ho to band karo, band ho to chalu karo।
      * Chalu karna = wake service aam wake-sunna mode me
@@ -1452,6 +1495,11 @@ class MainActivity : Activity() {
         orbPowerPending = false
         try {
             prefs.wakeStoppedByShutdown = false
+            // v91: pehli baar power on — ab se boot par wapas
+            // aana jayaz hai (BootReceiver dekho)। Isse pehle
+            // kabhi on na hua ho to reboot par khud chalu nahi
+            // hogi — power hamesha malik hi chalu karega।
+            prefs.wakeEverPoweredOn = true
             startForegroundService(JarvisWakeService.startIntent(this))
             // v88: tap ka turant jawab — pehle chupchaap kuch
             // nahi hota tha, user ko lagta tha button kaam nahi karta।

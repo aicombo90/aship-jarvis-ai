@@ -91,6 +91,19 @@ class AppPrefs(context: Context) {
         prefs.edit().putBoolean(KEY_WAKE_STOPPED_BY_SHUTDOWN, true).commit()
     }
 
+    /**
+     * v91: power kabhi chalu hua ya nahi — BootReceiver
+     * ke liye। wakeStoppedByShutdown ka default false hai,
+     * isliye iske bina pehli baar power on karne se pehle
+     * wale reboot par bhi service khud chalu ho jati —
+     * power hamesha malik hi chalu kare (powerOn dekho)।
+     */
+    var wakeEverPoweredOn: Boolean
+        get() = prefs.getBoolean(KEY_WAKE_EVER_POWERED_ON, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_WAKE_EVER_POWERED_ON, value).apply()
+        }
+
     /** v1.7 diagnostics: latest non-blank final text heard by the wake recognizer. */
     var lastHeardText: String
         get() = prefs.getString(KEY_LAST_HEARD_TEXT, "") ?: ""
@@ -182,6 +195,7 @@ class AppPrefs(context: Context) {
         private const val KEY_WAKE_HITS = "wake_hits"
         private const val KEY_WAKE_SERVICE_RUNNING = "wake_service_running"
         private const val KEY_WAKE_STOPPED_BY_SHUTDOWN = "wake_stopped_by_shutdown"
+        private const val KEY_WAKE_EVER_POWERED_ON = "wake_ever_powered_on"
         private const val KEY_LAST_HEARD_TEXT = "last_heard_text"
         private const val KEY_LAST_HEARD_PARTIAL_TEXT = "last_heard_partial_text"
         private const val KEY_LAST_HEARD_AT_MS = "last_heard_at_ms"

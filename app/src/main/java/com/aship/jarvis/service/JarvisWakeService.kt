@@ -685,15 +685,22 @@ class JarvisWakeService : Service() {
                 // v89: MainActivity peeche gayi — chhota overlay
                 // gola mini app ki tarah dikhao (sirf service
                 // chal rahi ho to)।
+                // v91: SIRF tab jab sakriya session chal raha ho
+                // (wake word ke baad — ACK/COMMAND/REPLY)।
+                // Bas background me chalu hona (WAKE — wake word
+                // ka intezaar) gola dikhane ki wajah nahi; aise
+                // me laga hua ho to hata bhi do।
                 if (state != State.STOPPED && ::orbOverlay.isInitialized) {
-                    orbOverlay.show()
+                    if (isActivelyListening()) orbOverlay.show() else orbOverlay.hideNow()
                 }
                 return START_NOT_STICKY
             }
         }
         if (state != State.STOPPED) {
-            // Already running: a second START changes nothing.
-            return START_NOT_STICKY
+            // Already running: a second START changes nothing —
+            // v91: START_STICKY hi rahe (neeche dekho), taaki
+            // system isko maar de to dobara khada kare (24h)।
+            return START_STICKY
         }
         isRunning = true
         prefs.wakeServiceRunning = true
@@ -701,7 +708,18 @@ class JarvisWakeService : Service() {
         setStatus("Model load ho raha hai...")
         startForegroundWith(buildNotification("Model load ho raha hai..."))
         executor.execute { loadModelAndStartWake() }
-        return START_NOT_STICKY
+        // v91: 24h background — START_STICKY: Android service
+        // ko maar de (memory pressure) to null intent se
+        // dobara khada karega; onCreate/onStartCommand phir
+        // model load karke wake sunna shuru kar denge। Pehle
+        // START_NOT_STICKY tha — marne par wapas nahi aati
+        // thi। ACTION_STOP wala raasta ab bhi NOT_STICKY hai
+        // (band ki hui service dobara khadi nahi honi chahiye),
+        // aur PAUSE/RESUME/YIELD/OVERLAY wale raaste bhi
+        // NOT_STICKY hi hain (woh chalti service ko hukm hain;
+        // unse null-intent restart hokar band ki hui service
+        // dobara khul jaye, woh galat hoga)।
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -4595,6 +4613,18 @@ class JarvisWakeService : Service() {
     // (executor thread se) mainHandler par post ho jate hain.
     // ------------------------------------------------------------------
 
+    /**
+     * v91: overlay gola SIRF tab jab Maya sakriya roop se sun/
+     * bol rahi ho — wake word ke baad ka active session
+     * (ACK = haan bol rahi, COMMAND = hukm sun rahi, REPLY =
+     * jawab bol rahi)। WAKE (wake word ka intezaar — bas
+     * background me chalu) ya LOADING/STOPPED me nahi।
+     * Overlay dikhane ke dono raaste (ACTION_OVERLAY_SHOW
+     * aur showOnMain) isi se gate hote hain।
+     */
+    private fun isActivelyListening(): Boolean =
+        state == State.ACK || state == State.COMMAND || state == State.REPLY
+
     private inner class OrbOverlay {
 
         private var windowManager: WindowManager? = null
@@ -4658,6 +4688,15 @@ class JarvisWakeService : Service() {
             // dikhega। Laga hua ho to hata bhi do (user app
             // kholkar aa gaya)।
             if (MainActivity.isMainForeground) {
+                removeWindowOnMain()
+                return
+            }
+            // v91: sakriya session nahi (bas background me wake
+            // word ka intezaar) — gola mat dikhao; laga hua ho
+            // to hata bhi do। onWakeDetected (ACK) aur setReply
+            // (COMMAND/REPLY) wale raaste is jaanch se guzarte
+            // hain, isliye sakriya session ka gola chalta hai।
+            if (!isActivelyListening()) {
                 removeWindowOnMain()
                 return
             }

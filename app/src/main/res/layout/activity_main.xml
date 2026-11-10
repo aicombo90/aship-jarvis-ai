@@ -211,12 +211,15 @@
                     android:textColor="#9AA5D1"
                     android:textSize="13sp" />
 
-                <!-- v87: POWER on/off — box ke ANDAR neeche, taaki
-                     saaf dikhe: gol button + "পাওয়ার" label।
-                     ON = NEELA, OFF = LAAL (hara/slate nahi)।
-                     Tap = orbPowerToggle (orb par tap bhi wahi)।
-                     v88: heroPowerRow id — poori row par tap bhi
-                     toggle kare (bada tap target)। -->
+                <!-- v91: POWER on/off — box ke ANDAR neeche, SLIDING
+                     SWITCH (gol button ki jagah): pill track —
+                     OFF = LAAL (#DC2626), ON = NEELA (#2563EB);
+                     safed gol knob tap par ~250ms me ek chhor se
+                     doosre chhor tak sarakta hai (paintPowerUi /
+                     paintPowerSwitch dekho)। Tap = orbPowerToggle
+                     (orb par tap bhi wahi)। v88: heroPowerRow id —
+                     poori row par tap bhi toggle kare (bada tap
+                     target)। -->
                 <LinearLayout
                     android:id="@+id/heroPowerRow"
                     android:tag="heroPowerRow"
@@ -227,18 +230,25 @@
                     android:gravity="center"
                     android:orientation="vertical">
 
-                    <ImageView
-                        android:id="@+id/heroPowerButton"
-                        android:tag="heroPowerButton"
-                        android:layout_width="56dp"
-                        android:layout_height="56dp"
-                        android:background="@drawable/power_hero_off_bg"
+                    <FrameLayout
+                        android:id="@+id/heroPowerSwitch"
+                        android:tag="heroPowerSwitch"
+                        android:layout_width="96dp"
+                        android:layout_height="48dp"
+                        android:background="@drawable/power_switch_track_off_bg"
                         android:clickable="true"
                         android:contentDescription="পাওয়ার"
-                        android:focusable="true"
-                        android:padding="12dp"
-                        android:src="@drawable/ic_power"
-                        android:tint="#FFFFFF" />
+                        android:focusable="true">
+
+                        <View
+                            android:id="@+id/heroPowerKnob"
+                            android:tag="heroPowerKnob"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_gravity="center_vertical|start"
+                            android:layout_marginStart="4dp"
+                            android:background="@drawable/power_switch_knob_bg" />
+                    </FrameLayout>
 
                     <TextView
                         android:id="@+id/heroPowerLabel"
