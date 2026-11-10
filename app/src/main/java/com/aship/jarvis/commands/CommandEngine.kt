@@ -3861,6 +3861,575 @@ class CommandEngine(
         PlayIntent.SpokenLang.ENGLISH -> "I couldn't send the reply to $sender — please try once more."
     }
 
+    // -- v99: UPI PAYMENT ASSIST (Maya kabhi khud paise NAHI bhejti) --
+
+    /**
+     * v99: UPI wala hukm hai kya — sikhao / bolo / hatao /
+     * default app / pakka karo / radd karo, ya paise
+     * pathane wala hukm। Paise wala hukm tabhi jab kriya
+     * ke saath paise ka zikr ("টাকা" / UPI / "@") ya
+     * rashi ho — nanga "পাঠাও" (screenshot / message
+     * bhejna) yahan kabhi nahi phansta। Sasta match,
+     * koi IO nahi।
+     */
+    fun isUpiCommand(rawText: String): Boolean {
+        if (matchesAny(rawText, upiTeachMarkers)) return true
+        if (matchesAny(rawText, upiListMarkers)) return true
+        if (matchesAny(rawText, upiRemoveMarkers)) return true
+        if (matchesAny(rawText, upiDefaultAppMarkers)) return true
+        if (matchesAny(rawText, upiConfirmMarkers)) return true
+        if (matchesAny(rawText, upiCancelMarkers)) return true
+        // Paise pathana — kriya + (paise ka zikr / UPI ID / rashi)।
+        if (!matchesAny(rawText, upiPayVerbs)) return false
+        if (matchesAny(rawText, upiMoneyMarkers)) return true
+        if (rawText.contains("@")) return true
+        return UpiCommands.parseAmount(rawText) != null
+    }
+
+    /** v99: MainActivity / wake service wala raasta — UPI app kholna tez hai, phir bhi background thread se। */
+    fun runUpiCommand(rawText: String): CommandResult {
+        return upiCommand(rawText)
+            ?: CommandResult(upiWhatReply(PlayIntent.requestLanguage(rawText)), true)
+    }
+
+    /**
+     * v99: UPI wala hukm — pakka karo / radd karo / sikhao /
+     * hatao / bolo / default app / paise pathao। Na ho to
+     * null — bulane wala apna aam raasta aage badhaye।
+     */
+    fun upiCommand(rawText: String): CommandResult? {
+        if (!isUpiCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (matchesAny(rawText, upiConfirmMarkers)) {
+            return upiConfirmCommand(lang)
+        }
+        if (matchesAny(rawText, upiCancelMarkers)) {
+            UpiPayees.clearPending(context)
+            return CommandResult(upiCancelledReply(lang), true)
+        }
+        if (matchesAny(rawText, upiTeachMarkers)) {
+            return upiTeachCommand(rawText, lang)
+        }
+        if (matchesAny(rawText, upiRemoveMarkers)) {
+            return upiRemoveCommand(rawText, lang)
+        }
+        if (matchesAny(rawText, upiListMarkers)) {
+            return upiListCommand(lang)
+        }
+        if (matchesAny(rawText, upiDefaultAppMarkers)) {
+            return upiDefaultAppCommand(rawText, lang)
+        }
+        return upiPayCommand(rawText, lang)
+    }
+
+    /**
+     * v99: paise pathane wala hukm — "[name]-কে ₹X পাঠাও"।
+     * Kram: UPI ID (boli hui) -> sikhi hui UPI ID (naam se)
+     * -> contact se naam (ID abhi bhi chahiye) -> pending
+     * wala payee (naam is baar na bola ho)।
+     * - Rashi na ho: pending bandh kar poochho ("কত টাকা
+     *   পাঠাবো?") — taaza pending rashi ho to use karo।
+     * - Rashi bekaar (₹0 / ₹1,00,000 se zyada): kholo
+     *   NAHI — pending bandh kar dohra kar poochho,
+     *   "হ্যাঁ পাঠাও" se hi khulega।
+     * - Sab theek: UPI app kholo + saaf bol do ke aakhiri
+     *   kadam (PIN) user khud dalega — Maya khud paise
+     *   kabhi nahi bhejti।
+     */
+    private fun upiPayCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val normText = UpiCommands.normalizeSpokenUpiId(rawText)
+        val upiId = UpiCommands.extractUpiId(normText)
+        var workText = normText
+        if (upiId != null) {
+            // "@" wala token UPI ID hi hai (vibhakti "-তে"
+            // samet) — rashi / naam nikalte waqt use hatao।
+            workText = workText.split(Regex("""\s+"""))
+                .filter { !it.contains("@") }
+                .joinToString(" ")
+        }
+        val amount = UpiCommands.parseAmount(workText)
+        val name = extractUpiPayName(workText)
+        val pending = UpiPayees.loadPending(context)?.takeIf { it.isFresh }
+
+        var pa: String? = upiId
+        var displayName: String? = if (upiId != null) upiId.substringBefore('@') else null
+        if (pa == null && name.isNotEmpty()) {
+            val saved = UpiPayees.find(context, name)
+            if (saved != null) {
+                pa = saved.second
+                displayName = saved.first
+            }
+        }
+        if (pa == null && name.isNotEmpty()) {
+            val contact = UpiCommands.findContact(context, name)
+            if (contact != null) {
+                // Naam pehchana, UPI ID nahi — ID maango,
+                // rashi ho to bandh rakho (baad me poori hogi)।
+                UpiPayees.savePending(
+                    context,
+                    UpiPayees.PendingPayment(null, contact.name, amount)
+                )
+                return CommandResult(upiNeedUpiIdReply(lang, contact.name), true)
+            }
+            return CommandResult(upiPayeeNotFoundReply(lang, name), true)
+        }
+        if (pa == null && pending?.upiId != null) {
+            // Naam is baar nahi bola — pehle wala taaza pending payee।
+            pa = pending.upiId
+            displayName = pending.displayName
+        }
+        if (pa == null) {
+            // Na ID, na naam — rashi ho to bandh rakho, payee poochho।
+            if (amount != null) {
+                UpiPayees.savePending(
+                    context,
+                    UpiPayees.PendingPayment(null, null, amount)
+                )
+            }
+            return CommandResult(upiNeedPayeeReply(lang), true)
+        }
+        val finalName = displayName ?: pa.substringBefore('@')
+        if (amount == null) {
+            // Rashi nahi — taaza pending rashi tabhi istemal
+            // karo jab woh sirf rashi wali pending ho, ya usi
+            // payee ki ho (galat payee ki purani rashi kabhi nahi)।
+            val pendingAmount = pending?.amount
+            val pendingMatchesPayee = pending != null &&
+                ((pending.upiId == null && pending.displayName == null) ||
+                    pending.upiId == pa)
+            if (pendingAmount != null && pendingMatchesPayee) {
+                return openUpiNow(pa, finalName, pendingAmount, lang)
+            }
+            UpiPayees.savePending(
+                context,
+                UpiPayees.PendingPayment(pa, finalName, null)
+            )
+            return CommandResult(upiNeedAmountReply(lang, finalName), true)
+        }
+        if (amount < UpiCommands.MIN_AMOUNT || amount > UpiCommands.CONFIRM_ABOVE) {
+            // Bekaar rashi — kholo NAHI, pending bandh kar dohra poochho।
+            UpiPayees.savePending(
+                context,
+                UpiPayees.PendingPayment(pa, finalName, amount)
+            )
+            return CommandResult(upiConfirmLargeReply(lang, amount, finalName), true)
+        }
+        return openUpiNow(pa, finalName, amount, lang)
+    }
+
+    /**
+     * v99: "হ্যাঁ পাঠাও" — taaza pending payment poori karo।
+     * Pending me UPI ID na ho to naam se sikhi hui ID se
+     * poori karo (sikhaane ke baad wala mamla)। Kuch bacha
+     * hi na ho to imaandaar "kuch baki nahi"।
+     */
+    private fun upiConfirmCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val pending = UpiPayees.loadPending(context)?.takeIf { it.isFresh }
+        if (pending == null || !pending.hasAny) {
+            UpiPayees.clearPending(context)
+            return CommandResult(upiNothingPendingReply(lang), true)
+        }
+        var pa = pending.upiId
+        var displayName = pending.displayName
+        if (pa == null && displayName != null) {
+            val saved = UpiPayees.find(context, displayName)
+            if (saved != null) {
+                pa = saved.second
+                displayName = saved.first
+            }
+        }
+        val amount = pending.amount
+        if (pa == null || amount == null) {
+            return CommandResult(upiNothingPendingReply(lang), true)
+        }
+        return openUpiNow(pa, displayName ?: pa.substringBefore('@'), amount, lang)
+    }
+
+    /**
+     * v99: UPI app kholo + saaf bol do — aakhiri kadam
+     * (PIN) user khud UPI app me dalega। Khul gaya to
+     * pending saaf (dobara "হ্যাঁ পাঠাও" par wahi
+     * payment dobara na khule), na khula to pending
+     * rehta hai (app install karke dobara bol sakta hai)।
+     */
+    private fun openUpiNow(
+        pa: String,
+        displayName: String,
+        amount: Double,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val uri = UpiCommands.buildUpiUri(pa, displayName, amount)
+        val defaultApp = UpiPayees.getDefaultApp(context)
+        return when (
+            UpiCommands.openUpiApp(context, uri, fromBackgroundService, defaultApp)
+        ) {
+            UpiCommands.OpenOutcome.OPENED -> {
+                UpiPayees.clearPending(context)
+                CommandResult(upiOpeningReply(lang, amount, displayName), true)
+            }
+            UpiCommands.OpenOutcome.NO_APP ->
+                CommandResult(upiNoAppReply(lang), true)
+            UpiCommands.OpenOutcome.PERMISSION_NEEDED ->
+                CommandResult(upiOverlayPermissionReply(lang), true)
+            UpiCommands.OpenOutcome.LOCKED ->
+                CommandResult(upiLockedReply(lang), true)
+            UpiCommands.OpenOutcome.FAILED ->
+                CommandResult(upiOpenFailedReply(lang), true)
+        }
+    }
+
+    /** v99: UPI ID sikhao — "UPI ID শেখাও রাহুল rahul@okhdfcbank"। */
+    private fun upiTeachCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val normText = UpiCommands.normalizeSpokenUpiId(rawText)
+        val upiId = UpiCommands.extractUpiId(normText)
+        if (upiId == null) {
+            return CommandResult(upiTeachWhatReply(lang), true)
+        }
+        var name = extractUpiTeachName(normText, upiId)
+        if (name.isEmpty()) {
+            // Sirf ID bola — pending wale payee ka naam ho to wahi।
+            name = UpiPayees.loadPending(context)?.takeIf { it.isFresh }
+                ?.displayName.orEmpty()
+        }
+        if (name.isEmpty()) {
+            return CommandResult(upiTeachNeedNameReply(lang), true)
+        }
+        val outcome = UpiPayees.save(context, name, upiId)
+        val saved = when (outcome) {
+            UpiPayees.SaveOutcome.SAVED -> CommandResult(upiSavedReply(lang, name), true)
+            UpiPayees.SaveOutcome.UPDATED -> CommandResult(upiUpdatedReply(lang, name), true)
+            UpiPayees.SaveOutcome.INVALID -> CommandResult(upiInvalidReply(lang), true)
+            UpiPayees.SaveOutcome.FULL -> CommandResult(upiFullReply(lang), true)
+        }
+        // Bacha hua theek-thaak — rashi wali pending ho to
+        // "হ্যাঁ পাঠাও" se poori karne ki yaad dilao
+        // (galat / bhari wale jawab par kuch nahi jodte)।
+        val pendingAmount = UpiPayees.loadPending(context)?.takeIf { it.isFresh }?.amount
+        if (pendingAmount != null &&
+            (outcome == UpiPayees.SaveOutcome.SAVED ||
+                outcome == UpiPayees.SaveOutcome.UPDATED)
+        ) {
+            return CommandResult(
+                saved.responseText + " " +
+                    upiSavedWithAmountReply(lang, pendingAmount),
+                true
+            )
+        }
+        return saved
+    }
+
+    /** v99: UPI ID hatao — "UPI ID মুছে ফেলো [naam]"। */
+    private fun upiRemoveCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val name = extractUpiPayName(
+            UpiCommands.normalizeSpokenUpiId(rawText)
+        )
+        if (name.isEmpty()) {
+            return CommandResult(upiWhatReply(lang), true)
+        }
+        return if (UpiPayees.remove(context, name)) {
+            CommandResult(upiRemovedReply(lang, name), true)
+        } else {
+            CommandResult(upiNotFoundReply(lang, name), true)
+        }
+    }
+
+    /** v99: UPI ID gin kar sunao। */
+    private fun upiListCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val names = UpiPayees.listNames(context)
+        return if (names.isEmpty()) {
+            CommandResult(upiListEmptyReply(lang), true)
+        } else {
+            CommandResult(upiListReply(lang, names), true)
+        }
+    }
+
+    /** v99: default UPI app sikhao — "UPI অ্যাপ হিসেবে GPay ব্যবহার করো"। */
+    private fun upiDefaultAppCommand(rawText: String, lang: PlayIntent.SpokenLang): CommandResult {
+        val name = extractUpiDefaultAppName(rawText)
+        if (name.isEmpty()) {
+            return CommandResult(upiWhatReply(lang), true)
+        }
+        UpiPayees.setDefaultApp(context, name)
+        return CommandResult(upiDefaultAppReply(lang, name), true)
+    }
+
+    /**
+     * v99: paise pathane wale hukm se naam nikaalo — kriya,
+     * paise wale shabd, rashi (ank + shabd), UPI ID aur
+     * filler hatakar bacha hua naam। "রাহুলকে" ka "কে"
+     * bhi saaf hota hai।
+     */
+    private fun extractUpiPayName(rawText: String): String {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        val digits = UpiCommands.normalizeDigits(text)
+        val kept = ArrayList<String>()
+        for (token in digits.split(Regex("""\s+"""))) {
+            val t = token.trim(',', '.', '।', '!', '?', '"', '\'')
+            if (t.isEmpty()) continue
+            if (t in upiPayDropWords) continue
+            if (t.contains("@")) continue
+            if (t.matches(Regex("""^\d[\d,]*(\.\d+)?$"""))) continue
+            var clean = t
+            if (clean.endsWith("কে") && clean.length > 2) clean = clean.dropLast(1)
+            if (clean.endsWith("को") && clean.length > 2) clean = clean.dropLast(2)
+            if (clean.isNotEmpty()) kept.add(clean)
+        }
+        return kept.joinToString(" ").trim()
+    }
+
+    /** v99: sikhane wale hukm se naam nikaalo — ID token + sikhane wale shabd hatakar। */
+    private fun extractUpiTeachName(rawText: String, upiId: String): String {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        val kept = ArrayList<String>()
+        for (token in text.split(Regex("""\s+"""))) {
+            val t = token.trim(',', '.', '।', '!', '?', '"', '\'')
+            if (t.isEmpty()) continue
+            if (t in upiTeachDropWords) continue
+            if (t == upiId || t.contains("@")) continue
+            var clean = t
+            if (clean.endsWith("কে") && clean.length > 2) clean = clean.dropLast(1)
+            if (clean.isNotEmpty()) kept.add(clean)
+        }
+        return kept.joinToString(" ").trim()
+    }
+
+    /** v99: default app wale hukm se app ka naam nikaalo। */
+    private fun extractUpiDefaultAppName(rawText: String): String {
+        val text = stripFillers(normalize(rawText.lowercase(Locale.ROOT).trim()))
+        val kept = ArrayList<String>()
+        for (token in text.split(Regex("""\s+"""))) {
+            val t = token.trim(',', '.', '।', '!', '?', '"', '\'')
+            if (t.isEmpty()) continue
+            if (t in upiDefaultAppDropWords) continue
+            kept.add(t)
+        }
+        return kept.joinToString(" ").trim()
+    }
+
+    // -- v99: UPI wale marker (teeno bhasha) --
+
+    /** v99: paise pathane ki kriya — akeli kriya kaafi nahi (neeche dekho)। */
+    private val upiPayVerbs = listOf(
+        "পাঠাও", "পাঠিয়ে", "পাঠা", "পাঠাতে", "भेजो", "भेज",
+        "send", "pay", "transfer", "পাঠান"
+    )
+
+    /** v99: paise ka zikr — kriya ke saath ho to UPI hukm pakka। */
+    private val upiMoneyMarkers = listOf(
+        "টাকা", "taka", "रुपये", "रुपए", "रुपया",
+        "rupee", "rupees", "upi", "ইউপিআই", "यूपीआई", "₹"
+    )
+
+    /** v99: UPI ID sikhane ke shabd। */
+    private val upiTeachMarkers = listOf(
+        "upi id শেখাও", "upi id মনে রাখো", "upi আইডি শেখাও",
+        "upi আইডি মনে রাখো", "upi id sikhao", "upi id yaad",
+        "upi id শেখা", "upi id rakho"
+    )
+
+    /** v99: UPI ID gin kar sunane ke shabd। */
+    private val upiListMarkers = listOf(
+        "upi তালিকা", "upi list", "upi id গুলো", "upi id বলো",
+        "upi আইডি গুলো", "upi payee", "upi id দেখাও"
+    )
+
+    /** v99: UPI ID hatane ke shabd। */
+    private val upiRemoveMarkers = listOf(
+        "upi id মুছে", "upi আইডি মুছে", "upi মুছে",
+        "remove upi", "delete upi"
+    )
+
+    /** v99: default UPI app wale shabd। */
+    private val upiDefaultAppMarkers = listOf(
+        "upi অ্যাপ হিসেবে", "upi app হিসেবে",
+        "upi অ্যাপ বদলাও", "upi app বদলাও"
+    )
+
+    /** v99: aadhe payment ko pakka karne ke shabd। */
+    private val upiConfirmMarkers = listOf(
+        "হ্যাঁ পাঠাও", "নিশ্চিত", "নিশ্চিত করছি",
+        "confirm পাঠাও", "হ্যাঁ, পাঠাও", "हाँ भेजो"
+    )
+
+    /** v99: aadha payment radd karne ke shabd। */
+    private val upiCancelMarkers = listOf(
+        "upi বাতিল", "পেমেন্ট বাতিল", "payment বাতিল", "cancel upi"
+    )
+
+    /** v99: naam nikalte waqt hatane wale shabd (kriya + paise + rashi + filler)। */
+    private val upiPayDropWords = setOf(
+        "পাঠাও", "পাঠিয়ে", "পাঠা", "পাঠাতে", "পাঠান", "भेजो", "भेज",
+        "send", "pay", "transfer",
+        "টাকা", "taka", "रुपये", "रुपए", "रुपया", "rupee", "rupees",
+        "rs", "inr", "₹", "upi", "ইউপিআই", "यूपीआई",
+        "কে", "কো", "को", "আমার", "আমাকে", "আমায়", "একটু",
+        "please", "তো", "করো", "করুন", "কর", "দাও", "দে"
+    ) + UpiCommands.AMOUNT_TOKENS
+
+    /** v99: sikhane wale hukm se naam nikalte waqt hatane wale shabd। */
+    private val upiTeachDropWords = setOf(
+        "upi", "id", "আইডি", "শেখাও", "শেখা", "মনে", "রাখো",
+        "sikhao", "yaad", "rakho", "সেখাও", "শিখিয়ে"
+    )
+
+    /** v99: default app wale hukm se naam nikalte waqt hatane wale shabd। */
+    private val upiDefaultAppDropWords = setOf(
+        "upi", "অ্যাপ", "app", "হিসেবে", "ব্যবহার", "করো", "কর",
+        "বদলাও", "বদলে", "চাই", "হিসাবে", "use", "ব্যাবহার"
+    )
+
+    // -- v99: UPI wale jawab (teeno bhasha) --
+
+    private fun upiWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI পেমেন্টের হুকুমটা বুঝলাম না — 'রাহুলকে ৫০০ টাকা পাঠাও' বলে দেখো।"
+        PlayIntent.SpokenLang.HINDI -> "UPI पेमेंट वाला हुक्म समझ नहीं आया — 'राहुल को 500 रुपये भेजो' बोलकर देखो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I didn't understand that UPI payment command — try 'send 500 rupees to Rahul'."
+    }
+
+    private fun upiNeedPayeeReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কাকে পাঠাবো? নামটা বলো।"
+        PlayIntent.SpokenLang.HINDI -> "किसको भेजूँ? नाम बताओ।"
+        PlayIntent.SpokenLang.ENGLISH -> "Who should I send it to? Tell me the name."
+    }
+
+    private fun upiNeedAmountReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-কে কত টাকা পাঠাবো?"
+        PlayIntent.SpokenLang.HINDI -> "$name को कितने रुपये भेजूँ?"
+        PlayIntent.SpokenLang.ENGLISH -> "How much should I send to $name?"
+    }
+
+    private fun upiNeedUpiIdReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-এর UPI ID টা জানি না — 'UPI ID শেখাও $name [upi-id]' বললেই মনে রাখবো।"
+        PlayIntent.SpokenLang.HINDI -> "$name की UPI ID नहीं जानती — 'UPI ID सिखाओ $name [upi-id]' बोलो, याद रख लूँगी।"
+        PlayIntent.SpokenLang.ENGLISH -> "I don't know $name's UPI ID — say 'teach UPI ID $name [upi-id]' and I'll remember it."
+    }
+
+    private fun upiPayeeNotFoundReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "'$name' নামে কাউকে পেলাম না — নামটা ঠিক করে বলো।"
+        PlayIntent.SpokenLang.HINDI -> "'$name' नाम का कोई नहीं मिला — नाम ठीक से बताओ।"
+        PlayIntent.SpokenLang.ENGLISH -> "I couldn't find anyone named '$name' — say the name again."
+    }
+
+    private fun upiConfirmLargeReply(lang: PlayIntent.SpokenLang, amount: Double, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "${UpiCommands.formatAmountSpoken(amount, lang)} — অনেক বড় অঙ্ক! সত্যি পাঠাতে চাইলে 'হ্যাঁ পাঠাও' বলো।"
+        PlayIntent.SpokenLang.HINDI -> "${UpiCommands.formatAmountSpoken(amount, lang)} — बहुत बड़ी रकम! सच में भेजना है तो 'हाँ भेजो' बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "${UpiCommands.formatAmountSpoken(amount, lang)} — that's a big amount! If you really want to send it, say 'yes, send it'."
+    }
+
+    private fun upiOpeningReply(lang: PlayIntent.SpokenLang, amount: Double, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "${UpiCommands.formatAmountSpoken(amount, lang)}, $name-কে পাঠাচ্ছি — UPI অ্যাপ খুলে দিচ্ছি, তুমি নিজে PIN দিয়ে কনফার্ম করবে। আমি নিজে টাকা পাঠাতে পারি না।"
+        PlayIntent.SpokenLang.HINDI -> "${UpiCommands.formatAmountSpoken(amount, lang)}, $name को भेज रही हूँ — UPI ऐप खोल रही हूँ, तुम खुद PIN डालकर कन्फर्म करना। मैं खुद पैसे नहीं भेज सकती।"
+        PlayIntent.SpokenLang.ENGLISH -> "Sending ${UpiCommands.formatAmountSpoken(amount, lang)} to $name — opening your UPI app; you'll confirm with your PIN there. I can't send money myself."
+    }
+
+    private fun upiNoAppReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ফোনে কোনো UPI অ্যাপ পেলাম না — GPay, PhonePe বা Paytm ইনস্টল করো।"
+        PlayIntent.SpokenLang.HINDI -> "फ़ोन में कोई UPI ऐप नहीं मिला — GPay, PhonePe या Paytm इंस्टॉल करो।"
+        PlayIntent.SpokenLang.ENGLISH -> "No UPI app found on the phone — install GPay, PhonePe or Paytm."
+    }
+
+    private fun upiOpenFailedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI অ্যাপটা খুলতে পারলাম না — একবার আবার চেষ্টা করো।"
+        PlayIntent.SpokenLang.HINDI -> "UPI ऐप नहीं खुल पाया — एक बार फिर कोशिश करो।"
+        PlayIntent.SpokenLang.ENGLISH -> "The UPI app couldn't be opened — please try once more."
+    }
+
+    private fun upiOverlayPermissionReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "এটা খুলতে 'Display over other apps' অনুমতি লাগবে — অ্যাপ খুলে একবার অনুমতি দাও।"
+        PlayIntent.SpokenLang.HINDI -> "इसे खोलने के लिए 'Display over other apps' अनुमति चाहिए — ऐप खोलकर एक बार अनुमति दे दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Opening this needs the 'Display over other apps' permission — allow it once from the app."
+    }
+
+    private fun upiLockedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ফোন লক আছে — আগে আনলক করো, তারপর খুলে দেবো।"
+        PlayIntent.SpokenLang.HINDI -> "फ़ोन लॉक है — पहले अनलॉक कर लो, फिर खोल देती हूँ।"
+        PlayIntent.SpokenLang.ENGLISH -> "The phone is locked — unlock it first, then I'll open it."
+    }
+
+    private fun upiSavedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-এর UPI ID মনে রাখলাম।"
+        PlayIntent.SpokenLang.HINDI -> "$name की UPI ID याद रख ली।"
+        PlayIntent.SpokenLang.ENGLISH -> "Remembered $name's UPI ID."
+    }
+
+    private fun upiUpdatedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-এর UPI ID বদলে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "$name की UPI ID बदल दी है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Updated $name's UPI ID."
+    }
+
+    private fun upiSavedWithAmountReply(lang: PlayIntent.SpokenLang, amount: Double): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "এবার ${UpiCommands.formatAmountSpoken(amount, lang)} পাঠাতে 'হ্যাঁ পাঠাও' বলো।"
+        PlayIntent.SpokenLang.HINDI -> "अब ${UpiCommands.formatAmountSpoken(amount, lang)} भेजने के लिए 'हाँ भेजो' बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "Now say 'yes, send it' to send ${UpiCommands.formatAmountSpoken(amount, lang)}."
+    }
+
+    private fun upiInvalidReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI ID টা ঠিক মনে হলো না — 'নাম@ব্যাংক' এরকম হওয়া চাই, যেমন rahul@okhdfcbank।"
+        PlayIntent.SpokenLang.HINDI -> "UPI ID ठीक नहीं लगी — 'नाम@बैंक' जैसी होनी चाहिए, जैसे rahul@okhdfcbank।"
+        PlayIntent.SpokenLang.ENGLISH -> "That UPI ID doesn't look right — it should look like 'name@bank', e.g. rahul@okhdfcbank."
+    }
+
+    private fun upiFullReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI তালিকা ভরে গেছে (৫০ জন) — আগে কিছু মুছে ফেলো।"
+        PlayIntent.SpokenLang.HINDI -> "UPI सूची भर गई है (50 लोग) — पहले कुछ हटा दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "The UPI list is full (50 people) — remove someone first."
+    }
+
+    private fun upiTeachWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কার UPI ID শেখাবো? নাম আর ID দুটোই বলো — যেমন 'UPI ID শেখাও রাহুল rahul@okhdfcbank'।"
+        PlayIntent.SpokenLang.HINDI -> "किसकी UPI ID सिखाऊँ? नाम और ID दोनों बताओ — जैसे 'UPI ID सिखाओ राहुल rahul@okhdfcbank'।"
+        PlayIntent.SpokenLang.ENGLISH -> "Whose UPI ID should I learn? Tell me the name and the ID — e.g. 'teach UPI ID Rahul rahul@okhdfcbank'."
+    }
+
+    private fun upiTeachNeedNameReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI ID টা পেলাম, কিন্তু কার — নামটা বলো।"
+        PlayIntent.SpokenLang.HINDI -> "UPI ID मिल गई, पर किसकी — नाम बताओ।"
+        PlayIntent.SpokenLang.ENGLISH -> "Got the UPI ID, but whose — tell me the name."
+    }
+
+    private fun upiListEmptyReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "এখনো কারো UPI ID মনে রাখা হয়নি — 'UPI ID শেখাও [নাম] [আইডি]' বলে শেখাও।"
+        PlayIntent.SpokenLang.HINDI -> "अभी किसी की UPI ID याद नहीं है — 'UPI ID सिखाओ [नाम] [आईडी]' बोलकर सिखा दो।"
+        PlayIntent.SpokenLang.ENGLISH -> "I haven't remembered anyone's UPI ID yet — teach one with 'teach UPI ID [name] [id]'."
+    }
+
+    private fun upiListReply(lang: PlayIntent.SpokenLang, names: List<String>): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI ID মনে আছে: " + names.joinToString(", ") + "।"
+        PlayIntent.SpokenLang.HINDI -> "UPI ID याद हैं: " + names.joinToString(", ") + "।"
+        PlayIntent.SpokenLang.ENGLISH -> "UPI IDs I remember: " + names.joinToString(", ") + "."
+    }
+
+    private fun upiRemovedReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-এর UPI ID মুছে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "$name की UPI ID हटा दी है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Removed $name's UPI ID."
+    }
+
+    private fun upiNotFoundReply(lang: PlayIntent.SpokenLang, name: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "$name-এর UPI ID তালিকায় নেই।"
+        PlayIntent.SpokenLang.HINDI -> "$name की UPI ID सूची में नहीं है।"
+        PlayIntent.SpokenLang.ENGLISH -> "There's no UPI ID saved for $name."
+    }
+
+    private fun upiDefaultAppReply(lang: PlayIntent.SpokenLang, app: String): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "UPI অ্যাপ হিসেবে $app ব্যবহার করবো।"
+        PlayIntent.SpokenLang.HINDI -> "UPI ऐप के तौर पर $app इस्तेमाल करूँगी।"
+        PlayIntent.SpokenLang.ENGLISH -> "I'll use $app as your UPI app."
+    }
+
+    private fun upiNothingPendingReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "কোনো পেমেন্ট বাকি নেই — আগে '৫০০ টাকা পাঠাও [নাম]' বলো।"
+        PlayIntent.SpokenLang.HINDI -> "कोई पेमेंट बाकी नहीं है — पहले '500 रुपये भेजो [नाम]' बोलो।"
+        PlayIntent.SpokenLang.ENGLISH -> "No payment is pending — first say 'send 500 rupees to [name]'."
+    }
+
+    private fun upiCancelledReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পেমেন্ট বাতিল করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "पेमेंट रद्द कर दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Cancelled the payment."
+    }
+
     /**
      * v40: ye suna hua hukm seedha SCREENSHOT lene wala
      * hai kya — "স্ক্রিনশট নাও/তোলো/নে", "स्क्रीनशॉट लो",

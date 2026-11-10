@@ -78,6 +78,7 @@ import com.aship.jarvis.commands.SendButtonCommands
 import com.aship.jarvis.commands.SessionCommands
 import com.aship.jarvis.commands.ShowMeIntent
 import com.aship.jarvis.commands.TeachCommands
+import com.aship.jarvis.commands.UpiPayees
 import com.aship.jarvis.commands.UrlIntent
 import com.aship.jarvis.commands.WebSearchIntent
 import com.aship.jarvis.commands.spokenLang
@@ -662,6 +663,8 @@ class MainActivity : Activity() {
         refreshLanguageCard()
         // v98: Messages card ki sthiti taza — anumati hai ya nahi।
         refreshNotificationCard()
+        // v99: UPI card ki sthiti taza — kitne payee mane hain।
+        refreshUpiCard()
         // v82: orb ki power haalat taaza — service chal
         // rahi ho to chamakta/ghoomta, band ho to dhunda।
         refreshOrbPowerState()
@@ -789,6 +792,8 @@ class MainActivity : Activity() {
         // findViewById null de sakta hai (v83 wala sabak) —
         // isliye surakshit ?. (card na mile to chupchaap chhodo)।
         findViewById<LinearLayout>(R.id.notificationCard)?.setOnClickListener { showNotificationAccessDialog() }
+        // v99: UPI card — sikhe hue payees wala dialog।
+        findViewById<LinearLayout>(R.id.upiCard)?.setOnClickListener { showUpiPayeesDialog() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
@@ -1027,6 +1032,121 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             Toast.makeText(this, "সেটিংস খুলতে পারলাম না।", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /**
+     * v99: UPI card ki sthiti taza karo — kitne payee ki
+     * UPI ID mane hai। Naya view hai, isliye lateinit
+     * nahi — har baar surakshit dhoondho (v83 wala
+     * sabak: id wala lookup null de sakta hai)।
+     */
+    private fun refreshUpiCard() {
+        val sub = findViewById<TextView>(R.id.upiCardSubText) ?: return
+        val count = UpiPayees.listNames(this).size
+        sub.text = if (count > 0) {
+            "$count জনের UPI ID মনে আছে"
+        } else {
+            "এখনো কেউ নেই — ট্যাপ করুন"
+        }
+    }
+
+    /**
+     * v99: UPI payees wala dialog — sikhe hue payee
+     * (naam -> UPI ID) ki suchi, tap karke hatao, aur
+     * "যোগ করো" se naya sikhao। Maya kabhi khud paise
+     * nahi bhejti — yahan sirf UPI ID bandhti hai, koi
+     * PIN / bank / card kabhi nahi। Default UPI app
+     * bhi yahin dikhta hai (voice se badalta hai:
+     * "UPI অ্যাপ হিসেবে GPay ব্যবহার করো")।
+     */
+    private fun showUpiPayeesDialog() {
+        if (isFinishing || isDestroyed) return
+        val payees = UpiPayees.loadAll(this)
+        val defaultApp = UpiPayees.getDefaultApp(this)
+        val info = StringBuilder()
+        if (payees.isEmpty()) {
+            info.append("এখনো কারো UPI ID মনে রাখা হয়নি।\n\n")
+        } else {
+            payees.forEach { (name, upiId) ->
+                info.append("• $name — $upiId\n")
+            }
+            info.append("\nকোনো নামে ট্যাপ করলে তার UPI ID মুছে যাবে।\n")
+        }
+        info.append(
+            if (defaultApp.isNullOrBlank()) {
+                "\nUPI অ্যাপ: এখনো ঠিক করা হয়নি (খোলার সময় বেছে নিতে হবে)।"
+            } else {
+                "\nUPI অ্যাপ: $defaultApp"
+            }
+        )
+        info.append("\n\nমায়া নিজে টাকা পাঠাতে পারে না — UPI অ্যাপ খুলে তুমি নিজে PIN দিয়ে কনফার্ম করবে।")
+        val names = payees.keys.toList()
+        val builder = AlertDialog.Builder(this)
+            .setTitle("💸 UPI পেমেন্ট (${payees.size})")
+            .setMessage(info.toString())
+            .setPositiveButton("যোগ করো") { _, _ -> showUpiAddDialog() }
+            .setNegativeButton("ঠিক আছে", null)
+        // setMessage + setItems ek saath nahi chalte (list
+        // message ko dhak deta hai) — isliye hatana alag
+        // dialog se: pehle naam chuno, phir pakka karo।
+        if (names.isNotEmpty()) {
+            builder.setNeutralButton("মুছে ফেলো") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("কার UPI ID মুছবো?")
+                    .setItems(names.toTypedArray()) { _, which ->
+                        val name = names[which]
+                        AlertDialog.Builder(this)
+                            .setTitle("মুছে ফেলবো?")
+                            .setMessage("$name-এর UPI ID মুছে ফেলবো?")
+                            .setPositiveButton("মুছে ফেলো") { _, _ ->
+                                UpiPayees.remove(this, name)
+                                refreshUpiCard()
+                                Toast.makeText(this, "$name-এর UPI ID মুছে দিয়েছি।", Toast.LENGTH_SHORT).show()
+                            }
+                            .setNegativeButton("বাতিল", null)
+                            .show()
+                    }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
+            }
+        }
+        builder.show()
+    }
+
+    /** v99: naya payee sikhao — naam + UPI ID wala dialog। */
+    private fun showUpiAddDialog() {
+        if (isFinishing || isDestroyed) return
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val nameInput = EditText(this).apply {
+            hint = "নাম — যেমন রাহুল"
+            setPadding(padding, padding / 2, padding, padding / 2)
+        }
+        val idInput = EditText(this).apply {
+            hint = "UPI ID — যেমন rahul@okhdfcbank"
+            setPadding(padding, padding / 2, padding, padding / 2)
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(nameInput)
+            addView(idInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("UPI ID শেখাও")
+            .setView(layout)
+            .setPositiveButton("মনে রাখো") { _, _ ->
+                val name = nameInput.text.toString().trim()
+                val upiId = idInput.text.toString().trim()
+                val message = when (UpiPayees.save(this, name, upiId)) {
+                    UpiPayees.SaveOutcome.SAVED -> "$name-এর UPI ID মনে রাখলাম।"
+                    UpiPayees.SaveOutcome.UPDATED -> "$name-এর UPI ID বদলে দিয়েছি।"
+                    UpiPayees.SaveOutcome.INVALID -> "UPI ID টা ঠিক মনে হলো না — 'নাম@ব্যাংক' এরকম হওয়া চাই।"
+                    UpiPayees.SaveOutcome.FULL -> "UPI তালিকা ভরে গেছে (৫০ জন) — আগে কিছু মুছে ফেলো।"
+                }
+                refreshUpiCard()
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("বাতিল", null)
+            .show()
     }
 
     /** Samay wali Bangla shubhkaamna — "বস" keh kar, jaise Maya kehti hai। */
@@ -2844,6 +2964,16 @@ class MainActivity : Activity() {
             runDirectNotification(commandText)
             return
         }
+        // v99: UPI PAYMENT ASSIST — Maya kabhi khud paise
+        // NAHI bhejti। Voice "₹X পাঠাও [name]" par standard
+        // UPI intent se UPI app khulti hai; aakhiri kadam
+        // (PIN) user khud UPI app me dalta hai। Background
+        // executor wala hi raasta (runDirectNotification
+        // wala hi dhang)।
+        if (commandEngine.isUpiCommand(commandText)) {
+            runDirectUpi(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -3976,6 +4106,30 @@ class MainActivity : Activity() {
                 commandEngine.runNotificationCommand(text)
             } catch (t: Throwable) {
                 CommandResult("মেসেজের উত্তর দিতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v99: bina mastishk ke seedha UPI wala kaam —
+     * runDirectNotification wala hi raasta: koshish
+     * background executor par (UPI app kholna tez hai,
+     * phir bhi niyam wahi), natija mainHandler se wapas
+     * aakar bola/dikhaya jata hai।
+     */
+    private fun runDirectUpi(text: String) {
+        showResponse("Maya: UPI খুলছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runUpiCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("UPI পেমেন্ট খুলতে পারলাম না।", true)
             }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post

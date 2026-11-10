@@ -3386,6 +3386,19 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, notifResult)
             return
         }
+        // v99: UPI PAYMENT ASSIST — Maya kabhi khud paise
+        // NAHI bhejti। Voice "₹X পাঠাও [name]" par standard
+        // UPI intent (upi://pay) se UPI app khulti hai,
+        // paise + paane wala pehle se bhara hua; aakhiri
+        // kadam (PIN) user khud UPI app me dalta hai। Koi
+        // PIN / bank / card kabhi nahi chhooti। Paise ka
+        // zikr na ho to nanga "পাঠাও" yahan kabhi nahi
+        // phansta (screenshot / message wala raasta surakshit)।
+        if (commandEngine.isUpiCommand(text)) {
+            val upiResult = commandEngine.runUpiCommand(text)
+            finishCommandResult(text, upiResult)
+            return
+        }
         // v38: pakka scroll hukm bhi agent se pehle pakke
         // offline raaste se — "স্ক্রল ডাউন করো" bolte hi
         // Accessibility swipe karegi, mastishk ke chakkar

@@ -527,6 +527,50 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- v99: UPI card — sikhe hue payees (naam -> UPI ID),
+                 tap karke suchi dekho / sikhao / hatao। Maya khud
+                 paise kabhi nahi bhejti — sirf UPI app kholti hai। -->
+            <LinearLayout
+                android:id="@+id/upiCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/card_bg"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?android:attr/selectableItemBackground"
+                android:orientation="horizontal"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="💸"
+                    android:textSize="26sp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="UPI পেমেন্ট"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/upiCardSubText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="এখনো কেউ নেই — ট্যাপ করুন"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </LinearLayout>
+
             <!-- 1. Header (v54, waisa hi) -->
             <LinearLayout
                 android:layout_width="match_parent"

@@ -129,6 +129,14 @@
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
         </intent>
+        <!-- v99: UPI intent (upi://pay) sambhalne wale apps
+             (GPay / PhonePe / Paytm) dikhai dene ke liye —
+             bina iske resolveActivity / queryIntentActivities
+             un apps ko dekh hi nahi pata (Android 11+)। -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="upi" />
+        </intent>
         <package android:name="com.google.android.youtube" />
         <package android:name="com.facebook.katana" />
         <package android:name="com.whatsapp" />
