@@ -423,8 +423,10 @@ class MainActivity : Activity() {
 
         // v77: naya home — orb hero, greeting, weather,
         // feature cards, bottom nav।
-        homeOrbView = findViewById(R.id.homeOrbView)
-        micStatusPill = findViewById(R.id.micStatusPill)
+        // v89: hero views TAG se (resolveHeroViews) — findViewById
+        // (R.id.homeOrbView / micStatusPill) is phone par
+        // persistently null deta hai (v83 logcat + v88 fail)।
+        resolveHeroViews()
         greetingText = findViewById(R.id.greetingText)
         weatherTempText = findViewById(R.id.weatherTempText)
         weatherConditionText = findViewById(R.id.weatherConditionText)
@@ -627,6 +629,10 @@ class MainActivity : Activity() {
         // v37: screen saamne hai — screen-agent ke sawal
         // par khud sunna shuru karne ka jhanda.
         activityInForeground = true
+        // v89: wake service ko batao app saamne hai — chhota
+        // overlay gola hata de (sirf app ke BAHAR mini app)।
+        isMainForeground = true
+        hideWakeOverlayIfRunning()
         refreshDiagLines()
         refreshApiKeysButton()
         // v77: home — greeting + language card taaza, orb
@@ -653,6 +659,10 @@ class MainActivity : Activity() {
     override fun onPause() {
         // v37: screen peeche gayi — khud sunna shuru nahi hoga.
         activityInForeground = false
+        // v89: app peeche gayi — chhota overlay gola mini app
+        // ki tarah dikhao (service chal rahi ho to)।
+        isMainForeground = false
+        showWakeOverlayIfRunning()
         mainHandler.removeCallbacks(wakeRefreshRunnable)
         // v77: home orb ki harkat roko (wake service wala
         // overlay orb alag hai — woh apna khud sambhalta hai)।
@@ -767,8 +777,29 @@ class MainActivity : Activity() {
         // v82: orb = POWER BUTTON — tap = Maya chalu/band।
         // v84: view na mile to chupchaap chhodo, crash nahi
         // (lateinit field par seedha haath — v83 wala crash)।
-        findViewById<OrbView>(R.id.homeOrbView)?.setOnClickListener { orbPowerToggle() }
-        findViewById<TextView>(R.id.micStatusPill)?.setOnClickListener { orbPowerToggle() }
+        // v89: orb + pill par tap bhi power toggle — TAG se
+        // resolve karke (id wala lookup null deta hai)।
+        resolveHeroViews()
+        if (::homeOrbView.isInitialized) homeOrbView.setOnClickListener { orbPowerToggle() }
+        if (::micStatusPill.isInitialized) micStatusPill.setOnClickListener { orbPowerToggle() }
+    }
+
+    /**
+     * v89: hero views (orb + mic pill) ko TAG se dhoondho —
+     * findViewById(R.id.homeOrbView / micStatusPill) is phone
+     * par persistently null deta hai (v83 logcat + v88 fail:
+     * pill "মাইক বন্ধ" hi rehta, button laal hi rehta, orb
+     * kabhi particle nahi banta), jabki view layout me hai aur
+     * screen par dikh bhi raha hai। android:tag string se
+     * milta hai, resource-id map par nirbhar nahi — decorView
+     * ki traversal (findViewWithTag) se mil jata hai, kyunki
+     * dikhta hua view decor tree me hi hota hai। Mila to
+     * lateinit field bhi theek kar do, taaki purana code
+     * (guards samet) chale। Dobara bulana safe hai।
+     */
+    private fun resolveHeroViews() {
+        window.decorView.findViewWithTag<OrbView>("heroOrb")?.let { homeOrbView = it }
+        window.decorView.findViewWithTag<TextView>("micPill")?.let { micStatusPill = it }
     }
 
     /**
@@ -777,14 +808,16 @@ class MainActivity : Activity() {
      * khaali jagah par tap bhi kaam kare। setOnClickListener
      * dobara lagana safe hai (purana listener badal jata hai),
      * isliye onCreate ke alawa onResume aur der se bhi dobara
-     * jodo — onCreate me findViewById kabhi view nahi deta
-     * (v83 wala homeOrbView null), aur wahi button ke saath
-     * hua to tap chupchaap bekaar jata hai।
+     * jodo।
+     * v89: TAG se jodo (id wala lookup is phone par null
+     * deta hai) — pehle resolveHeroViews, phir button/label/
+     * row teeno par listener।
      */
     private fun attachPowerToggle() {
-        findViewById<ImageView>(R.id.heroPowerButton)?.setOnClickListener { orbPowerToggle() }
-        findViewById<TextView>(R.id.heroPowerLabel)?.setOnClickListener { orbPowerToggle() }
-        findViewById<LinearLayout>(R.id.heroPowerRow)?.setOnClickListener { orbPowerToggle() }
+        resolveHeroViews()
+        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.setOnClickListener { orbPowerToggle() }
+        window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setOnClickListener { orbPowerToggle() }
+        window.decorView.findViewWithTag<LinearLayout>("heroPowerRow")?.setOnClickListener { orbPowerToggle() }
     }
 
     private fun openApiKeys() {
@@ -906,6 +939,8 @@ class MainActivity : Activity() {
 
     /** Hero wali mic pill — sun raha ho ya band। */
     private fun refreshMicPill() {
+        // v89: TAG se taaza dhoondho (id wala lookup null deta hai)।
+        resolveHeroViews()
         if (!::micStatusPill.isInitialized) return
         micStatusPill.text = if (listening) {
             "🎤 শুনছি — বলো, বস"
@@ -927,13 +962,11 @@ class MainActivity : Activity() {
      * likha jata hai (refreshMicPill v79 wapas)।
      */
     private fun refreshOrbPowerState() {
-        // v88: onCreate wala findViewById kabhi null de deta hai
-        // (v83 wala homeOrbView masla) — har refresh par taaza
-        // dhoondho; mila to field bhi theek kar do, taaki orb
-        // sach me animate ho aur button haalat dikhaye। Jo
-        // pehle se set hai, use chhedo nahi (null mile to)।
-        findViewById<OrbView>(R.id.homeOrbView)?.let { homeOrbView = it }
-        findViewById<TextView>(R.id.micStatusPill)?.let { micStatusPill = it }
+        // v89: TAG se taaza dhoondho (id wala findViewById
+        // persistently null deta hai) — mila to field theek ho
+        // jata hai, taaki orb sach me animate ho aur button
+        // haalat dikhaye।
+        resolveHeroViews()
         if (!::homeOrbView.isInitialized) return
         val on = JarvisWakeService.isRunning
         homeOrbView.alpha = if (on) 1f else ORB_OFF_ALPHA
@@ -956,14 +989,14 @@ class MainActivity : Activity() {
         // v87: hero box ke ANDAR wala POWER button bhi haalat dikhaye —
         // gol button + "পাওয়ার" label; ON = NEELA, OFF = LAAL,
         // taaki ek nazar me saaf pata chale chalu hai ya band।
-        findViewById<ImageView>(R.id.heroPowerButton)?.let { btn ->
+        window.decorView.findViewWithTag<ImageView>("heroPowerButton")?.let { btn ->
             btn.setBackgroundResource(
                 if (on) R.drawable.power_hero_on_bg else R.drawable.power_hero_off_bg
             )
             btn.setColorFilter(android.graphics.Color.WHITE)
             btn.alpha = 1f
         }
-        findViewById<TextView>(R.id.heroPowerLabel)?.setTextColor(
+        window.decorView.findViewWithTag<TextView>("heroPowerLabel")?.setTextColor(
             if (on) android.graphics.Color.rgb(191, 219, 254)
             else android.graphics.Color.rgb(254, 202, 202)
         )
@@ -1504,6 +1537,29 @@ class MainActivity : Activity() {
      * bhejta hai; session kabhi shuru hi na hua ho to bina kuch
      * kiye laut jata hai.
      */
+    /**
+     * v89: chhota overlay gola — app saamne aayi to hatao,
+     * app peeche gayi to dikhao (sirf service chal rahi ho
+     * to; band ho to koi overlay hai hi nahi, aur intent se
+     * service dobara khul bhi na jaye — isliye isRunning
+     * ki jaanch pehle)।
+     */
+    private fun hideWakeOverlayIfRunning() {
+        if (!JarvisWakeService.isRunning) return
+        try {
+            startService(JarvisWakeService.overlayHideIntent(this))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showWakeOverlayIfRunning() {
+        if (!JarvisWakeService.isRunning) return
+        try {
+            startService(JarvisWakeService.overlayShowIntent(this))
+        } catch (_: Exception) {
+        }
+    }
+
     private fun resumeWakeService() {
         // v51 (item 6a): mic ka daava har raaste par
         // chhodo — ye function sunne ke har ant par
@@ -4093,6 +4149,18 @@ class MainActivity : Activity() {
         private const val WAKE_REFRESH_MS = 2_000L
         // v82: band orb kitna dhunda dikhe (alpha 0–1)।
         private const val ORB_OFF_ALPHA = 0.35f
+
+        /**
+         * v89: MainActivity is pal saamne (foreground) hai ya
+         * nahi — wake service ka chhota overlay gola isse
+         * dekhkar chhupata/dikhata hai (app ke ANDAR nahi,
+         * app ke BAHAR mini app ki tarah)। onResume me true,
+         * onPause me false (activityInForeground ke saath —
+         * woh instance var hai, service use nahi dekh sakta,
+         * isliye companion wala jhanda)।
+         */
+        @Volatile
+        var isMainForeground: Boolean = false
 
         /** v51 (item 2): saamne wala gate ruke to bina bole zyada se zyada itni baar phir sunna. */
         private const val FG_MAX_GATE_RESTARTS = 2

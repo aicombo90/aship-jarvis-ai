@@ -672,6 +672,24 @@ class JarvisWakeService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_OVERLAY_HIDE -> {
+                // v89: MainActivity saamne aayi — chhota overlay
+                // gola hatao। Service band ho to kuch nahi
+                // (overlay hai hi nahi)।
+                if (state != State.STOPPED && ::orbOverlay.isInitialized) {
+                    orbOverlay.hideNow()
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_OVERLAY_SHOW -> {
+                // v89: MainActivity peeche gayi — chhota overlay
+                // gola mini app ki tarah dikhao (sirf service
+                // chal rahi ho to)।
+                if (state != State.STOPPED && ::orbOverlay.isInitialized) {
+                    orbOverlay.show()
+                }
+                return START_NOT_STICKY
+            }
         }
         if (state != State.STOPPED) {
             // Already running: a second START changes nothing.
@@ -4599,6 +4617,13 @@ class JarvisWakeService : Service() {
         /** Jawab bubble me dikhao aur gole ko shimmer mode me dalo. */
         fun setReply(text: String) {
             mainHandler.post {
+                // v89: app ke ANDAR jawab ka bubble nahi — chhota
+                // gola + bubble sirf app ke BAHAR mini app।
+                // Jawab boli (TTS) se sunai deta hi hai।
+                if (MainActivity.isMainForeground) {
+                    removeWindowOnMain()
+                    return@post
+                }
                 if (!attached) showOnMain()
                 if (!attached) return@post
                 bubble?.text = text
@@ -4628,6 +4653,14 @@ class JarvisWakeService : Service() {
         }
 
         private fun showOnMain() {
+            // v89: MainActivity saamne ho to chhota gola mat
+            // dikhao — woh sirf app ke BAHAR mini app ki tarah
+            // dikhega। Laga hua ho to hata bhi do (user app
+            // kholkar aa gaya)।
+            if (MainActivity.isMainForeground) {
+                removeWindowOnMain()
+                return
+            }
             if (!Settings.canDrawOverlays(this@JarvisWakeService)) {
                 // Permission nahi: gola nahi, par kuch tootta nahi.
                 return
@@ -5234,6 +5267,16 @@ class JarvisWakeService : Service() {
 
         fun resumeIntent(context: Context): Intent =
             Intent(context, JarvisWakeService::class.java).setAction(ACTION_RESUME_WAKE)
+
+        /** v89: overlay chhupao/dikhao — MainActivity ke saamne/peeche hone par। */
+        const val ACTION_OVERLAY_HIDE = "com.aship.jarvis.action.OVERLAY_HIDE"
+        const val ACTION_OVERLAY_SHOW = "com.aship.jarvis.action.OVERLAY_SHOW"
+
+        fun overlayHideIntent(context: Context): Intent =
+            Intent(context, JarvisWakeService::class.java).setAction(ACTION_OVERLAY_HIDE)
+
+        fun overlayShowIntent(context: Context): Intent =
+            Intent(context, JarvisWakeService::class.java).setAction(ACTION_OVERLAY_SHOW)
 
         /** v51 (item 6a): [ACTION_YIELD_MIC] wala intent — MainActivity sunna shuru karne se pehle bhejti hai। */
         fun yieldIntent(context: Context): Intent =
