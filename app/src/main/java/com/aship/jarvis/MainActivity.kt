@@ -54,6 +54,8 @@ import com.aship.jarvis.ai.WeatherFetcher
 import com.aship.jarvis.chat.AddaAction
 import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.commands.ClipboardStore
+import com.aship.jarvis.commands.ClipboardWatcher
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandHistory
@@ -669,6 +671,12 @@ class MainActivity : Activity() {
         refreshUpiCard()
         // v100: Proposals card ki sthiti taza — kitni routine seekhi hain।
         refreshProposalsCard()
+        // v101: Clipboard card ki sthiti taza — kitni likhai bachi hai।
+        refreshClipboardCard()
+        // v101: SMART CLIPBOARD MANAGER — saamne wali screen
+        // khuli ho to copy ki hui likhai bhi bachta rahe
+        // (wake service bhi yahi bulati hai, ref-count wala)।
+        ClipboardWatcher.start(applicationContext)
         // v82: orb ki power haalat taaza — service chal
         // rahi ho to chamakta/ghoomta, band ho to dhunda।
         refreshOrbPowerState()
@@ -700,6 +708,9 @@ class MainActivity : Activity() {
         isMainForeground = false
         showWakeOverlayIfRunning()
         mainHandler.removeCallbacks(wakeRefreshRunnable)
+        // v101: clipboard watcher band — screen peeche gayi;
+        // wake service chal rahi ho to uska watcher chalega।
+        ClipboardWatcher.stop()
         // v77: home orb ki harkat roko (wake service wala
         // overlay orb alag hai — woh apna khud sambhalta hai)।
         if (::homeOrbView.isInitialized) homeOrbView.stopAnimations()
@@ -807,6 +818,8 @@ class MainActivity : Activity() {
         // findViewById null de sakta hai (v83 wala sabak) —
         // isliye surakshit ?. (card na mile to chupchaap chhodo)।
         findViewById<LinearLayout>(R.id.proposalsCard)?.setOnClickListener { showProposalsDialog() }
+        // v101: Clipboard card — bachi hui copy ki suchi wala dialog।
+        findViewById<LinearLayout>(R.id.clipboardCard)?.setOnClickListener { showClipboardDialog() }
         findViewById<TextView>(R.id.navHomeButton).setOnClickListener {
             findViewById<ScrollView>(R.id.homeScrollView)?.smoothScrollTo(0, 0)
         }
@@ -1084,6 +1097,23 @@ class MainActivity : Activity() {
     }
 
     /**
+     * v101: Clipboard card ki sthiti taza karo — kitni
+     * copy ki hui likhai bachi hai। Naya view hai,
+     * isliye lateinit nahi — har baar surakshit
+     * dhoondho (v83 wala sabak: id wala lookup null
+     * de sakta hai)।
+     */
+    private fun refreshClipboardCard() {
+        val sub = findViewById<TextView>(R.id.clipboardCardSubText) ?: return
+        val count = ClipboardStore.count(this)
+        sub.text = if (count > 0) {
+            "$count টা লেখা মনে আছে"
+        } else {
+            "এখনো কিছু নেই — ট্যাপ করুন"
+        }
+    }
+
+    /**
      * v100: Proposals wala dialog — seekhi routinein
      * (naam + kitni baar), tap karke ek routine ka
      * prastav band/chalu, aur saare prastav ek saath
@@ -1276,6 +1306,189 @@ class MainActivity : Activity() {
                 }
                 refreshUpiCard()
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    /** v101: shreni ka naam — card/dialog me Bangla me. */
+    private fun clipboardCategoryDisplayName(category: String): String = when (category) {
+        ClipboardStore.CAT_LINK -> "লিংক"
+        ClipboardStore.CAT_PHONE -> "ফোন"
+        ClipboardStore.CAT_UPI -> "UPI"
+        ClipboardStore.CAT_ADDRESS -> "ঠিকানা"
+        ClipboardStore.CAT_CODE -> "কোড"
+        else -> "লেখা"
+    }
+
+    /**
+     * v101: Clipboard wala dialog — kitni likhai bachi
+     * hai, shreni ke hisab se ginati, aur gopaniyata ka
+     * wada (OTP/password jaisi likhai kabhi save nahi
+     * hoti; sab kuch sirf is phone me rehta hai)।
+     * "দেখো" se suchi, "খালি করো" se pakka karke saaf।
+     */
+    private fun showClipboardDialog() {
+        if (isFinishing || isDestroyed) return
+        val entries = ClipboardStore.loadAll(this)
+        val counts = ClipboardStore.countByCategory(this)
+        val info = StringBuilder()
+        if (entries.isEmpty()) {
+            info.append("এখনো কিছু সেভ হয়নি।\n\nকিছু কপি করলেই মায়া মনে রাখবে — লিংক, ফোন নম্বর, UPI ID, ঠিকানা, কোড বা লেখা।\n")
+        } else {
+            info.append("${entries.size} টা লেখা মনে আছে:\n")
+            ClipboardStore.ALL_CATEGORIES.forEach { category ->
+                val count = counts[category] ?: 0
+                if (count > 0) {
+                    info.append("• ${clipboardCategoryDisplayName(category)} — $count টা\n")
+                }
+            }
+            info.append("\nকোনো লেখায় ট্যাপ করলে সেটা ক্লিপবোর্ডে কপি হবে — তারপর যেখানে খুশি পেস্ট করো।\n")
+        }
+        info.append("\nOTP/পাসওয়ার্ডের মতো লেখা সেভ হয় না। সব লেখা শুধু এই ফোনেই থাকে।")
+        AlertDialog.Builder(this)
+            .setTitle("📋 ক্লিপবোর্ড (${entries.size})")
+            .setMessage(info.toString())
+            .setPositiveButton("দেখো") { _, _ -> showClipboardListDialog(null) }
+            .setNeutralButton("খালি করো") { _, _ ->
+                if (entries.isEmpty()) return@setNeutralButton
+                AlertDialog.Builder(this)
+                    .setTitle("খালি করবো?")
+                    .setMessage("ক্লিপবোর্ডের সব লেখা (${entries.size} টা) মুছে ফেলবো?")
+                    .setPositiveButton("মুছে ফেলো") { _, _ ->
+                        ClipboardStore.clear(this)
+                        ClipboardStore.clearPending(this)
+                        refreshClipboardCard()
+                        Toast.makeText(this, "ক্লিপবোর্ড খালি করে দিয়েছি।", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
+            }
+            .setNegativeButton("ঠিক আছে", null)
+            .show()
+    }
+
+    /**
+     * v101: bachi hui likhai ki suchi — taaza sabse upar
+     * (zyada se zyada 20 dikhti hain)। Tap karte hi
+     * woh likhai clipboard par wapas copy hoti hai
+     * ("কপি হয়েছে — এখন পেস্ট করো")। "ছাঁকনি" se shreni
+     * ke hisab se dekho, "সম্পাদনা" se likhai badlo ya
+     * hatao। setMessage + setItems ek saath nahi chalte
+     * (v99 wala sabak) — isliye jaankari upar wale
+     * dialog me hai, yahan sirf suchi hai।
+     */
+    private fun showClipboardListDialog(filter: String?) {
+        if (isFinishing || isDestroyed) return
+        val all = ClipboardStore.loadAll(this)
+        val shown = all.filter { entry ->
+            filter == null || entry.effectiveCategory() == filter
+        }.take(20)
+        if (shown.isEmpty()) {
+            val what = if (filter == null) {
+                "এখনো কিছু সেভ হয়নি।"
+            } else {
+                "ক্লিপবোর্ডে ${clipboardCategoryDisplayName(filter)} ধরনের কিছু নেই।"
+            }
+            Toast.makeText(this, what, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val title = if (filter == null) {
+            "📋 ক্লিপবোর্ড (${all.size})"
+        } else {
+            "📋 ${clipboardCategoryDisplayName(filter)} (${all.count { it.effectiveCategory() == filter }})"
+        }
+        val items = shown.mapIndexed { i, entry ->
+            val singleLine = entry.text.replace("\n", " ").replace("\r", " ")
+            "${i + 1}. [${clipboardCategoryDisplayName(entry.effectiveCategory())}] " +
+                singleLine.take(50)
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(items) { _, which ->
+                val entry = shown[which]
+                if (ClipboardWatcher.copyToClipboard(this, entry.text)) {
+                    Toast.makeText(this, "কপি হয়েছে — এখন পেস্ট করো।", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "কপি করতে পারলাম না।", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setPositiveButton("ছাঁকনি") { _, _ ->
+                val options = mutableListOf("সবগুলো")
+                ClipboardStore.ALL_CATEGORIES.forEach { category ->
+                    options.add(clipboardCategoryDisplayName(category))
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("কোন শ্রেণি দেখবো?")
+                    .setItems(options.toTypedArray()) { _, picked ->
+                        if (picked == 0) {
+                            showClipboardListDialog(null)
+                        } else {
+                            showClipboardListDialog(
+                                ClipboardStore.ALL_CATEGORIES[picked - 1]
+                            )
+                        }
+                    }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
+            }
+            .setNeutralButton("সম্পাদনা") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("কোনটা বদলাবো?")
+                    .setItems(items) { _, which ->
+                        showClipboardEditDialog(shown[which])
+                    }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
+            }
+            .setNegativeButton("ঠিক আছে", null)
+            .show()
+    }
+
+    /**
+     * v101: ek bachi hui likhai badlo ya hatao — likhai
+     * badalne par shreni dobara auto lagti hai (user ki
+     * sikhayi hui shreni ho to wahi rehti hai)।
+     */
+    private fun showClipboardEditDialog(entry: ClipboardStore.ClipboardEntry) {
+        if (isFinishing || isDestroyed) return
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val textInput = EditText(this).apply {
+            setText(entry.text)
+            setPadding(padding, padding / 2, padding, padding / 2)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("লেখাটা বদলাও")
+            .setView(textInput)
+            .setPositiveButton("সেভ করো") { _, _ ->
+                val newText = textInput.text.toString().trim()
+                if (newText.isEmpty()) {
+                    Toast.makeText(this, "লেখাটা খালি — কিছু লিখে সেভ করো।", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val index = ClipboardStore.indexOf(this, entry)
+                if (index < 0) {
+                    Toast.makeText(this, "ওই লেখাটা আর তালিকায় নেই।", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                ClipboardStore.updateText(this, index, newText)
+                refreshClipboardCard()
+                Toast.makeText(this, "বদলে দিয়েছি।", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("মুছে ফেলো") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("মুছে ফেলবো?")
+                    .setMessage("এই লেখাটা ক্লিপবোর্ড থেকে মুছে ফেলবো?")
+                    .setPositiveButton("মুছে ফেলো") { _, _ ->
+                        val index = ClipboardStore.indexOf(this, entry)
+                        if (index >= 0) {
+                            ClipboardStore.removeAt(this, index)
+                            refreshClipboardCard()
+                            Toast.makeText(this, "মুছে দিয়েছি।", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
             }
             .setNegativeButton("বাতিল", null)
             .show()
@@ -3146,6 +3359,14 @@ class MainActivity : Activity() {
             runDirectUpi(commandText)
             return
         }
+        // v101: SMART CLIPBOARD MANAGER — copy ki hui
+        // likhai padho / paste karo / khaali karo / shreni
+        // sikhao। Bandha kaam background executor par
+        // (runDirectUpi wala hi raasta)।
+        if (commandEngine.isClipboardCommand(commandText)) {
+            runDirectClipboard(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -4310,6 +4531,29 @@ class MainActivity : Activity() {
                 commandEngine.runUpiCommand(text)
             } catch (t: Throwable) {
                 CommandResult("UPI পেমেন্ট খুলতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v101: bina mastishk ke seedha clipboard wala kaam —
+     * runDirectUpi wala hi raasta: koshish background
+     * executor par (paste latch), natija mainHandler se
+     * wapas aakar bola/dikhaya jata hai।
+     */
+    private fun runDirectClipboard(text: String) {
+        showResponse("Maya: দেখছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runClipboardCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("ক্লিপবোর্ডটা দেখতে পারলাম না।", true)
             }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post

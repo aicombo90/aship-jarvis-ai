@@ -46,6 +46,7 @@ import com.aship.jarvis.chat.AddaEngine
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.OverlayLauncher
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.commands.ClipboardWatcher
 import com.aship.jarvis.commands.ComboCommands
 import com.aship.jarvis.commands.CommandEngine
 import com.aship.jarvis.commands.CommandResult
@@ -664,6 +665,11 @@ class JarvisWakeService : Service() {
         // v37: screen-agent ke sawalon ki mezbaani is
         // service ke naam bandho (teardown me hat ti hai).
         ScreenConfirm.registerServiceHost(screenConfirmHost)
+        // v101: SMART CLIPBOARD MANAGER — Maya chal rahi
+        // ho to copy ki hui likhai bhi bachta rahe
+        // (ref-count wala watcher — saamne wali screen
+        // bhi yahi bulati hai, band hona teardown me)।
+        ClipboardWatcher.start(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -768,6 +774,10 @@ class JarvisWakeService : Service() {
         // roko — service band hone ke baad screen peeche
         // se scroll hoti na rahe।
         CommandEngine.stopContinuousScroll()
+        // v101: clipboard watcher band — service ja rahi
+        // hai, aage ki copy ab nahi bachegi (saamne wali
+        // screen khuli ho to uska apna watcher chalega)।
+        ClipboardWatcher.stop()
         // v37: screen-agent wali mezbaani sabse pehle hatao.
         ScreenConfirm.unregisterServiceHost(screenConfirmHost)
         state = State.STOPPED
@@ -3461,6 +3471,16 @@ class JarvisWakeService : Service() {
         if (commandEngine.isUpiCommand(text)) {
             val upiResult = commandEngine.runUpiCommand(text)
             finishCommandResult(text, upiResult)
+            return
+        }
+        // v101: SMART CLIPBOARD MANAGER — copy ki hui
+        // likhai padho / paste karo / khaali karo / shreni
+        // sikhao। Agent se pehle pakke raaste se (UPI
+        // wala hi niyam) — paste bandha kaam hai, isi
+        // executor thread par।
+        if (commandEngine.isClipboardCommand(text)) {
+            val clipboardResult = commandEngine.runClipboardCommand(text)
+            finishCommandResult(text, clipboardResult)
             return
         }
         // v38: pakka scroll hukm bhi agent se pehle pakke

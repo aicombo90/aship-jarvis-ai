@@ -4448,6 +4448,551 @@ class CommandEngine(
         PlayIntent.SpokenLang.ENGLISH -> "Cancelled the payment."
     }
 
+    // -- v101: SMART CLIPBOARD MANAGER (copy ki hui likhai, shreni ke saath) --
+
+    /**
+     * v101: clipboard wala hukm hai kya — padho / paste /
+     * khaali karo / shreni sikhao / shreni ki suchi।
+     * Sasta match, koi IO nahi (pending saaf ki jaanch
+     * chhodkar — woh ek chhoti prefs padhai hai)।
+     * Paste wale raaste me "ক্লিপবোর্ড" shabd hona hi
+     * chahiye — warna nanga "পেস্ট করো" v67 wale app
+     * paste ka kaam hai, yahan kabhi nahi phansta।
+     */
+    fun isClipboardCommand(rawText: String): Boolean {
+        if (isBareClipboardYes(rawText) &&
+            ClipboardStore.isPendingClearFresh(context)
+        ) {
+            return true
+        }
+        if (matchesAny(rawText, clipboardClearMarkers)) return true
+        if (matchesAny(rawText, clipboardPasteMarkers) &&
+            matchesAny(rawText, clipboardWordMarkers)
+        ) {
+            return true
+        }
+        if (matchesAny(rawText, clipboardTeachCategoryMarkers) &&
+            (matchesAny(rawText, clipboardWordMarkers) ||
+                matchesAny(rawText, clipboardThatMarkers))
+        ) {
+            return true
+        }
+        if (isListByCategory(rawText)) return true
+        if (matchesAny(rawText, clipboardReadMarkers)) return true
+        return isBareClipboardWord(rawText)
+    }
+
+    /** v101: MainActivity / wake service wala raasta — paste bandha kaam hai (latch), phir bhi background thread se. */
+    fun runClipboardCommand(rawText: String): CommandResult {
+        return clipboardCommand(rawText)
+            ?: CommandResult(clipboardWhatReply(PlayIntent.requestLanguage(rawText)), true)
+    }
+
+    /**
+     * v101: clipboard wala hukm — pending saaf ki "হ্যাঁ" /
+     * khaali karne ki darkhwast / paste / shreni sikhao /
+     * shreni ki suchi / padho। Na ho to null — bulane
+     * wala apna aam raasta aage badhaye।
+     */
+    fun clipboardCommand(rawText: String): CommandResult? {
+        if (!isClipboardCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        // 1. Pending saaf ki "হ্যাঁ" — nanga haan hi maana
+        // jayega (prastav wala jawab pehle hi upar pakda
+        // gaya hai, isliye yahan takraav nahi)।
+        if (isBareClipboardYes(rawText) &&
+            ClipboardStore.isPendingClearFresh(context)
+        ) {
+            ClipboardStore.clear(context)
+            ClipboardStore.clearPending(context)
+            return CommandResult(clipboardClearedReply(lang), true)
+        }
+        // 2. Khaali karne ki darkhwast — pehle ginati +
+        // sawal, "হ্যাঁ" par hi saaf hoga।
+        if (matchesAny(rawText, clipboardClearMarkers)) {
+            val count = ClipboardStore.count(context)
+            if (count <= 0) {
+                return CommandResult(clipboardAlreadyEmptyReply(lang), true)
+            }
+            ClipboardStore.requestClear(context)
+            return CommandResult(clipboardAskClearReply(lang, count), true)
+        }
+        // 3. Paste — "ক্লিপবোর্ড থেকে [N] নম্বরটা পেস্ট করো"।
+        if (matchesAny(rawText, clipboardPasteMarkers) &&
+            matchesAny(rawText, clipboardWordMarkers)
+        ) {
+            return clipboardPasteCommand(rawText, lang)
+        }
+        // 4. Shreni sikhao — "এটাকে / [N] নম্বরটাকে [shreni] হিসেবে সেভ করো"।
+        if (matchesAny(rawText, clipboardTeachCategoryMarkers) &&
+            (matchesAny(rawText, clipboardWordMarkers) ||
+                matchesAny(rawText, clipboardThatMarkers))
+        ) {
+            return clipboardTeachCategoryCommand(rawText, lang)
+        }
+        // 5. Shreni ki suchi — "ক্লিপবোর্ডের লিংকগুলো বলো"।
+        if (isListByCategory(rawText)) {
+            return clipboardListCategoryCommand(rawText, lang)
+        }
+        // 6. Padho — "ক্লিপবোর্ডে কী আছে" / nanga "ক্লিপবোর্ড"।
+        if (matchesAny(rawText, clipboardReadMarkers) ||
+            isBareClipboardWord(rawText)
+        ) {
+            return clipboardReadCommand(lang)
+        }
+        return null
+    }
+
+    /** v101: nanga "হ্যাঁ" (pending saaf ki pushti ke liye) — bilkul waisa hi, kuch aur mila hua nahi. */
+    private fun isBareClipboardYes(rawText: String): Boolean {
+        val trimmed = rawText.trim().lowercase(Locale.ROOT)
+        return trimmed in listOf(
+            "হ্যাঁ", "হ্যা", "হ্যাঁ করো", "হ্যাঁ মুছে ফেলো",
+            "হ্যাঁ মুছে দাও", "হ্যাঁ খালি করো", "হ্যাঁ সাফ করো",
+            "হ্যাঁ ঠিক আছে", "yes", "yeah", "हाँ", "हाँ कर दो", "yes kar do"
+        )
+    }
+
+    /** v101: nanga "ক্লিপবোর্ড" — akele shabd ka matlab padho. */
+    private fun isBareClipboardWord(rawText: String): Boolean {
+        val trimmed = rawText.trim().lowercase(Locale.ROOT)
+        return trimmed == "ক্লিপবোর্ড" || trimmed == "clipboard" ||
+            trimmed == "क्लिपबोर्ड"
+    }
+
+    /**
+     * v101: shreni ki suchi wala hukm hai kya — "ক্লিপবোর্ড"
+     * + shreni ka shabd + "গুলো" + bolne/dikhane ki kriya,
+     * chaaro chahiye (warna aam "ক্লিপবোর্ডে কী আছে" yahan
+     * nahi phansta — woh padhne wala raasta hai)।
+     */
+    private fun isListByCategory(rawText: String): Boolean {
+        if (!matchesAny(rawText, clipboardWordMarkers)) return false
+        val lower = rawText.lowercase(Locale.ROOT)
+        if (!lower.contains("গুলো")) return false
+        if (extractClipboardCategory(rawText) == null) return false
+        return matchesAny(rawText, clipboardListVerbMarkers)
+    }
+
+    /**
+     * v101: entry ka number — "২ নম্বর" / "নম্বর ২" /
+     * "number 2" (Bangla/Devanagari ank pehle ASCII me),
+     * warna kram-suchak (প্রথম/দ্বিতীয়/তৃতীয়...)। Na
+     * mile to null (bulane wala taaza wali lega)।
+     */
+    private fun extractEntryNumber(rawText: String): Int? {
+        val normalized = UpiCommands.normalizeDigits(rawText)
+        Regex("(\\d+)\\s*(নম্বর|নাম্বার|number|নং)").find(normalized)?.let {
+            return it.groupValues[1].toIntOrNull()
+        }
+        Regex("(নম্বর|নাম্বার|number|নং)\\s*(\\d+)").find(normalized)?.let {
+            return it.groupValues[2].toIntOrNull()
+        }
+        val lower = rawText.lowercase(Locale.ROOT)
+        return when {
+            lower.contains("প্রথম") || lower.contains("first") -> 1
+            lower.contains("দ্বিতীয়") || lower.contains("second") -> 2
+            lower.contains("তৃতীয়") || lower.contains("third") -> 3
+            lower.contains("চতুর্থ") || lower.contains("fourth") -> 4
+            lower.contains("পঞ্চম") || lower.contains("fifth") -> 5
+            else -> null
+        }
+    }
+
+    /** v101: baat me shreni ka shabd hai kya — link / phone / UPI / address / code / text. */
+    private fun extractClipboardCategory(rawText: String): String? {
+        val lower = rawText.lowercase(Locale.ROOT)
+        return when {
+            lower.contains("ইউপিআই") || lower.contains("upi") ->
+                ClipboardStore.CAT_UPI
+            lower.contains("লিংক") || lower.contains("লিঙ্ক") ||
+                lower.contains("link") -> ClipboardStore.CAT_LINK
+            lower.contains("ফোন") || lower.contains("phone") ||
+                lower.contains("মোবাইল") || lower.contains("mobile") ||
+                lower.contains("নম্বর") || lower.contains("নাম্বার") ||
+                lower.contains("number") -> ClipboardStore.CAT_PHONE
+            lower.contains("ঠিকানা") || lower.contains("address") ||
+                lower.contains("এড্রেস") -> ClipboardStore.CAT_ADDRESS
+            lower.contains("কোড") || lower.contains("code") ->
+                ClipboardStore.CAT_CODE
+            lower.contains("লেখা") || lower.contains("text") ||
+                lower.contains("টেক্সট") -> ClipboardStore.CAT_TEXT
+            else -> null
+        }
+    }
+
+    /** v101: shreni ka naam — bolne/dikhane par user ki bhasha me. */
+    private fun clipboardCategoryName(
+        category: String,
+        lang: PlayIntent.SpokenLang
+    ): String = when (category) {
+        ClipboardStore.CAT_LINK -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "লিংক"
+            PlayIntent.SpokenLang.HINDI -> "लिंक"
+            PlayIntent.SpokenLang.ENGLISH -> "link"
+        }
+        ClipboardStore.CAT_PHONE -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "ফোন"
+            PlayIntent.SpokenLang.HINDI -> "फ़ोन"
+            PlayIntent.SpokenLang.ENGLISH -> "phone"
+        }
+        ClipboardStore.CAT_UPI -> "UPI"
+        ClipboardStore.CAT_ADDRESS -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "ঠিকানা"
+            PlayIntent.SpokenLang.HINDI -> "पता"
+            PlayIntent.SpokenLang.ENGLISH -> "address"
+        }
+        ClipboardStore.CAT_CODE -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "কোড"
+            PlayIntent.SpokenLang.HINDI -> "कोड"
+            PlayIntent.SpokenLang.ENGLISH -> "code"
+        }
+        else -> when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "লেখা"
+            PlayIntent.SpokenLang.HINDI -> "लेख"
+            PlayIntent.SpokenLang.ENGLISH -> "text"
+        }
+    }
+
+    /** v101: taazi 3 likhai padhkar sunao (shreni + pehle 60 akshar). */
+    private fun clipboardReadCommand(lang: PlayIntent.SpokenLang): CommandResult {
+        val entries = ClipboardStore.loadAll(context).take(3)
+        if (entries.isEmpty()) {
+            return CommandResult(clipboardEmptyReply(lang), true)
+        }
+        val total = ClipboardStore.count(context)
+        val lines = entries.mapIndexed { i, entry ->
+            "${i + 1}. [${clipboardCategoryName(entry.effectiveCategory(), lang)}] " +
+                entry.text.take(60)
+        }
+        return CommandResult(clipboardReadReply(lang, total, lines), true)
+    }
+
+    /** v101: ek shreni ki taazi 3 likhai padhkar sunao. */
+    private fun clipboardListCategoryCommand(
+        rawText: String,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val category = extractClipboardCategory(rawText)
+            ?: return CommandResult(clipboardWhichCategoryReply(lang), true)
+        val all = ClipboardStore.loadAll(context)
+        val entries = all.filter { it.effectiveCategory() == category }.take(3)
+        if (entries.isEmpty()) {
+            return CommandResult(
+                clipboardNoEntryForCategoryReply(lang, category), true
+            )
+        }
+        val total = all.count { it.effectiveCategory() == category }
+        val lines = entries.mapIndexed { i, entry ->
+            "${i + 1}. ${entry.text.take(60)}"
+        }
+        return CommandResult(
+            clipboardCategoryListReply(lang, category, total, lines), true
+        )
+    }
+
+    /** v101: entry ki shreni user ki sikhayi hui se badlo. */
+    private fun clipboardTeachCategoryCommand(
+        rawText: String,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val category = extractClipboardCategory(rawText)
+            ?: return CommandResult(clipboardWhichCategoryReply(lang), true)
+        val entries = ClipboardStore.loadAll(context)
+        if (entries.isEmpty()) {
+            return CommandResult(clipboardEmptyReply(lang), true)
+        }
+        val number = extractEntryNumber(rawText) ?: 1
+        if (number < 1 || number > entries.size) {
+            return CommandResult(
+                clipboardNoSuchEntryReply(lang, entries.size), true
+            )
+        }
+        ClipboardStore.setUserCategory(context, number - 1, category)
+        return CommandResult(clipboardCategorySetReply(lang, category), true)
+    }
+
+    /** v101: entry paste karo — number na ho to taaza wali (1). */
+    private fun clipboardPasteCommand(
+        rawText: String,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val entries = ClipboardStore.loadAll(context)
+        if (entries.isEmpty()) {
+            return CommandResult(clipboardEmptyReply(lang), true)
+        }
+        val number = extractEntryNumber(rawText)
+        if (number != null && (number < 1 || number > entries.size)) {
+            // Bada ank — ho sakta hai woh entry ka number
+            // nahi, khud likhai ho (jaise phone number) —
+            // waisi likhai wali entry dhoondho।
+            val digitRun = Regex("\\d+")
+                .find(UpiCommands.normalizeDigits(rawText))?.value
+            if (digitRun != null && digitRun.length >= 6) {
+                val byText = entries.indexOfFirst {
+                    UpiCommands.normalizeDigits(it.text).contains(digitRun)
+                }
+                if (byText >= 0) {
+                    return pasteClipboardEntry(entries[byText], lang)
+                }
+            }
+            return CommandResult(
+                clipboardNoSuchEntryReply(lang, entries.size), true
+            )
+        }
+        return pasteClipboardEntry(entries[(number ?: 1) - 1], lang)
+    }
+
+    /**
+     * v101: ek bachi hui likhai khule hue khane me paste
+     * karo — v67 wala asal paste raasta
+     * ([JarvisAccessibilityService.pasteScreenText]):
+     * pehle clipboard + ACTION_PASTE, na baithe to
+     * ACTION_SET_TEXT, natija sachha (PASTED / TYPED /
+     * FAILED)। Accessibility band ho ya khana na mile
+     * to clipboard par rakho taaki user khud paste kar
+     * sake, aur sach bolo (jhootha "পেস্ট করে দিয়েছি"
+     * kabhi nahi)। Mobile-data wala hi latch wala
+     * intezaar — bulane wale dono raaste background
+     * thread par hain।
+     */
+    private fun pasteClipboardEntry(
+        entry: ClipboardStore.ClipboardEntry,
+        lang: PlayIntent.SpokenLang
+    ): CommandResult {
+        val text = entry.text
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            ClipboardWatcher.copyToClipboard(context, text)
+            return CommandResult(clipboardPasteManualReply(lang), true)
+        }
+        val latch = CountDownLatch(1)
+        var outcome: JarvisAccessibilityService.PasteResult? = null
+        try {
+            JarvisAccessibilityService.pasteScreenText(context, text) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            ClipboardWatcher.copyToClipboard(context, text)
+            return CommandResult(clipboardPasteManualReply(lang), true)
+        }
+        val completed = try {
+            latch.await(CLIPBOARD_PASTE_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            false
+        }
+        if (!completed || outcome == null ||
+            outcome == JarvisAccessibilityService.PasteResult.FAILED
+        ) {
+            ClipboardWatcher.copyToClipboard(context, text)
+            return CommandResult(clipboardPasteManualReply(lang), true)
+        }
+        return CommandResult(clipboardPastedReply(lang), true)
+    }
+
+    // -- v101: clipboard wale marker (teeno bhasha) --
+
+    private val clipboardWordMarkers = listOf(
+        "ক্লিপবোর্ড", "clipboard", "क्लिपबोर्ड"
+    )
+
+    private val clipboardReadMarkers = listOf(
+        // Bangla (script)
+        "ক্লিপবোর্ডে কী আছে", "ক্লিপবোর্ডে কি আছে",
+        "ক্লিপবোর্ড দেখাও", "ক্লিপবোর্ডের লেখাগুলো বলো",
+        "ক্লিপবোর্ডের লেখা বলো", "ক্লিপবোর্ডে কি কি আছে",
+        "ক্লিপবোর্ড খুলে দেখাও", "ক্লিপবোর্ডে কটা আছে",
+        "ক্লিপবোর্ডে কয়টা আছে", "ক্লিপবোর্ডে কত আছে",
+        // Hindi
+        "क्लिपबोर्ड में क्या है", "क्लिपबोर्ड दिखाओ",
+        "क्लिपबोर्ड में क्या क्या है",
+        // English
+        "what is in the clipboard", "what's in the clipboard",
+        "show clipboard", "read the clipboard"
+    )
+
+    private val clipboardPasteMarkers = listOf(
+        // Bangla (script)
+        "পেস্ট করো", "পেস্ট করে দাও", "পেস্ট করে দিও",
+        // Bangla (roman roop)
+        "paste koro", "paste kore dao", "paste kore",
+        // Hindi
+        "पेस्ट करो", "पेस्ट कर दो",
+        // English
+        "paste"
+    )
+
+    private val clipboardClearMarkers = listOf(
+        // Bangla (script)
+        "ক্লিপবোর্ড খালি করো", "ক্লিপবোর্ড মুছে ফেলো",
+        "ক্লিপবোর্ড সাফ করো", "ক্লিপবোর্ড খালি করে দাও",
+        "ক্লিপবোর্ডের সব মুছে ফেলো", "ক্লিপবোর্ডের সব মুছে দাও",
+        // Hindi
+        "क्लिपबोर्ड खाली करो", "क्लिपबोर्ड साफ करो",
+        "क्लिपबोर्ड की सारी लिखाई मिटा दो",
+        // English
+        "clear clipboard", "empty clipboard"
+    )
+
+    private val clipboardTeachCategoryMarkers = listOf(
+        // Bangla (script)
+        "হিসেবে সেভ করো", "হিসেবে মনে রাখো",
+        // Hindi
+        "के तौर पर सेव करो", "के तौर पर याद रखो",
+        // English
+        "save it as", "save as"
+    )
+
+    private val clipboardThatMarkers = listOf(
+        "এটাকে", "এইটাকে", "इसको"
+    )
+
+    private val clipboardListVerbMarkers = listOf(
+        // Bangla (script)
+        "বলো", "দেখাও", "শোনাও",
+        // Hindi
+        "बोलो", "दिखाओ", "सुनाओ",
+        // English
+        "show", "tell", "read"
+    )
+
+    // -- v101: clipboard wale jawab (hukm ki bhasha me) --
+
+    private fun clipboardWhatReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে কী করতে চাও — 'ক্লিপবোর্ডে কী আছে' বললে পড়ে শোনাবো, " +
+                "'ক্লিপবোর্ড থেকে ১ নম্বরটা পেস্ট করো' বললে পেস্ট করবো।"
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में क्या करूँ — 'क्लिपबोर्ड में क्या है' बोलो तो पढ़कर सुनाऊँगी, " +
+                "'क्लिपबोर्ड से 1 नंबर पेस्ट करो' बोलो तो पेस्ट कर दूँगी।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "What should I do with the clipboard — say 'what is in the clipboard' " +
+                "and I'll read it, or 'paste number 1 from the clipboard' and I'll paste it."
+    }
+
+    private fun clipboardEmptyReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে এখনো কিছু সেভ হয়নি — কিছু কপি করলেই মনে রাখবো।"
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में अभी कुछ सेव नहीं है — कुछ कॉपी करते ही याद रख लूँगी।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "Nothing is saved in the clipboard yet — copy something and I'll remember it."
+    }
+
+    private fun clipboardReadReply(
+        lang: PlayIntent.SpokenLang,
+        total: Int,
+        lines: List<String>
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে $total টা লেখা আছে। " + lines.joinToString(" ")
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में $total लिखाई है। " + lines.joinToString(" ")
+        PlayIntent.SpokenLang.ENGLISH ->
+            "There are $total items in the clipboard. " + lines.joinToString(" ")
+    }
+
+    private fun clipboardPastedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "পেস্ট করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "पेस्ट कर दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Pasted it."
+    }
+
+    private fun clipboardPasteManualReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "লেখার বাক্স খোলা পেলাম না — ক্লিপবোর্ডে কপি করে রেখেছি, নিজে পেস্ট করে নাও।"
+        PlayIntent.SpokenLang.HINDI ->
+            "लिखने का बॉक्स खुला नहीं मिला — क्लिपबोर्ड में कॉपी करके रख दिया है, खुद पेस्ट कर लो।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "I couldn't find an open text box — I've copied it to the clipboard, paste it yourself."
+    }
+
+    private fun clipboardNoSuchEntryReply(
+        lang: PlayIntent.SpokenLang,
+        size: Int
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে মাত্র $size টা লেখা আছে — ওই নম্বরটা নেই।"
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में सिर्फ $size लिखाई है — वह नंबर नहीं है।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "There are only $size items in the clipboard — that number isn't there."
+    }
+
+    private fun clipboardAskClearReply(
+        lang: PlayIntent.SpokenLang,
+        count: Int
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডের সব লেখা ($count টা) মুছে ফেলবো? 'হ্যাঁ' বললে মুছে দেবো।"
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड की सारी लिखाई ($count) मिटा दूँ? 'हाँ' बोलो तो मिटा दूँगी।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "Should I delete everything in the clipboard ($count items)? Say 'yes' and I'll clear it."
+    }
+
+    private fun clipboardClearedReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ক্লিপবোর্ড খালি করে দিয়েছি।"
+        PlayIntent.SpokenLang.HINDI -> "क्लिपबोर्ड खाली कर दिया है।"
+        PlayIntent.SpokenLang.ENGLISH -> "Cleared the clipboard."
+    }
+
+    private fun clipboardAlreadyEmptyReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI -> "ক্লিপবোর্ড এমনিতেই খালি।"
+        PlayIntent.SpokenLang.HINDI -> "क्लिपबोर्ड पहले से ही खाली है।"
+        PlayIntent.SpokenLang.ENGLISH -> "The clipboard is already empty."
+    }
+
+    private fun clipboardCategorySetReply(
+        lang: PlayIntent.SpokenLang,
+        category: String
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ঠিক আছে, এটাকে ${clipboardCategoryName(category, lang)} হিসেবে মনে রাখলাম।"
+        PlayIntent.SpokenLang.HINDI ->
+            "ठीक है, इसे ${clipboardCategoryName(category, lang)} के तौर पर याद रख लिया है।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "OK, I'll remember this one as ${clipboardCategoryName(category, lang)}."
+    }
+
+    private fun clipboardCategoryListReply(
+        lang: PlayIntent.SpokenLang,
+        category: String,
+        total: Int,
+        lines: List<String>
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে ${clipboardCategoryName(category, lang)} ধরনের $total টা আছে। " +
+                lines.joinToString(" ")
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में ${clipboardCategoryName(category, lang)} तरह की $total लिखाई है। " +
+                lines.joinToString(" ")
+        PlayIntent.SpokenLang.ENGLISH ->
+            "There are $total ${clipboardCategoryName(category, lang)} items in the clipboard. " +
+                lines.joinToString(" ")
+    }
+
+    private fun clipboardNoEntryForCategoryReply(
+        lang: PlayIntent.SpokenLang,
+        category: String
+    ): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "ক্লিপবোর্ডে ${clipboardCategoryName(category, lang)} ধরনের কিছু নেই।"
+        PlayIntent.SpokenLang.HINDI ->
+            "क्लिपबोर्ड में ${clipboardCategoryName(category, lang)} तरह की कोई लिखाई नहीं है।"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "There's nothing of the ${clipboardCategoryName(category, lang)} kind in the clipboard."
+    }
+
+    private fun clipboardWhichCategoryReply(lang: PlayIntent.SpokenLang): String = when (lang) {
+        PlayIntent.SpokenLang.BENGALI ->
+            "কোন শ্রেণি — লিংক, ফোন, UPI, ঠিকানা, কোড না লেখা?"
+        PlayIntent.SpokenLang.HINDI ->
+            "कौन सी श्रेणी — लिंक, फ़ोन, UPI, पता, कोड या लेख?"
+        PlayIntent.SpokenLang.ENGLISH ->
+            "Which category — link, phone, UPI, address, code or text?"
+    }
+
     /**
      * v40: ye suna hua hukm seedha SCREENSHOT lene wala
      * hai kya — "স্ক্রিনশট নাও/তোলো/নে", "स्क्रीनशॉट लो",
@@ -4873,6 +5418,14 @@ class CommandEngine(
 
         /** v92: ek tap-koshish (capture + tap) ka adhiktam intezaar। */
         const val TAP_COMMAND_WAIT_MS = 5_000L
+
+        /**
+         * v101: clipboard se ek paste-koshish (clipboard +
+         * ACTION_PASTE, na baithe to ACTION_SET_TEXT) ka
+         * adhiktam intezaar — aam taur par 1 s se kam me
+         * ho jata hai; 15 s sirf dheeme phone ke liye।
+         */
+        const val CLIPBOARD_PASTE_WAIT_MS = 15_000L
 
         /** v92: back global action ka adhiktam intezaar। */
         const val BACK_COMMAND_WAIT_MS = 3_000L
