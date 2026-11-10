@@ -3306,6 +3306,27 @@ class JarvisWakeService : Service() {
             finishCommandResult(text, backResult)
             return
         }
+        // v95: MAYA'S EYES — screen dekhna (describe / find /
+        // read) — agent se pehle pakke raaste se। Bandhi
+        // koshish (capture + Gemini vision) isi executor
+        // thread par chalti hai, main thread par nahi —
+        // screenshot wala hi niyam। Kram: read -> find ->
+        // describe, taaki "read what's on the screen"
+        // describe me na ghuse। Tap-by-description yahan
+        // alag se nahi — woh deterministicTapCommand ke
+        // andar vision fallback hai (naam se na mile to)।
+        commandEngine.readScreenCommand(text)?.let { eyesResult ->
+            finishCommandResult(text, eyesResult)
+            return
+        }
+        commandEngine.findOnScreenCommand(text)?.let { eyesResult ->
+            finishCommandResult(text, eyesResult)
+            return
+        }
+        commandEngine.describeScreenCommand(text)?.let { eyesResult ->
+            finishCommandResult(text, eyesResult)
+            return
+        }
         // v38: pakka scroll hukm bhi agent se pehle pakke
         // offline raaste se — "স্ক্রল ডাউন করো" bolte hi
         // Accessibility swipe karegi, mastishk ke chakkar

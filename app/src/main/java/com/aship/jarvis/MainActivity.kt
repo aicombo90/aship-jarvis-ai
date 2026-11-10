@@ -2725,6 +2725,17 @@ class MainActivity : Activity() {
             speaker.speak(backResult.responseText)
             return
         }
+        // v95: MAYA'S EYES — screen dekhna (read / find /
+        // describe) — agent se pehle pakke raaste se। Capture
+        // + Gemini vision dono bandha kaam hain, isliye main
+        // thread par NAHI chal sakte — screenshot wala hi
+        // niyam (runDirectScreenEyes, background executor)।
+        // Tap-by-description yahan alag se nahi — woh
+        // deterministicTapCommand ke andar vision fallback hai।
+        if (commandEngine.isScreenEyesCommand(commandText)) {
+            runDirectScreenEyes(commandText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service
@@ -3716,6 +3727,33 @@ class MainActivity : Activity() {
                 commandEngine.runScreenshotCommand(text)
             } catch (t: Throwable) {
                 CommandResult("স্ক্রিনশট নিতে পারলাম না।", true)
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                politeFailureSpokenThisTurn = false
+                showResponse("Maya: ${result.responseText}")
+                speaker.speak(result.responseText)
+            }
+        }
+    }
+
+    /**
+     * v95: MAYA'S EYES — bina mastishk ke seedha screen
+     * dekhna (describe / find / read) — runScreenshotCommand
+     * wala hi raasta: koshish apne background executor par
+     * (capture ka latch + Gemini vision, dono bandha kaam;
+     * main thread par nahi chal sakte), natija mainHandler
+     * se wapas aakar bola/dikhaya jata hai। Natija hamesha
+     * sachha — dikha / nahi dikha / key nahi / screen
+     * surakshit — andaza kabhi nahi।
+     */
+    private fun runDirectScreenEyes(text: String) {
+        showResponse("Maya: দেখছি...")
+        background.execute {
+            val result = try {
+                commandEngine.runScreenEyesCommand(text)
+            } catch (t: Throwable) {
+                CommandResult("স্ক্রিনটা দেখতে পারলাম না।", true)
             }
             mainHandler.post {
                 if (isFinishing || isDestroyed) return@post

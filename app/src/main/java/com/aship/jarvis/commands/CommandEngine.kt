@@ -7,6 +7,8 @@ import android.os.Looper
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.ai.GeminiBrain
+import com.aship.jarvis.ai.ScreenEyes
 import com.aship.jarvis.ai.ScreenSafety
 import com.aship.jarvis.ai.ScreenshotStore
 import java.net.URLEncoder
@@ -1921,6 +1923,30 @@ class CommandEngine(
                 saveTapDiag(rawText, "OK (overlap)")
                 return CommandResult(tapDoneReply(lang), true)
             }
+            // v95: tasveer se dhoondho — naam se na mile to
+            // Gemini ko nishan-aankit tasveer dikhakar pata
+            // lagao (jaise "লাল বোতামটা" / "the red button")।
+            // Main thread par network call nahi — foreground
+            // (TAP TO SPEAK / likha) wala raasta main thread
+            // par hai, wahan ye kadam chhod do; wake service
+            // wala raasta background thread par hai, wahan
+            // chalega। Key na ho to bhi ye kadam nahi — pehle
+            // wala "পেলাম না" hi milega।
+            if (Looper.myLooper() != Looper.getMainLooper() &&
+                GeminiBrain.isConfigured(context)
+            ) {
+                val located = ScreenEyes.locateByVision(
+                    context, target.text, snapshot
+                )
+                val el = located.element
+                if (located.kind == ScreenEyes.Kind.OK && el != null &&
+                    tapPointSync(el.centerX, el.centerY)
+                ) {
+                    saveTapDiag(rawText, "OK (vision)")
+                    return CommandResult(tapDoneReply(lang), true)
+                }
+                saveTapDiag(rawText, "VISION_" + located.kind.name)
+            }
             saveTapDiag(rawText, "NOT_FOUND")
             return CommandResult(tapNotFoundReply(lang), true)
         }
@@ -2366,6 +2392,366 @@ class CommandEngine(
                 .putString(
                     "last_back_command",
                     rawText.trim().take(40) + " -> " + state
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // v95: MAYA'S EYES — screen dekhna (vision)
+    // ------------------------------------------------------------------
+
+    /**
+     * v95: teenon aankh-wale hukmon ka sasta pehchan —
+     * sirf shabd-milan (koi latch/IO/network nahi), taaki
+     * MainActivity main thread par pehle poochh kar
+     * background executor par chala sake (runDirectScreenEyes)।
+     */
+    fun isScreenEyesCommand(rawText: String): Boolean =
+        isReadScreenCommand(rawText) ||
+            isFindOnScreenCommand(rawText) ||
+            isDescribeScreenCommand(rawText)
+
+    /**
+     * v95: foreground (MainActivity) wala bandha raasta —
+     * background executor se bulana (describe/find/read
+     * teeno me capture + Gemini vision hota hai, main
+     * thread par nahi chal sakte)। Pehla mila hua hukm
+     * hi chalega (kram: read -> find -> describe, taaki
+     * "read what's on the screen" jaisa vakya describe
+     * me na ghuse)।
+     */
+    fun runScreenEyesCommand(rawText: String): CommandResult {
+        readScreenCommand(rawText)?.let { return it }
+        findOnScreenCommand(rawText)?.let { return it }
+        describeScreenCommand(rawText)?.let { return it }
+        return CommandResult(
+            eyesVisionFailedReply(PlayIntent.requestLanguage(rawText)), true
+        )
+    }
+
+    /** v95: "স্ক্রিনে কী আছে বলো" / "describe the screen" jaisa hukm hai kya। */
+    fun isDescribeScreenCommand(rawText: String): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return false
+        return eyesPhraseMatched(raw, EYES_DESCRIBE_PHRASES)
+    }
+
+    /**
+     * v95: screen par kya hai, batao — ScreenEyes.describe
+     * (tasveer + Gemini vision)। BANDHA call hai: background
+     * thread se hi bulana।
+     */
+    fun describeScreenCommand(rawText: String): CommandResult? {
+        if (!isDescribeScreenCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        val result = ScreenEyes.describe(context)
+        saveEyesDiag(rawText, "describe:" + result.kind.name)
+        return when (result.kind) {
+            ScreenEyes.Kind.OK ->
+                CommandResult(result.text!!, true)
+            ScreenEyes.Kind.NO_KEY ->
+                CommandResult(eyesNoKeyReply(lang), true)
+            ScreenEyes.Kind.NO_ACCESSIBILITY ->
+                CommandResult(eyesNeedsAccessibilityReply(lang), true)
+            ScreenEyes.Kind.NO_SHOT ->
+                CommandResult(eyesShotFailedReply(lang), true)
+            ScreenEyes.Kind.SECURE ->
+                CommandResult(eyesSecureReply(lang), true)
+            else ->
+                CommandResult(eyesVisionFailedReply(lang), true)
+        }
+    }
+
+    /**
+     * v95: "এই স্ক্রিনে [X] কোথায়" / "where is [X] on the
+     * screen" jaisa hukm hai kya — "কোথায়/where" + "স্ক্রিন/
+     * screen" dono chahiye, warna ye find nahi hai।
+     */
+    fun isFindOnScreenCommand(rawText: String): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return false
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        fun wordMatched(markers: List<String>): Boolean =
+            markers.any { marker ->
+                val needle = hindiSkeleton(marker)
+                surfaces.any { it.contains(needle) }
+            }
+        return wordMatched(EYES_WHERE_WORDS) &&
+            wordMatched(EYES_SCREEN_WORDS)
+    }
+
+    /**
+     * v95: [X] screen par kahan hai — pehle ped se, na
+     * mile to vision se; jagah hamesha hisse ke asal
+     * chaukone se। BANDHA call hai: background thread se hi।
+     */
+    fun findOnScreenCommand(rawText: String): CommandResult? {
+        if (!isFindOnScreenCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        val target = extractFindTarget(rawText)
+        if (target.isNullOrBlank()) {
+            saveEyesDiag(rawText, "find:EMPTY")
+            return CommandResult(eyesFindWhatReply(lang), true)
+        }
+        val result = ScreenEyes.find(context, target)
+        saveEyesDiag(rawText, "find:" + result.kind.name)
+        return when (result.kind) {
+            ScreenEyes.Kind.OK -> {
+                val spot = result.spot!!
+                CommandResult(eyesFindFoundReply(lang, target, spot), true)
+            }
+            ScreenEyes.Kind.NOT_FOUND ->
+                CommandResult(eyesFindNotFoundReply(lang, target), true)
+            ScreenEyes.Kind.NO_KEY ->
+                CommandResult(eyesNoKeyReply(lang), true)
+            ScreenEyes.Kind.NO_ACCESSIBILITY ->
+                CommandResult(eyesNeedsAccessibilityReply(lang), true)
+            ScreenEyes.Kind.NO_SHOT ->
+                CommandResult(eyesShotFailedReply(lang), true)
+            ScreenEyes.Kind.SECURE ->
+                CommandResult(eyesSecureReply(lang), true)
+            else ->
+                CommandResult(eyesVisionFailedReply(lang), true)
+        }
+    }
+
+    /** v95: "স্ক্রিনটা পড়ে শোনাও" / "read the screen" jaisa hukm hai kya। */
+    fun isReadScreenCommand(rawText: String): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return false
+        return eyesPhraseMatched(raw, EYES_READ_PHRASES)
+    }
+
+    /**
+     * v95: screen ka dikhai dene wala text padhkar sunao —
+     * pehle ped se, na mile to vision se। BANDHA call hai:
+     * background thread se hi bulana।
+     */
+    fun readScreenCommand(rawText: String): CommandResult? {
+        if (!isReadScreenCommand(rawText)) return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        val result = ScreenEyes.readAloud(context)
+        saveEyesDiag(rawText, "read:" + result.kind.name)
+        return when (result.kind) {
+            ScreenEyes.Kind.OK ->
+                CommandResult(eyesReadIntroReply(lang, result.text!!), true)
+            ScreenEyes.Kind.NO_KEY ->
+                CommandResult(eyesNoKeyReply(lang), true)
+            ScreenEyes.Kind.NO_ACCESSIBILITY ->
+                CommandResult(eyesNeedsAccessibilityReply(lang), true)
+            ScreenEyes.Kind.NO_SHOT ->
+                CommandResult(eyesShotFailedReply(lang), true)
+            ScreenEyes.Kind.SECURE ->
+                CommandResult(eyesSecureReply(lang), true)
+            else ->
+                CommandResult(eyesVisionFailedReply(lang), true)
+        }
+    }
+
+    /**
+     * v95: find wale hukm se nishana nikalo — "কোথায়/
+     * where" + "স্ক্রিন/screen" + bhare shabd hatakar
+     * bacha hua hi nishana hai; kuch na bache to null।
+     */
+    private fun extractFindTarget(rawText: String): String? {
+        val tokens = rawText.lowercase(Locale.ROOT).trim()
+            .split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?', '"', '\'') }
+            .filter { it.isNotEmpty() }
+        val kept = tokens.filter { it !in EYES_FIND_DROP_TOKENS }
+        val joined = kept.joinToString(" ").trim()
+        return if (joined.isEmpty()) null else joined
+    }
+
+    /**
+     * v95: bandhe wakya ka milan — v92 ke extractTapTarget
+     * wali hi shaili (kachha + normalize + do skeleton
+     * satahen), taaki Bangla/Hindi ke tode hue roop bhi milen।
+     */
+    private fun eyesPhraseMatched(raw: String, markers: List<String>): Boolean {
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        return markers.any { marker ->
+            val needles = listOf(
+                scrollSkeleton(marker), hindiSkeleton(marker)
+            ).distinct()
+            surfaces.any { surface ->
+                needles.any { surface.contains(it) }
+            }
+        }
+    }
+
+    /** v95: mile hisse ki jagah — user ki bhasha me ("উপরে বাঁদিকে" ...)। */
+    private fun zonePhrase(
+        spot: ScreenEyes.FoundSpot,
+        lang: PlayIntent.SpokenLang
+    ): String {
+        val key = spot.vertical + "-" + spot.horizontal
+        return when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> when (key) {
+                "top-left" -> "উপরে বাঁদিকে"
+                "top-centre" -> "উপরে মাঝখানে"
+                "top-right" -> "উপরে ডানদিকে"
+                "middle-left" -> "মাঝখানে বাঁদিকে"
+                "middle-centre" -> "মাঝখানে"
+                "middle-right" -> "মাঝখানে ডানদিকে"
+                "bottom-left" -> "নিচে বাঁদিকে"
+                "bottom-centre" -> "নিচে মাঝখানে"
+                "bottom-right" -> "নিচে ডানদিকে"
+                else -> "স্ক্রিনে"
+            }
+            PlayIntent.SpokenLang.HINDI -> when (key) {
+                "top-left" -> "ऊपर बाईं ओर"
+                "top-centre" -> "ऊपर बीच में"
+                "top-right" -> "ऊपर दाईं ओर"
+                "middle-left" -> "बीच में बाईं ओर"
+                "middle-centre" -> "बीच में"
+                "middle-right" -> "बीच में दाईं ओर"
+                "bottom-left" -> "नीचे बाईं ओर"
+                "bottom-centre" -> "नीचे बीच में"
+                "bottom-right" -> "नीचे दाईं ओर"
+                else -> "स्क्रीन पर"
+            }
+            PlayIntent.SpokenLang.ENGLISH -> when (key) {
+                "top-left" -> "top left"
+                "top-centre" -> "top centre"
+                "top-right" -> "top right"
+                "middle-left" -> "middle left"
+                "middle-centre" -> "in the middle"
+                "middle-right" -> "middle right"
+                "bottom-left" -> "bottom left"
+                "bottom-centre" -> "bottom centre"
+                "bottom-right" -> "bottom right"
+                else -> "on the screen"
+            }
+        }
+    }
+
+    /** v95: mila — jagah ke saath। */
+    private fun eyesFindFoundReply(
+        lang: PlayIntent.SpokenLang,
+        target: String,
+        spot: ScreenEyes.FoundSpot
+    ): String {
+        val zone = zonePhrase(spot, lang)
+        return when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "'$target' স্ক্রিনে আছে — $zone।"
+            PlayIntent.SpokenLang.HINDI ->
+                "'$target' स्क्रीन पर है — $zone।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "'$target' is on the screen — $zone."
+        }
+    }
+
+    /** v95: nahi mila — imaandaar "পেলাম না"। */
+    private fun eyesFindNotFoundReply(
+        lang: PlayIntent.SpokenLang,
+        target: String
+    ): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনে '$target' পেলাম না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन पर '$target' नहीं मिला।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I couldn't find '$target' on the screen."
+        }
+
+    /** v95: kya dhoondhna hai, wohi nahi bola। */
+    private fun eyesFindWhatReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনে কী খুঁজবো, সেটা বলো।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन पर क्या ढूँढूँ, वो बताओ।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Tell me what to look for on the screen."
+        }
+
+    /** v95: padhkar sunane ka mukh — phir screen ka apna text। */
+    private fun eyesReadIntroReply(
+        lang: PlayIntent.SpokenLang,
+        text: String
+    ): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনে লেখা আছে: $text"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन पर लिखा है: $text"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "On the screen it says: $text"
+        }
+
+    /** v95: screen dekhne ke liye Gemini key chahiye (API Keys screen se)। */
+    private fun eyesNoKeyReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিন দেখতে Gemini key লাগবে — API Keys থেকে key দাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन देखने के लिए Gemini key चाहिए — API Keys में key डालो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I need the Gemini key to see the screen — add it in API Keys."
+        }
+
+    /** v95: screen dekhne ke liye Accessibility pehle chahiye। */
+    private fun eyesNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিন দেখতে Accessibility লাগবে — অ্যাপ খুলে চালু করে নাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन देखने के लिए पहले ऐप खोलकर Accessibility ऑन कर लो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Seeing the screen needs Accessibility — please open the app and turn it on."
+        }
+
+    /** v95: tasveer hi nahi mili — sachha nakam jawab। */
+    private fun eyesShotFailedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনের ছবি নিতে পারলাম না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन की तस्वीर नहीं ले पाई।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I couldn't capture the screen."
+        }
+
+    /** v95: screen surakshit hai — dekhna mana hai। */
+    private fun eyesSecureReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "এই স্ক্রিনটা সুরক্ষিত — এটা দেখতে পারবো না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "यह स्क्रीन सुरक्षित है — इसे देख नहीं सकती।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "This screen is protected, so I can't see it."
+        }
+
+    /** v95: vision koshish asafal — sachha jawab, andaza nahi। */
+    private fun eyesVisionFailedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রিনটা দেখতে পারলাম না — আবার বলো।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रीन देख नहीं पाई — फिर से बोलो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I couldn't see the screen — please try again."
+        }
+
+    /** v95: aankh wali koshish ki report jarvis_diag me। */
+    private fun saveEyesDiag(rawText: String, tag: String) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_screen_eyes",
+                    tag + " :: " + rawText.trim().take(40)
                 )
                 .apply()
         } catch (t: Throwable) {
@@ -3218,6 +3604,77 @@ class CommandEngine(
             "শেয়ার", "পাঠিয়ে দাও",
             "send", "share",
             "भेज", "भेजो", "भेजिए", "शेयर"
+        )
+
+        /**
+         * v95: MAYA'S EYES — describe wale bandhe wakya
+         * ("স্ক্রিনে কী আছে বলো" / "describe the screen")।
+         * Skeleton satahon par contains milaya jata hai।
+         */
+        val EYES_DESCRIBE_PHRASES = listOf(
+            "স্ক্রিনে কী আছে", "স্ক্রিনে কি আছে",
+            "স্ক্রিনে কী দেখা যাচ্ছে", "স্ক্রিনে কি দেখা যাচ্ছে",
+            "স্ক্রিনটা দেখো", "স্ক্রিন দেখো",
+            "এই স্ক্রিনে কি আছে", "স্ক্রিনে কি আছে বলো",
+            "স্ক্রিনে কী আছে বলো", "স্ক্রিনে কি দেখতে পাচ্ছ",
+            "स्क्रीन पर क्या है", "स्क्रीन देखो",
+            "स्क्रीन में क्या है", "screen par kya hai",
+            "screen dekho", "screen pe kya hai",
+            "what's on the screen", "whats on the screen",
+            "what is on the screen", "describe the screen",
+            "look at the screen", "what do you see",
+            "what is on this screen"
+        )
+
+        /**
+         * v95: MAYA'S EYES — padhkar sunane wale bandhe
+         * wakya ("স্ক্রিনটা পড়ে শোনাও" / "read the screen")।
+         * Read ko describe se PEHLE jaancha jata hai, taaki
+         * "read what's on the screen" describe me na ghuse।
+         */
+        val EYES_READ_PHRASES = listOf(
+            "স্ক্রিনটা পড়ে শোনাও", "স্ক্রিন পড়ে শোনাও",
+            "স্ক্রিন পড়ো", "স্ক্রিনটা পড়ো",
+            "স্ক্রিন পড়ে বলো", "স্ক্রিনে কি লেখা আছে",
+            "স্ক্রিনে কী লেখা আছে",
+            "स्क्रीन पढ़कर सुनाओ", "स्क्रीन पढ़ो",
+            "screen padhkar sunao", "screen padho",
+            "screen par kya likha hai",
+            "read the screen", "read out the screen",
+            "read the screen aloud",
+            "read what's on the screen",
+            "what's written on the screen",
+            "what is written on the screen"
+        )
+
+        /** v95: MAYA'S EYES — find wale "কোথায়/where" shabd। */
+        val EYES_WHERE_WORDS = listOf(
+            "কোথায়", "কোথায়", "where",
+            "कहाँ", "कहां", "kahan", "kaha",
+            "খুঁজে", "খোঁজো", "khojo", "find"
+        )
+
+        /** v95: MAYA'S EYES — find wale "স্ক্রিন/screen" shabd। */
+        val EYES_SCREEN_WORDS = listOf(
+            "স্ক্রিনে", "স্ক্রিন", "স্ক্রিনটা", "স্ক্রিনটি", "স্ক্রিনের",
+            "screen", "स्क्रीन"
+        )
+
+        /**
+         * v95: MAYA'S EYES — find wale hukm se nishana
+         * nikalte samay hataye jaane wale shabd ("কোথায়/
+         * where" + "স্ক্রিন/screen" + bhare shabd)।
+         */
+        val EYES_FIND_DROP_TOKENS = setOf(
+            "কোথায়", "কোথায়", "where",
+            "कहाँ", "कहां", "kahan", "kaha",
+            "খুঁজে", "খোঁজো", "khojo", "find",
+            "স্ক্রিনে", "স্ক্রিন", "স্ক্রিনটা", "স্ক্রিনটি", "স্ক্রিনের",
+            "screen", "स्क्रीन",
+            "এই", "এইটা", "ওই", "টা", "টি",
+            "কি", "কী", "আছে", "বলো", "দেখো",
+            "is", "on", "the", "a", "an", "it", "me", "to",
+            "yeh", "hai", "kya", "batao", "bolo"
         )
 
         /**
