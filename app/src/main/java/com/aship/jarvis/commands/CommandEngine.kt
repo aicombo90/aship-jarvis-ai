@@ -1,9 +1,13 @@
 package com.aship.jarvis.commands
 
+import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import com.aship.jarvis.access.JarvisAccessibilityService
 import com.aship.jarvis.actions.LaunchOutcome
 import com.aship.jarvis.actions.PhoneActions
+import com.aship.jarvis.ai.ScreenSafety
 import com.aship.jarvis.ai.ScreenshotStore
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
@@ -1684,6 +1688,691 @@ class CommandEngine(
         }
     }
 
+    // ------------------------------------------------------------------
+    // v92: LAGATAR SCROLL + VOICE TAP + VOICE BACK
+    //
+    // User (2026-11-10): "স্ক্রল ডাউন করতে বললে স্ক্রল
+    // করতেই থাকবে ধীরে ধীরে, আমি যখন বলব স্টপ তখন
+    // দাঁড়িয়ে যাবে" / "আমি যে ভিডিওটা ক্লিক করতে
+    // বলব সেই ভিডিওটা যেন ক্লিক করতে পারি" / "ব্যাক
+    // করতে বললে যেন ব্যাক হতে পারে"।
+    //
+    // Teenon pakke offline raaste hain (wake service /
+    // MainActivity ki deterministic chain se bulaye jate
+    // hain — agent ke paas kabhi nahi jate), teeno
+    // script (Bangla / Hindi / English) me milte hain।
+    //
+    // DHYAAN: [deterministicScrollCommand] EK baar wala
+    // scroll hi rehta hai — sikhaye hue kaam aur combo
+    // use seedha bulate hain aur ek hi scroll + uska
+    // pakka jawab chahte hain (ComboRules SCROLL_OK_TEXTS)।
+    // Lagatar scroll sirf yahan ka naya
+    // [startContinuousScrollCommand] hai, jo voice
+    // dispatch se bulaya jata hai।
+    // ------------------------------------------------------------------
+
+    /**
+     * v92: lagatar dheema scroll shuru — "স্ক্রল ডাউন
+     * করো" / "নিচে স্ক্রল করো" / "scroll down" (aur
+     * upar wale roop) bolte hi scroll shuru hota hai
+     * aur [CONTINUOUS_SCROLL_INTERVAL_MS] par ek chhota
+     * scroll (wahi [JarvisAccessibilityService
+     * .scrollCommandEx]: node ACTION_SCROLL pehle, swipe
+     * baad me) tab tak chalta rehta hai jab tak
+     * "থামো" / "stop" na bola jaye. Disha ki pehchan
+     * wahi [classifyScrollDirection] hai — naya
+     * matching nahi, purani pehchan hi.
+     * Scroll na ho to null (aam raasta faisla karega)।
+     */
+    fun startContinuousScrollCommand(rawText: String): CommandResult? {
+        val scrollDown: Boolean = classifyScrollDirection(rawText) ?: return null
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveContinuousScrollDiag(rawText, scrollDown, "SERVICE_OFF")
+            return CommandResult(scrollNeedsAccessibilityReply(lang), true)
+        }
+        startContinuousScroll(context, scrollDown)
+        saveContinuousScrollDiag(rawText, scrollDown, "STARTED")
+        return CommandResult(continuousScrollStartedReply(lang), true)
+    }
+
+    /**
+     * v92: lagatar scroll roko — "থামো" / "থাম" /
+     * "থামাও" / "স্টপ" / "stop" / "রুকো" / "रुको" /
+     * "stop scrolling" / "স্ক্রল থামাও"। Scroll chal
+     * raha ho to turant rukta hai (agla tick kabhi
+     * post nahi hota — [stopContinuousScroll] handler
+     * se pending tick hata deta hai; beech me chal raha
+     * ek swipe (~350 ms) hi aakhiri kadam hota hai)।
+     * Scroll chal hi nahi raha ho to chhota hukm-jaisa
+     * vakya (4 shabd tak) bhi handled hai — "কিছু
+     * স্ক্রল হচ্ছে না" — taaki wake session chup na
+     * rahe. Lamba vakya, ya gaana/timer/alarm/video
+     * wala "stop" (jaise "গান থামাও" / "stop the
+     * timer"), yahan nahi phansta — woh aam raaste
+     * (media pause waghera) ke liye null laut-ta hai।
+     */
+    fun stopContinuousScrollCommand(rawText: String): CommandResult? {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return null
+        // Gaana / timer / alarm / video wala stop kabhi
+        // scroll-stop nahi hai — woh aam raaste ka hai।
+        if (STOP_GUARD_WORDS.any { raw.contains(it) }) return null
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        fun matched(markers: List<String>): Boolean =
+            markers.any { marker ->
+                val needles = listOf(
+                    scrollSkeleton(marker), hindiSkeleton(marker)
+                ).distinct()
+                surfaces.any { surface ->
+                    needles.any { surface.contains(it) }
+                }
+            }
+        if (!matched(STOP_SCROLL_PHRASES) && !stopTokenPresent(raw)) {
+            return null
+        }
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!continuousScrollActive) {
+            val tokens = raw.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+            if (tokens.size > 4) return null
+            return CommandResult(notScrollingReply(lang), true)
+        }
+        val wasDown = continuousScrollDown
+        stopContinuousScroll()
+        saveContinuousScrollDiag(rawText, wasDown, "STOPPED")
+        return CommandResult(continuousScrollStoppedReply(lang), true)
+    }
+
+    /**
+     * v92: "থামো" jaisa roko-shabd POORE token ki
+     * tarah hai kya — skeleton satahon par, taaki
+     * likhavat ka halka farq milan na tode।
+     */
+    private fun stopTokenPresent(rawText: String): Boolean {
+        val tokens = listOf(scrollSkeleton(rawText), hindiSkeleton(rawText))
+            .flatMap { it.split(Regex("""\s+""")) }
+            .map { it.trim(',', '.', '।', '!', '?') }
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return false
+        val needles = STOP_SCROLL_TOKENS.flatMap {
+            listOf(scrollSkeleton(it), hindiSkeleton(it))
+        }
+        return tokens.any { it in needles }
+    }
+
+    /** v92: lagatar scroll shuru hua — user ki bhasha me chhoti tasalli। */
+    private fun continuousScrollStartedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "স্ক্রল করছি — থামো বললেই থেমে যাব।"
+            PlayIntent.SpokenLang.HINDI ->
+                "स्क्रॉल कर रही हूँ — रुकने को कहो तो रुक जाऊँगी।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Scrolling slowly — say stop and I'll stop."
+        }
+
+    /** v92: lagatar scroll ruka — user ki bhasha me। */
+    private fun continuousScrollStoppedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "থেমে গেছি।"
+            PlayIntent.SpokenLang.HINDI -> "रुक गई।"
+            PlayIntent.SpokenLang.ENGLISH -> "Stopped scrolling."
+        }
+
+    /** v92: roko bola par kuch scroll ho hi nahi raha tha। */
+    private fun notScrollingReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "এখন কিছু স্ক্রল হচ্ছে না।"
+            PlayIntent.SpokenLang.HINDI -> "अभी कुछ स्क्रॉल नहीं हो रहा है।"
+            PlayIntent.SpokenLang.ENGLISH -> "Nothing is scrolling right now."
+        }
+
+    /** v92: lagatar scroll ki report jarvis_diag me — disha + haal। */
+    private fun saveContinuousScrollDiag(
+        rawText: String,
+        down: Boolean,
+        state: String
+    ) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_continuous_scroll",
+                    (if (down) "down" else "up") + ": " +
+                        rawText.trim().take(40) + " -> " + state
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
+     * v92: VOICE TAP / CLICK — "এই ভিডিওটা ক্লিক করো"
+     * / "ট্যাপ করো" / "tap this video" / "click [naam]"।
+     * Tap/click kriya honi hi chahiye, warna null (aam
+     * raasta faisla karega)। Nishana:
+     *  - naam bola ho ("[naam] ট্যাপ করো") to wahi naam
+     *    screen par dhoondhkar dabao — pehle
+     *    [JarvisAccessibilityService.tapScreenText]
+     *    (hubahu, warna naam rakhne wala sabse chhota
+     *    label; gesture tap, warna ACTION_CLICK);
+     *  - woh na mile to screen ke saar se shabd-milan
+     *    wala fallback (sabse zyada shabd milne wala
+     *    clickable hissa, uske beech par tap);
+     *  - nanga / "এই ভিডিওটা" jaisa aam nishana ho to
+     *    sabse upar wala bada video-jaisa hissa dabao
+     *    (YouTube saamne ho to pehle [tapFirstYouTubeResult]
+     *    wala aazmaya hua raasta, warna screen-saar se
+     *    sabse bada clickable hissa); "দ্বিতীয় ভিডিও"
+     *    / "second video" ho to dusra wala।
+     * Kuch na mile to imaandaar "পেলাম না" — kabhi
+     * andaze se koi aur cheez nahi dabti। Banking /
+     * payment wali screen ([ScreenSafety]) par tap
+     * bilkul mana hai — wahan kuch nahi dabta।
+     * Tap se pehle lagatar scroll (chal raha ho to)
+     * rok diya jata hai, taaki nishana hilta na rahe।
+     */
+    fun deterministicTapCommand(rawText: String): CommandResult? {
+        val target = extractTapTarget(rawText) ?: return null
+        // Nishana hilta na rahe: tap se pehle scroll roko।
+        stopContinuousScroll()
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveTapDiag(rawText, "SERVICE_OFF")
+            return CommandResult(tapNeedsAccessibilityReply(lang), true)
+        }
+        val snapshot = captureScreenSync()
+        val pkg = snapshot?.packageName ?: ""
+        if (pkg.isNotEmpty() &&
+            ScreenSafety.denyReason(context, pkg) != null
+        ) {
+            saveTapDiag(rawText, "DENIED")
+            return CommandResult(tapDeniedReply(lang), true)
+        }
+        // YouTube saamne ho aur pehla video chahiye ho to
+        // aazmaya hua pehle-video wala raasta pehle।
+        if (target.generic && target.ordinal == 0 &&
+            pkg.contains("youtube", ignoreCase = true)
+        ) {
+            when (tapFirstYouTubeSync()) {
+                JarvisAccessibilityService.TapOutcome.TAPPED,
+                JarvisAccessibilityService.TapOutcome.UNVERIFIED -> {
+                    saveTapDiag(rawText, "OK (youtube-first)")
+                    return CommandResult(tapDoneReply(lang), true)
+                }
+                else -> {
+                    // NOT_FOUND / BUSY / SERVICE_OFF: neeche
+                    // wala screen-saar wala raasta aazmao।
+                }
+            }
+        }
+        if (!target.generic && target.text != null) {
+            if (tapTextSync(target.text)) {
+                saveTapDiag(rawText, "OK (tap_text)")
+                return CommandResult(tapDoneReply(lang), true)
+            }
+            val overlap = bestOverlapElement(snapshot, target.text)
+            if (overlap != null &&
+                tapPointSync(overlap.centerX, overlap.centerY)
+            ) {
+                saveTapDiag(rawText, "OK (overlap)")
+                return CommandResult(tapDoneReply(lang), true)
+            }
+            saveTapDiag(rawText, "NOT_FOUND")
+            return CommandResult(tapNotFoundReply(lang), true)
+        }
+        val candidates = videoLikeCandidates(snapshot)
+        val pick = candidates.getOrNull(target.ordinal)
+        if (pick == null) {
+            saveTapDiag(rawText, "NOT_FOUND")
+            return CommandResult(tapNotFoundReply(lang), true)
+        }
+        if (tapPointSync(pick.centerX, pick.centerY)) {
+            saveTapDiag(rawText, "OK (generic)")
+            return CommandResult(tapDoneReply(lang), true)
+        }
+        saveTapDiag(rawText, "FAIL")
+        return CommandResult(tapFailedReply(lang), true)
+    }
+
+    /**
+     * v92: tap wale hukm se nishana nikalo — tap/click
+     * kriya na ho to null। [TapTarget.text] naam wala
+     * nishana hai, [TapTarget.generic] "এই ভিডিওটা"
+     * jaisa aam nishana hai, [TapTarget.ordinal] kram
+     * ("প্রথম" = 0, "দ্বিতীয়" = 1, "তৃতীয়" = 2)।
+     */
+    private fun extractTapTarget(rawText: String): TapTarget? {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return null
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        fun phraseMatched(markers: List<String>): Boolean =
+            markers.any { marker ->
+                val needles = listOf(
+                    scrollSkeleton(marker), hindiSkeleton(marker)
+                ).distinct()
+                surfaces.any { surface ->
+                    needles.any { surface.contains(it) }
+                }
+            }
+        val tokens = raw.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?', '"', '\'') }
+            .filter { it.isNotEmpty() }
+        val verbTokens = TAP_VERB_TOKENS.flatMap {
+            listOf(scrollSkeleton(it), hindiSkeleton(it))
+        }
+        val hasVerbToken = tokens.any { token ->
+            val sk = scrollSkeleton(token)
+            val hi = hindiSkeleton(token)
+            sk in verbTokens || hi in verbTokens
+        }
+        if (!hasVerbToken && !phraseMatched(TAP_VERB_PHRASES)) return null
+        val kept = tokens.filter { token ->
+            val sk = scrollSkeleton(token)
+            val hi = hindiSkeleton(token)
+            sk !in verbTokens && hi !in verbTokens &&
+                token !in TAP_FILLER_TOKENS
+        }
+        // Kram ("দ্বিতীয় ভিডিও" / "second video" / "2 নম্বর")।
+        var ordinal = 0
+        val rest = ArrayList<String>()
+        var i = 0
+        while (i < kept.size) {
+            val tok = kept[i]
+            val next = kept.getOrNull(i + 1)
+            if ((next == "নম্বর" || next == "নাম্বার" || next == "number") &&
+                tok in TAP_ORDINAL_NUMBERS
+            ) {
+                ordinal = TAP_ORDINAL_NUMBERS.getValue(tok)
+                i += 2
+                continue
+            }
+            if (tok in TAP_ORDINAL_WORDS) {
+                ordinal = TAP_ORDINAL_WORDS.getValue(tok)
+                i++
+                continue
+            }
+            rest.add(tok)
+            i++
+        }
+        val nameWords = rest.filter { it !in GENERIC_VIDEO_WORDS }
+        return if (nameWords.isEmpty()) {
+            TapTarget(text = null, generic = true, ordinal = ordinal)
+        } else {
+            TapTarget(
+                text = nameWords.joinToString(" "),
+                generic = false,
+                ordinal = ordinal
+            )
+        }
+    }
+
+    /** v92: tap wale nishane ka bandha roop — naam / aam / kram। */
+    private data class TapTarget(
+        val text: String?,
+        val generic: Boolean,
+        val ordinal: Int
+    )
+
+    /**
+     * v92: screen ka saar bandha (sync) lo — capture ka
+     * jawab service ke worker thread se aata hai, isliye
+     * bulane wala thread main thread bhi ho to latch
+     * par intezaar surakshit hai (service ka worker
+     * alag thread hai)। Na mile to null।
+     */
+    private fun captureScreenSync(): JarvisAccessibilityService.ScreenSnapshot? {
+        val latch = CountDownLatch(1)
+        var snapshot: JarvisAccessibilityService.ScreenSnapshot? = null
+        try {
+            JarvisAccessibilityService.captureScreen(context) { snap ->
+                snapshot = snap
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return null
+        }
+        try {
+            // Capture aam taur par 1 s se kam me aata hai —
+            // 3 s kaafi hai (tap ka 5 s wala intezaar alag hai)।
+            latch.await(3_000L, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota: jo mila wahi kaafi.
+        }
+        return snapshot
+    }
+
+    /** v92: naam se tap ka bandha intezaar — natija sachha। */
+    private fun tapTextSync(text: String): Boolean {
+        val latch = CountDownLatch(1)
+        var ok = false
+        try {
+            JarvisAccessibilityService.tapScreenText(context, text) { result ->
+                ok = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        try {
+            latch.await(TAP_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota: tap ka natija nahi mila.
+        }
+        return ok
+    }
+
+    /** v92: (x, y) par tap ka bandha intezaar — natija sachha। */
+    private fun tapPointSync(x: Int, y: Int): Boolean {
+        val latch = CountDownLatch(1)
+        var ok = false
+        try {
+            JarvisAccessibilityService.tapScreenPoint(context, x, y) { result ->
+                ok = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        try {
+            latch.await(TAP_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota: tap ka natija nahi mila.
+        }
+        return ok
+    }
+
+    /** v92: YouTube pehle-video tap ka bandha intezaar। */
+    private fun tapFirstYouTubeSync(): JarvisAccessibilityService.TapOutcome {
+        val latch = CountDownLatch(1)
+        var outcome = JarvisAccessibilityService.TapOutcome.NOT_FOUND
+        try {
+            JarvisAccessibilityService.tapFirstYouTubeResult(context) { result ->
+                outcome = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            return JarvisAccessibilityService.TapOutcome.NOT_FOUND
+        }
+        try {
+            latch.await(TAP_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota: tap ka natija nahi mila.
+        }
+        return outcome
+    }
+
+    /**
+     * v92: naam wale nishane ka shabd-milan wala fallback —
+     * screen-saar me woh clickable hissa jiske naam me
+     * nishane ke sabse zyada shabd hon (kam se kam ek);
+     * barabar hon to sabse chhota naam। Ek bhi shabd na
+     * mile to null — andaze se kuch nahi dabta।
+     */
+    private fun bestOverlapElement(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot?,
+        targetText: String
+    ): JarvisAccessibilityService.ScreenElement? {
+        if (snapshot == null) return null
+        val words = targetText.lowercase(Locale.ROOT)
+            .split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+            .filter { it.length >= 2 }
+        if (words.isEmpty()) return null
+        var best: JarvisAccessibilityService.ScreenElement? = null
+        var bestOverlap = 0
+        var bestLabelLength = Int.MAX_VALUE
+        for (el in snapshot.elements) {
+            if (!el.clickable) continue
+            val label = el.text.lowercase(Locale.ROOT)
+            if (label.isEmpty()) continue
+            val overlap = words.count { label.contains(it) }
+            if (overlap == 0) continue
+            val better = overlap > bestOverlap ||
+                (overlap == bestOverlap && label.length < bestLabelLength)
+            if (better) {
+                best = el
+                bestOverlap = overlap
+                bestLabelLength = label.length
+            }
+        }
+        return best
+    }
+
+    /**
+     * v92: aam ("এই ভিডিওটা") nishane ke ummeedwar —
+     * screen-saar ke bade clickable hisse (screen ke
+     * ~4% se bada chaukona, upar/neeche ki patti
+     * chhodkar), upar se neeche ke kram me। Video
+     * item ka container aam taur par yahi hota hai —
+     * chauda, uncha, clickable, naam ho ya na ho।
+     */
+    private fun videoLikeCandidates(
+        snapshot: JarvisAccessibilityService.ScreenSnapshot?
+    ): List<JarvisAccessibilityService.ScreenElement> {
+        if (snapshot == null) return emptyList()
+        val metrics = try {
+            context.resources.displayMetrics
+        } catch (t: Throwable) {
+            return emptyList()
+        }
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        if (width <= 0 || height <= 0) return emptyList()
+        val screenArea = width.toLong() * height
+        return snapshot.elements
+            .filter { it.clickable }
+            .filter {
+                val area = (it.right - it.left).toLong() *
+                    (it.bottom - it.top)
+                area >= screenArea * 4 / 100
+            }
+            .filter { it.centerY > height * 0.08 && it.centerY < height * 0.92 }
+            .sortedWith(
+                compareBy(
+                    { it.top },
+                    { -((it.right - it.left) * (it.bottom - it.top)) }
+                )
+            )
+    }
+
+    /** v92: tap ho gaya — user ki bhasha me। */
+    private fun tapDoneReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "ট্যাপ করে দিয়েছি।"
+            PlayIntent.SpokenLang.HINDI -> "टैप कर दिया।"
+            PlayIntent.SpokenLang.ENGLISH -> "Tapped it."
+        }
+
+    /** v92: nishana screen par mila hi nahi — sachha jawab। */
+    private fun tapNotFoundReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "ওই নামে স্ক্রিনে কিছু পেলাম না।"
+            PlayIntent.SpokenLang.HINDI ->
+                "उस नाम से स्क्रीन पर कुछ नहीं मिला।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I couldn't find that on the screen."
+        }
+
+    /** v92: tap ki koshish chali par dab nahi paya। */
+    private fun tapFailedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "ট্যাপ করতে পারলাম না।"
+            PlayIntent.SpokenLang.HINDI -> "टैप नहीं हो पाया।"
+            PlayIntent.SpokenLang.ENGLISH -> "Couldn't tap it."
+        }
+
+    /** v92: tap ke liye Accessibility pehle chahiye। */
+    private fun tapNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "ট্যাপ করতে Accessibility লাগবে — অ্যাপ খুলে চালু করে নাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "टैप करने के लिए पहले ऐप खोलकर Accessibility ऑन कर लो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Tapping needs Accessibility — please open the app and turn it on."
+        }
+
+    /** v92: banking/payment wali screen par tap mana hai। */
+    private fun tapDeniedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "এই স্ক্রিনে ট্যাপ করতে পারব না — এটা ব্যাংক/পেমেন্টের সুরক্ষিত স্ক্রিন।"
+            PlayIntent.SpokenLang.HINDI ->
+                "इस स्क्रीन पर टैप नहीं कर सकती — यह बैंक/पेमेंट की सुरक्षित स्क्रीन है।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "I can't tap on this screen — it's a protected banking/payment screen."
+        }
+
+    /** v92: tap koshish ki report jarvis_diag me। */
+    private fun saveTapDiag(rawText: String, state: String) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_tap_command",
+                    rawText.trim().take(40) + " -> " + state
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
+    /**
+     * v92: VOICE BACK — "ব্যাক করো" / "পেছনে যাও" /
+     * "পিছে যাও" / "ফিরে যাও" / "back" / "go back" /
+     * "पीछे जाओ"। System back
+     * ([AccessibilityService.GLOBAL_ACTION_BACK]) saamne
+     * wali screen par chalta hai — koi bhi app ho।
+     * "background" jaisa shabd isme nahi phansta
+     * (poora token milaya jata hai, substring nahi);
+     * "come back tomorrow" jaisa bhavishya wala vakya
+     * bhi nahi (guard shabd)। Tap ki tarah, back se
+     * pehle lagatar scroll (chal raha ho to) rok diya
+     * jata hai।
+     */
+    fun deterministicBackCommand(rawText: String): CommandResult? {
+        if (!isBackCommand(rawText)) return null
+        stopContinuousScroll()
+        val lang = PlayIntent.requestLanguage(rawText)
+        if (!JarvisAccessibilityService.isEnabled(context)) {
+            saveBackDiag(rawText, "SERVICE_OFF")
+            return CommandResult(backNeedsAccessibilityReply(lang), true)
+        }
+        val latch = CountDownLatch(1)
+        var ok = false
+        try {
+            JarvisAccessibilityService.screenGlobalAction(
+                context,
+                AccessibilityService.GLOBAL_ACTION_BACK
+            ) { result ->
+                ok = result
+                latch.countDown()
+            }
+        } catch (t: Throwable) {
+            saveBackDiag(rawText, "FAIL")
+            return CommandResult(backFailedReply(lang), true)
+        }
+        try {
+            latch.await(BACK_COMMAND_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // Intezaar toota: back ka natija nahi mila.
+        }
+        saveBackDiag(rawText, if (ok) "OK" else "FAIL")
+        return if (ok) {
+            CommandResult(backDoneReply(lang), true)
+        } else {
+            CommandResult(backFailedReply(lang), true)
+        }
+    }
+
+    /** v92: baat back wala hukm hai kya — token + bandha wakya, guard ke saath। */
+    private fun isBackCommand(rawText: String): Boolean {
+        val raw = rawText.lowercase(Locale.ROOT).trim()
+        if (raw.isEmpty()) return false
+        if (BACK_GUARD_WORDS.any { raw.contains(it) }) return false
+        val surfaces = listOf(raw, normalize(raw))
+            .flatMap { listOf(scrollSkeleton(it), hindiSkeleton(it)) }
+            .distinct()
+        fun phraseMatched(markers: List<String>): Boolean =
+            markers.any { marker ->
+                val needles = listOf(
+                    scrollSkeleton(marker), hindiSkeleton(marker)
+                ).distinct()
+                surfaces.any { surface ->
+                    needles.any { surface.contains(it) }
+                }
+            }
+        if (phraseMatched(BACK_PHRASES)) return true
+        val tokens = raw.split(Regex("""\s+"""))
+            .map { it.trim(',', '.', '।', '!', '?') }
+            .filter { it.isNotEmpty() }
+        val backTokens = BACK_TOKENS.flatMap {
+            listOf(scrollSkeleton(it), hindiSkeleton(it))
+        }
+        val hasBackToken = tokens.any { token ->
+            scrollSkeleton(token) in backTokens ||
+                hindiSkeleton(token) in backTokens
+        }
+        if (!hasBackToken) return false
+        // Nanga "back" / "ব্যাক" chhote hukm me hi back hai;
+        // lamba vakya ho to saath me kriya (করো/যাও/karo/jao)
+        // chahiye — "come back" jaisa vakya yahan nahi aata।
+        if (tokens.size <= 3) return true
+        return BACK_VERB_TOKENS.any { verb ->
+            tokens.any { scrollSkeleton(it) == scrollSkeleton(verb) }
+        }
+    }
+
+    /** v92: back ho gaya — user ki bhasha me। */
+    private fun backDoneReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "পেছনে গেলাম।"
+            PlayIntent.SpokenLang.HINDI -> "पीछे चली गई।"
+            PlayIntent.SpokenLang.ENGLISH -> "Went back."
+        }
+
+    /** v92: back dab nahi paya। */
+    private fun backFailedReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI -> "ব্যাক করতে পারলাম না।"
+            PlayIntent.SpokenLang.HINDI -> "पीछे नहीं जा पाई।"
+            PlayIntent.SpokenLang.ENGLISH -> "Couldn't go back."
+        }
+
+    /** v92: back ke liye Accessibility pehle chahiye। */
+    private fun backNeedsAccessibilityReply(lang: PlayIntent.SpokenLang): String =
+        when (lang) {
+            PlayIntent.SpokenLang.BENGALI ->
+                "ব্যাক করতে Accessibility লাগবে — অ্যাপ খুলে চালু করে নাও।"
+            PlayIntent.SpokenLang.HINDI ->
+                "पीछे जाने के लिए पहले ऐप खोलकर Accessibility ऑन कर लो।"
+            PlayIntent.SpokenLang.ENGLISH ->
+                "Going back needs Accessibility — please open the app and turn it on."
+        }
+
+    /** v92: back koshish ki report jarvis_diag me। */
+    private fun saveBackDiag(rawText: String, state: String) {
+        try {
+            context.getSharedPreferences("jarvis_diag", Context.MODE_PRIVATE)
+                .edit()
+                .putString(
+                    "last_back_command",
+                    rawText.trim().take(40) + " -> " + state
+                )
+                .apply()
+        } catch (t: Throwable) {
+            // Report bonus hai — asal hukm isse nahi rukta.
+        }
+    }
+
     /**
      * v40: ye suna hua hukm seedha SCREENSHOT lene wala
      * hai kya — "স্ক্রিনশট নাও/তোলো/নে", "स्क्रीनशॉट लो",
@@ -2076,6 +2765,216 @@ class CommandEngine(
 
         /** v38: scroll swipe ke natije ka adhiktam intezaar (swipe ~350 ms ka hai). v42: do-mashinari wale raaste (node, phir do swipe) ko 5 s diya. */
         const val SCROLL_COMMAND_WAIT_MS = 5_000L
+
+        /**
+         * v92: lagatar scroll ka bandha antaral — har
+         * [CONTINUOUS_SCROLL_INTERVAL_MS] par ek chhota
+         * scroll (scrollCommandEx wala ek kadam)। 500 ms
+         * = dheema, padhne layak scroll; tez nahi।
+         */
+        const val CONTINUOUS_SCROLL_INTERVAL_MS = 500L
+
+        /** v92: ek tap-koshish (capture + tap) ka adhiktam intezaar। */
+        const val TAP_COMMAND_WAIT_MS = 5_000L
+
+        /** v92: back global action ka adhiktam intezaar। */
+        const val BACK_COMMAND_WAIT_MS = 3_000L
+
+        /**
+         * v92: lagatar scroll ki SAANJHI haalat — saare
+         * CommandEngine instance (wake service wala aur
+         * MainActivity wala) ek hi scroll dekhte hain,
+         * isliye haalat companion me hai, instance me
+         * nahi। [continuousScrollActive] kisi bhi thread
+         * se padha jata hai (@Volatile); tick sirf main
+         * looper wale [continuousScrollHandler] par
+         * chalta hai, isliye start/stop kabhi aapas me
+         * nahi ladte। [continuousScrollRunnable] ka
+         * initializer sirf [continuousScrollTick] function
+         * ko bulata hai — property khud ko nahi (v75
+         * wali galti se bachne ke liye explicit type
+         * ke saath)।
+         */
+        @Volatile
+        private var continuousScrollActive = false
+
+        @Volatile
+        private var continuousScrollDown = true
+
+        @Volatile
+        private var continuousScrollContext: Context? = null
+
+        private val continuousScrollHandler: Handler =
+            Handler(Looper.getMainLooper())
+
+        private val continuousScrollRunnable: Runnable =
+            Runnable { continuousScrollTick() }
+
+        /**
+         * v92: lagatar scroll ka ek tick — ek chhota
+         * scroll, phir agla tick [CONTINUOUS_SCROLL_INTERVAL_MS]
+         * baad। Ruka hua ho, ya Accessibility band ho
+         * gaya ho, to tick khud ruk jata hai (band hone
+         * par [stopContinuousScroll] se safaai bhi)।
+         */
+        private fun continuousScrollTick() {
+            if (!continuousScrollActive) return
+            val ctx = continuousScrollContext ?: run {
+                continuousScrollActive = false
+                return
+            }
+            if (!JarvisAccessibilityService.isEnabled(ctx)) {
+                stopContinuousScroll()
+                return
+            }
+            val down = continuousScrollDown
+            try {
+                JarvisAccessibilityService.scrollCommandEx(ctx, down) { }
+            } catch (t: Throwable) {
+                // Ek tick fail ho to bhi rukna nahi — agla
+                // tick phir aazmayega; rukna sirf "থামো"
+                // / stop se hota hai।
+            }
+            continuousScrollHandler.postDelayed(
+                continuousScrollRunnable, CONTINUOUS_SCROLL_INTERVAL_MS
+            )
+        }
+
+        /** v92: lagatar scroll chal raha hai kya — kisi bhi raaste se poochho। */
+        fun isContinuousScrolling(): Boolean = continuousScrollActive
+
+        /**
+         * v92: lagatar scroll turant roko — pending tick
+         * handler se hat jata hai, isliye agla scroll
+         * kabhi nahi aata। Beech me chal raha ek swipe
+         * (~350 ms) hi aakhiri kadam hota hai, use
+         * beech me roka nahi ja sakta। Chal raha tha
+         * to true, pehle se ruka tha to false। Service
+         * band hone / full shutdown par bhi yahi bulaya
+         * jata hai, taaki scroll peeche se chalta na rahe।
+         */
+        fun stopContinuousScroll(): Boolean {
+            val was = continuousScrollActive
+            continuousScrollActive = false
+            continuousScrollContext = null
+            try {
+                continuousScrollHandler.removeCallbacks(continuousScrollRunnable)
+            } catch (t: Throwable) {
+                // Handler band ho to bhi haalat saaf hai —
+                // tick pehli jaanch me hi ruk jayega।
+            }
+            return was
+        }
+
+        /** v92: lagatar scroll shuru — purana tick hatakar nayi disha se। */
+        private fun startContinuousScroll(context: Context, down: Boolean) {
+            stopContinuousScroll()
+            continuousScrollDown = down
+            continuousScrollContext = context.applicationContext
+            continuousScrollActive = true
+            continuousScrollHandler.post(continuousScrollRunnable)
+        }
+
+        /**
+         * v92: scroll roko wale shabd — bandha wakya
+         * (skeleton satahon par contains)।
+         */
+        val STOP_SCROLL_PHRASES = listOf(
+            "stop scrolling", "scroll roko", "scroll tham",
+            "স্ক্রল থামাও", "স্ক্রল থামো", "স্ক্রল থেমে যাও",
+            "স্ক্রল থামিয়ে দাও", "स्क्रॉल रुको", "स्क्रॉल थम",
+            "ruk jao", "রুক যাও", "থেমে যাও", "থামিয়ে দাও"
+        )
+
+        /** v92: scroll roko wale akele shabd — poora token milaya jata hai। */
+        val STOP_SCROLL_TOKENS = listOf(
+            "থামো", "থাম", "থামাও", "থেমে", "স্টপ", "stop",
+            "রুকো", "রুক", "रुको", "रुक", "थम", "थमो", "থামিয়ে"
+        )
+
+        /**
+         * v92: "stop" kabhi scroll-stop nahi hai — gaana /
+         * timer / alarm / video wala stop aam raaste ka hai।
+         */
+        val STOP_GUARD_WORDS = listOf(
+            "গান", "gaana", "music", "song", "timer", "টাইমার",
+            "alarm", "অ্যালার্ম", "video", "ভিডিও"
+        )
+
+        /**
+         * v92: tap/click kriya — bandha wakya (skeleton
+         * satahon par contains)।
+         */
+        val TAP_VERB_PHRASES = listOf(
+            "ট্যাপ করো", "ট্যাপ কর", "ক্লিক করো", "ক্লিক কর",
+            "tap karo", "click karo", "tap koro", "click koro",
+            "टैप करो", "टैप कर", "क्लिक करो", "क्लिक कर",
+            "টাচ করো", "চাপ দাও", "চাপো"
+        )
+
+        /** v92: tap/click kriya — akele shabd, poora token milaya jata hai। */
+        val TAP_VERB_TOKENS = listOf(
+            "tap", "click", "ট্যাপ", "ক্লিক", "টাচ", "চাপো",
+            "टैप", "क्लिक"
+        )
+
+        /**
+         * v92: tap wale hukm se nishana nikalte samay
+         * hataye jaane wale bhare shabd (kriya + ishara)।
+         */
+        val TAP_FILLER_TOKENS = setOf(
+            "করো", "কর", "করুন", "দাও", "দিন", "দে",
+            "karo", "koro", "do", "kore", "dao",
+            "এটা", "এই", "এইটা", "ওই", "ওইটা", "টাকে",
+            "the", "this", "that", "it", "on", "please",
+            "এখন", "একটু", "টা", "টি", "কে", "করে"
+        )
+
+        /** v92: "এই ভিডিওটা" jaisa aam nishana batane wale shabd। */
+        val GENERIC_VIDEO_WORDS = setOf(
+            "ভিডিও", "ভিডিওটা", "ভিডিওটি", "ভিডিওটাকে",
+            "ভিডিওটায়", "video", "ভিডিয়ো", "ভিডিয়োটা"
+        )
+
+        /** v92: kram wale shabd ("দ্বিতীয়" = 1, "তৃতীয়" = 2 ...)। */
+        val TAP_ORDINAL_WORDS = mapOf(
+            "প্রথম" to 0, "first" to 0, "1st" to 0,
+            "দ্বিতীয়" to 1, "second" to 1, "2nd" to 1,
+            "তৃতীয়" to 2, "third" to 2, "3rd" to 2
+        )
+
+        /** v92: "2 নম্বর" jaisa kram — "নম্বর" se pehle wala number। */
+        val TAP_ORDINAL_NUMBERS = mapOf(
+            "১" to 0, "1" to 0, "এক" to 0,
+            "২" to 1, "2" to 1, "দুই" to 1,
+            "৩" to 2, "3" to 2, "তিন" to 2
+        )
+
+        /**
+         * v92: back wale bandhe wakya — skeleton satahon
+         * par contains (jaise "পেছনে যাও" / "go back")।
+         */
+        val BACK_PHRASES = listOf(
+            "go back", "পেছনে যাও", "পিছনে যাও", "পেছনে যাও",
+            "পিছে যাও", "পেছনে ফিরে যাও", "ফিরে যাও",
+            "पीछे जाओ", "पीछे जाओ", "back jao", "back karo",
+            "ব্যাক করো", "ব্যাক কর", "wapas jao", "ওয়াপস যাও"
+        )
+
+        /** v92: back wale akele shabd — poora token milaya jata hai ("background" nahi phansta)। */
+        val BACK_TOKENS = listOf(
+            "back", "ব্যাক", "পেছনে", "পিছনে", "পিছে", "पीछे"
+        )
+
+        /** v92: lambe vakya me back-token ke saath chahiye wali kriya। */
+        val BACK_VERB_TOKENS = listOf(
+            "করো", "কর", "যাও", "যা", "karo", "jao", "जा", "जाओ"
+        )
+
+        /** v92: "come back tomorrow" jaisa bhavishya wala vakya back hukm nahi hai। */
+        val BACK_GUARD_WORDS = listOf(
+            "tomorrow", "later", "পরে", "কাল", "আসবে", "আসব"
+        )
 
         /**
          * v38 + v42: scroll-down ke pakke sanket — kachhe text

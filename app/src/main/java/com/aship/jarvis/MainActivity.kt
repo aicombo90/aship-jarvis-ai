@@ -2623,6 +2623,42 @@ class MainActivity : Activity() {
             vocativeLang ?: PlayIntent.requestLanguage(commandText),
             allowScreenshot = false
         )
+        // v92: lagatar scroll roko ("থামো" / "stop") —
+        // baaki sabse PEHLE, taaki roko wala hukm turant
+        // ruke aur kisi aur kaam me na badle।
+        commandEngine.stopContinuousScrollCommand(commandText)?.let { stopResult ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: ${stopResult.responseText}")
+            speaker.speak(stopResult.responseText)
+            return
+        }
+        // v92: LAGATAR scroll — "স্ক্রল ডাউন করো" bolte
+        // hi dheema scroll shuru hota hai aur "থামো"
+        // bolne tak chalta rehta hai (ek baar wala
+        // deterministicScrollCommand neeche fallback ki
+        // tarah rehta hai — sikhaye hue kaam / combo
+        // use seedha bulate hain, voice yahan se jati hai)।
+        commandEngine.startContinuousScrollCommand(commandText)?.let { scrollResult ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: ${scrollResult.responseText}")
+            speaker.speak(scrollResult.responseText)
+            return
+        }
+        // v92: VOICE TAP / CLICK — "এই ভিডিওটা ক্লিক
+        // করো" / "[naam] ট্যাপ করো"।
+        commandEngine.deterministicTapCommand(commandText)?.let { tapResult ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: ${tapResult.responseText}")
+            speaker.speak(tapResult.responseText)
+            return
+        }
+        // v92: VOICE BACK — "ব্যাক করো" / "পেছনে যাও"।
+        commandEngine.deterministicBackCommand(commandText)?.let { backResult ->
+            politeFailureSpokenThisTurn = false
+            showResponse("Jarvis: ${backResult.responseText}")
+            speaker.speak(backResult.responseText)
+            return
+        }
         // v38: pakka scroll hukm — agent se pehle pakke
         // offline raaste se (wake service wala hi niyam):
         // "স্ক্রল ডাউন করো" bolte hi Accessibility service

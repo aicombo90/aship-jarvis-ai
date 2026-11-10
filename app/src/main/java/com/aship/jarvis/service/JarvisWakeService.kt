@@ -733,6 +733,10 @@ class JarvisWakeService : Service() {
     private fun teardown() {
         if (destroyed) return
         destroyed = true
+        // v92: lagatar scroll (chal raha ho to) yahin
+        // roko — service band hone ke baad screen peeche
+        // se scroll hoti na rahe।
+        CommandEngine.stopContinuousScroll()
         // v37: screen-agent wali mezbaani sabse pehle hatao.
         ScreenConfirm.unregisterServiceHost(screenConfirmHost)
         state = State.STOPPED
@@ -3204,6 +3208,17 @@ class JarvisWakeService : Service() {
         // band karo — Vosk ne asal me suna kya tha, woh
         // agle test me bina andaze ke dikhega.
         logDeviceCommandHeard(text)
+        // v92: lagatar scroll roko ("থামো" / "stop") —
+        // baaki sabse PEHLE, taaki roko wala hukm kabhi
+        // kisi aur kaam (gaana roko waghera) me na badle
+        // aur scroll turant ruke। Scroll chal hi nahi
+        // raha ho to chhota roko-vakya bhi yahin
+        // handled hai; gaana/timer wala stop yahan
+        // nahi phansta (CommandEngine ka guard)।
+        commandEngine.stopContinuousScrollCommand(text)?.let { stopResult ->
+            finishCommandResult(text, stopResult)
+            return
+        }
         // v36 (A): spasht OFF wala device hukm agent ke
         // paas kabhi nahi jayega — pakka offline raasta
         // yahin chalega. "বন্ধ করো" ka garble agent se
@@ -3211,6 +3226,32 @@ class JarvisWakeService : Service() {
         // chalu nahi banna chahiye.
         commandEngine.deterministicOffCommand(text)?.let { offResult ->
             finishCommandResult(text, offResult)
+            return
+        }
+        // v92: LAGATAR scroll — "স্ক্রল ডাউন করো" bolte
+        // hi dheema scroll shuru hota hai aur "থামো"
+        // bolne tak chalta rehta hai (ek baar wala
+        // deterministicScrollCommand neeche fallback ki
+        // tarah rehta hai — sikhaye hue kaam / combo
+        // use seedha bulate hain, voice yahan se jati hai)।
+        commandEngine.startContinuousScrollCommand(text)?.let { scrollResult ->
+            finishCommandResult(text, scrollResult)
+            return
+        }
+        // v92: VOICE TAP / CLICK — "এই ভিডিওটা ক্লিক
+        // করো" / "[naam] ট্যাপ করো" — screen-agent ke
+        // tap raaste se (naam se tap, warna sabse upar
+        // wala bada video-jaisa hissa); na mile to
+        // imaandaar "পেলাম না"।
+        commandEngine.deterministicTapCommand(text)?.let { tapResult ->
+            finishCommandResult(text, tapResult)
+            return
+        }
+        // v92: VOICE BACK — "ব্যাক করো" / "পেছনে যাও"
+        // — system back (GLOBAL_ACTION_BACK) saamne wali
+        // screen par।
+        commandEngine.deterministicBackCommand(text)?.let { backResult ->
+            finishCommandResult(text, backResult)
             return
         }
         // v38: pakka scroll hukm bhi agent se pehle pakke
