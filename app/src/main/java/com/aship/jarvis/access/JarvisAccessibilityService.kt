@@ -307,7 +307,14 @@ class JarvisAccessibilityService : AccessibilityService() {
      */
     enum class SwipeDirection { UP, DOWN, LEFT, RIGHT }
 
-    private val worker = Executors.newSingleThreadExecutor()
+    /**
+     * v104: worker ek baar band ho jaye (service dobara
+     * bandhne ki daud me) to naya banaya ja sake —
+     * isliye `var` (pehle `val` tha)। [tapFirstYouTubeResult]
+     * band worker par ek baar naya worker banakar phir se
+     * koshish karta hai, jab ye instance abhi bhi bandha ho।
+     */
+    private var worker = Executors.newSingleThreadExecutor()
 
     // v23: panel-scan report ki kacchi jankari — sirf worker
     // thread hi chhoota hai. searchPanelTile har koshish me
@@ -738,28 +745,49 @@ class JarvisAccessibilityService : AccessibilityService() {
             return
         }
         tapBusy = true
-        try {
-            worker.execute {
-                val outcome = try {
-                    runYouTubeTap()
-                } catch (t: Throwable) {
-                    // Ped beech me bigad gaya ho: report ke
-                    // saath imaandaar NOT_FOUND.
-                    saveYouTubeTapDiag(
-                        "NOT_FOUND seen: [" +
-                            ytLabels.joinToString(" | ") + "]"
-                    )
-                    TapOutcome.NOT_FOUND
-                }
-                tapBusy = false
-                deliverTapResult(callback, outcome)
+        // v104: kaam worker par na chadh paye (worker band —
+        // service dobara bandhne ki daud me) aur ye instance
+        // abhi bhi bandha ho to ek baar naya worker banakar
+        // phir se chadhao; service asal me band ho chuki ho
+        // to sachha SERVICE_OFF।
+        val work = {
+            val outcome = try {
+                runYouTubeTap()
+            } catch (t: Throwable) {
+                // Ped beech me bigad gaya ho: report ke
+                // saath imaandaar NOT_FOUND.
+                saveYouTubeTapDiag(
+                    "NOT_FOUND seen: [" +
+                        ytLabels.joinToString(" | ") + "]"
+                )
+                TapOutcome.NOT_FOUND
             }
-        } catch (t: Throwable) {
-            // Service band ho rahi hai aur worker band ho
-            // chuka: kaam nahi ho payega — sach bata do.
             tapBusy = false
-            saveYouTubeTapDiag("SERVICE_OFF")
-            deliverTapResult(callback, TapOutcome.SERVICE_OFF)
+            deliverTapResult(callback, outcome)
+        }
+        if (submitToWorker(work)) return
+        if (instance === this) {
+            worker = Executors.newSingleThreadExecutor()
+            if (submitToWorker(work)) return
+        }
+        // Service band ho rahi hai aur worker band ho
+        // chuka: kaam nahi ho payega — sach bata do.
+        tapBusy = false
+        saveYouTubeTapDiag("SERVICE_OFF")
+        deliverTapResult(callback, TapOutcome.SERVICE_OFF)
+    }
+
+    /**
+     * v104: kaam worker par chadhane ki koshish — na
+     * chadhe (worker band) to false। Bulane wala ek
+     * baar naya worker banakar phir se koshish karta hai।
+     */
+    private fun submitToWorker(block: () -> Unit): Boolean {
+        return try {
+            worker.execute(Runnable { block() })
+            true
+        } catch (t: Throwable) {
+            false
         }
     }
 
@@ -3961,13 +3989,47 @@ class JarvisAccessibilityService : AccessibilityService() {
          * [TapOutcome.SERVICE_OFF] (report bhi band karke),
          * warna chalti hui service ko kaam saunp do (natija
          * callback se, background thread par).
+         *
+         * v104: instance turant na mile to turant
+         * SERVICE_OFF mat kaho — app update/install ya
+         * vivo ke service restart ke baad system ko
+         * service dobara bandhne me ek pal lagta hai, aur
+         * usi pal me tap bulaya jaye to instance null
+         * hota hai jabki Settings me Accessibility ON hi
+         * rehta hai — wahi pal pehle "YouTube tap:
+         * SERVICE_OFF" bankar report me atak jata tha।
+         * Bulane wale thread ko roke bina (woh main
+         * thread bhi ho sakta hai — TAP TO SPEAK wala
+         * raasta) alag thread par 2 s tak (200 ms ke 10
+         * chakkar) bandhne ka intezaar karo; bandh jaye
+         * to tap wahi chalega, na bandhe tabhi imaandaar
+         * SERVICE_OFF।
          */
         fun tapFirstYouTubeResult(
             context: Context,
             callback: (TapOutcome) -> Unit
         ) {
             val service = instance
-            if (service == null) {
+            if (service != null) {
+                service.tapFirstYouTubeResult(callback)
+                return
+            }
+            Thread {
+                var bound = instance
+                var waited = 0
+                while (bound == null && waited < 10) {
+                    try {
+                        Thread.sleep(200)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                    waited++
+                    bound = instance
+                }
+                if (bound != null) {
+                    bound.tapFirstYouTubeResult(callback)
+                    return@Thread
+                }
                 lastYouTubeTapReport = "SERVICE_OFF"
                 try {
                     context.getSharedPreferences(
@@ -3979,9 +4041,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                     // Report gauṇ hai: sachha natija callback se jayega.
                 }
                 callback(TapOutcome.SERVICE_OFF)
-                return
-            }
-            service.tapFirstYouTubeResult(callback)
+            }.start()
         }
 
         /**
