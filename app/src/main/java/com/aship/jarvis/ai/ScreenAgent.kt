@@ -201,6 +201,20 @@ import java.util.concurrent.TimeUnit
  * rahe. Tasveer-kota (vision n/15) teeno haalon me
  * ek hi kadam ke liye ek hi baar ginta hai.
  *
+ * v103: GATI — "ek kaam me bahut samay lagta hai"
+ * (live: ChatGPT-bhejna 9 kadam, vision 6/15, FAILED
+ * samay khatm)। Teen badlav: (1) Roman-Hindi bhejne
+ * wale aadesh ("...likho aur bhejo") ab
+ * [SessionCommands.isSendInstruction] me pehchane
+ * jate hain, isliye deterministic send lagta hai aur
+ * model ko vision se batan dhoondhna nahi padta;
+ * (2) ek hi chakkar me dobara screenshot nahi —
+ * det-send ki vision-khoj wali tasveer hi vision
+ * kadam me kaam aati hai; (3) pichhle tasveer wale
+ * chakkar ke baad screen bilkul na badli ho to agla
+ * chakkar bina tasveer ke (node-saar se) chalta hai —
+ * bekaar tasveer-kadam nahi jalte।
+ *
  * Har daud ki report "jarvis_diag" me "last_screen_run"
  * par band hoti hai: user ke apne shabdon wala kaam
  * (kata hua), natija, aur kitne kadam chale. Model ne
@@ -268,6 +282,17 @@ class ScreenAgent(
      * karta hai.
      */
     private var visionUsed = 0
+
+    /**
+     * v103: is chakkar me li gayi tasveer (bitmap) — ek
+     * hi chakkar me dobara screenshot na lena pade:
+     * det-send ki vision-khoj ([locateSendButtonVision])
+     * ne tasveer le li ho to wahi tasveer is chakkar ke
+     * vision kadam me kaam aati hai (beech me koi kadam
+     * nahi chalta, isliye screen wahi hai)। Har chakkar
+     * ki shuruat me saaf hota hai ([runTaskLoop] dekho)।
+     */
+    private var roundScreenshot: android.graphics.Bitmap? = null
 
     /**
      * v40: is daud ke saath juda bandha playbook
@@ -464,6 +489,14 @@ class ScreenAgent(
         verifyNoChange = 0
         recoveryCount = 0
         var visionExhaustedNoted = false
+        // v103: pichhle chakkar me tasveer lagi thi kya
+        // ([prevRoundUsedVision]) aur is chakkar me
+        // tasveer chhodni hai kya ([skipVisionThisRound]
+        // — pichhli tasveer ke baad screen bilkul nahi
+        // badli to nayi tasveer bekaar hai)। Dono har
+        // chakkar me taaza hote hain (neeche dekho)।
+        var prevRoundUsedVision = false
+        var skipVisionThisRound = false
         // v44: kadam-jaanch ki haalat. [prevSignature]
         // pichhle snapshot ka hastakshar hai; jo kadam
         // abhi chala aur agle snapshot se jaancha jayega
@@ -480,6 +513,13 @@ class ScreenAgent(
         var recoveryDone = false
         while (rounds < MAX_ROUNDS) {
             rounds++
+            // v103: is chakkar ki tasveer-khoj nayi hogi
+            // (pichhle chakkar ki tasveer kaam nahi
+            // aayegi) aur tasveer-chhoot ka jhanda bhi
+            // taaza — jaanch (neeche) use is chakkar ke
+            // liye phir se bandhegi।
+            roundScreenshot = null
+            skipVisionThisRound = false
             if (SystemClock.uptimeMillis() > deadline) {
                 saveDiag(task, "FAILED (samay khatm)", stepsDone)
                 return Outcome(
@@ -560,6 +600,15 @@ class ScreenAgent(
                         }
                     }
                     ChangeVerdict.SAME -> {
+                        // v103: pichhla chakkar tasveer wala tha
+                        // aur screen bilkul nahi badli — tasveer
+                        // se kuch naya nahi mila, isliye is
+                        // chakkar me tasveer dobara mat lo
+                        // (node-saar hi kaafi); ye chhoot sirf
+                        // is ek chakkar ke liye hai।
+                        if (prevRoundUsedVision) {
+                            skipVisionThisRound = true
+                        }
                         val strikes = if (pending.targetKey != null) {
                             val n = (tapStrikes[pending.targetKey]
                                 ?: 0) + 1
@@ -740,10 +789,18 @@ class ScreenAgent(
             // pehchana nahi jata, use DEKHNA padta hai।
             // Jhanda is chakkar me kharch ho jata hai,
             // kota khatm ho tab bhi (dobara nahi jalega)।
-            val visionWanted = wantsVision(snapshot) || forceVisionNextRound
+            // v103: pichhli tasveer ke baad screen na badli
+            // ho to is chakkar me tasveer chhodo
+            // ([skipVisionThisRound]) — wahi screen dobara
+            // dekhne se kuch naya nahi milega।
+            val visionWanted = (wantsVision(snapshot) || forceVisionNextRound) &&
+                !skipVisionThisRound
             forceVisionNextRound = false
             if (visionWanted && visionUsed < MAX_VISION_CALLS) {
-                val shot = screenshotSync()
+                // v103: is chakkar me tasveer pehle hi li
+                // ja chuki ho (det-send ki vision-khoj) to
+                // wahi kaam aayegi — dobara screenshot nahi।
+                val shot = roundScreenshot ?: screenshotSync()
                 if (shot != null) {
                     val usableNodes = snapshot.elements.any {
                         it.clickable || it.editable
@@ -908,6 +965,11 @@ class ScreenAgent(
                     GeminiBrain.RequestClass.TEXT
                 )
             }
+            // v103: agle chakkar ki jaanch ke liye — is
+            // chakkar me tasveer lagi thi kya (tasveer
+            // ke baad screen na badli to agla chakkar
+            // bina tasveer ke chalega)।
+            prevRoundUsedVision = stepImage != null
             if (raw == null) {
                 val quota = GeminiBrain.lastChainWasQuota(context)
                 saveDiag(
@@ -2767,7 +2829,15 @@ class ScreenAgent(
             return null
         }
         awaitLatch(latch)
-        return if (delivered) bitmap else null
+        if (delivered) {
+            // v103: is chakkar ki tasveer yaad rakho — isi
+            // chakkar me dobara screenshot na lena pade
+            // (det-send ki vision-khoj ne pehle hi le li
+            // ho to wahi kaam aayegi)।
+            roundScreenshot = bitmap
+            return bitmap
+        }
+        return null
     }
 
     private fun tapTextSync(text: String): Boolean =

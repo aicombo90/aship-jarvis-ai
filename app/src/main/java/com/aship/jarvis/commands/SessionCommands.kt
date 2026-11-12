@@ -201,6 +201,19 @@ object SessionCommands {
         "pathiye dao", "pathiye", "pathao",
         // Hindi
         "भेज दो", "भेज दीजिए", "भेज दे", "भेजो",
+        // v103: Roman Hindi — recognizer aksar aadesh
+        // isi roop me deta hai ("ChatGPT ke message box
+        // mein ye likho aur bhejo")। Iske bina woh hukm
+        // bhejne wala pehchana hi nahi jata tha, isliye
+        // deterministic send kabhi lagta hi nahi tha aur
+        // screen agent model + vision se bhejne ki
+        // koshish me hi samay khatm kar deta tha
+        // (live: 9 kadam, vision 6/15, FAILED samay
+        // khatm)। "bhejo" me "likh kar bhejo" / "ye
+        // likho aur bhejo" bhi aate hain (contains)।
+        "bhej do", "bhej dijiye", "bhej de", "bhejo",
+        "bhej dena", "send kar do", "send karo",
+        "send kar", "send karde",
         // English wakya
         "send it"
     )
